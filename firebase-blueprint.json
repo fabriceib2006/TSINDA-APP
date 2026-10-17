@@ -1,0 +1,258 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile with role and status",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "name": { "type": "string", "maxLength": 100 },
+        "phone": { "type": "string", "maxLength": 30 },
+        "email": { "type": "string", "format": "email" },
+        "role": { "type": "string", "enum": ["learner", "admin"] },
+        "status": { "type": "string", "enum": ["active", "suspended"] },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["uid", "name", "email", "role", "status", "createdAt"]
+    },
+    "Plan": {
+      "title": "Plan",
+      "description": "Subscription plan with multilingual metadata, duration, access controls, and exam limit",
+      "type": "object",
+      "properties": {
+        "name": { "type": "object" },
+        "description": { "type": "object" },
+        "price": { "type": "number" },
+        "durationDays": { "type": "number" },
+        "access": { "type": "object" },
+        "examLimit": { "type": "number" },
+        "isActive": { "type": "boolean" },
+        "isRecommended": { "type": "boolean" },
+        "sortOrder": { "type": "number" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["name", "description", "price", "durationDays", "access", "isActive", "createdAt"]
+    },
+    "Subscription": {
+      "title": "Subscription",
+      "description": "User subscription record containing immutable copy of plan rules, access, and examsUsed count",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "planId": { "type": "string" },
+        "planName": { "type": "string" },
+        "price": { "type": "number" },
+        "durationDays": { "type": "number" },
+        "startDate": { "type": "string" },
+        "endDate": { "type": "string" },
+        "access": { "type": "object" },
+        "examLimit": { "type": "number" },
+        "examsUsed": { "type": "number" },
+        "status": { "type": "string", "enum": ["active", "expired", "cancelled"] },
+        "source": { "type": "string", "enum": ["payment", "admin_grant"] },
+        "grantedBy": { "type": "string" }
+      },
+      "required": ["userId", "planId", "price", "durationDays", "startDate", "endDate", "access", "examsUsed", "status", "source"]
+    },
+    "ExamAttempt": {
+      "title": "ExamAttempt",
+      "description": "Candidate exam attempt record tracking progress, score, and completion status",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "subscriptionId": { "type": "string" },
+        "startedAt": { "type": "string" },
+        "finishedAt": { "type": "string" },
+        "score": { "type": "number" },
+        "passed": { "type": "boolean" },
+        "status": { "type": "string", "enum": ["in_progress", "completed"] },
+        "questionIds": { "type": "array" },
+        "durationMinutes": { "type": "number" }
+      },
+      "required": ["userId", "subscriptionId", "startedAt", "status"]
+    },
+    "Payment": {
+      "title": "Payment",
+      "description": "Payment transaction record",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "planId": { "type": "string" },
+        "amount": { "type": "number" },
+        "method": { "type": "string" },
+        "status": { "type": "string" },
+        "reference": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["userId", "planId", "amount", "status", "createdAt"]
+    },
+    "PaypackEvent": {
+      "title": "PaypackEvent",
+      "description": "Raw Paypack webhook event",
+      "type": "object",
+      "properties": {
+        "event": { "type": "string" },
+        "data": { "type": "object" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["event", "data", "createdAt"]
+    },
+    "Lesson": {
+      "title": "Lesson",
+      "description": "Traffic rules lesson in rw, en, fr with optional lesson video URL",
+      "type": "object",
+      "properties": {
+        "title": { "type": "object" },
+        "body": { "type": "object" },
+        "category": { "type": "string" },
+        "order": { "type": "number" },
+        "videoUrl": { "type": "string" },
+        "isPublished": { "type": "boolean" }
+      },
+      "required": ["title", "category", "order", "isPublished"]
+    },
+    "Question": {
+      "title": "Question",
+      "description": "Driving exam question in rw, en, fr",
+      "type": "object",
+      "properties": {
+        "text": { "type": "object" },
+        "options": { "type": "array" },
+        "correctIndex": { "type": "number" },
+        "explanation": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "isPublished": { "type": "boolean" }
+      },
+      "required": ["text", "options", "correctIndex", "category", "isPublished"]
+    },
+    "ExamSettings": {
+      "title": "ExamSettings",
+      "description": "Global exam parameters from Rwanda Gazette",
+      "type": "object",
+      "properties": {
+        "numQuestions": { "type": "number" },
+        "durationMinutes": { "type": "number" },
+        "passMark": { "type": "number" }
+      },
+      "required": ["numQuestions", "durationMinutes", "passMark"]
+    },
+    "SiteSettings": {
+      "title": "SiteSettings",
+      "description": "Global site configuration",
+      "type": "object",
+      "properties": {
+        "appName": { "type": "string" },
+        "tagline": { "type": "object" },
+        "primaryColor": { "type": "string" },
+        "maintenanceMode": { "type": "boolean" }
+      },
+      "required": ["appName", "primaryColor", "maintenanceMode"]
+    },
+    "HomepageSection": {
+      "title": "HomepageSection",
+      "description": "Homepage dynamic section",
+      "type": "object",
+      "properties": {
+        "type": { "type": "string" },
+        "title": { "type": "object" },
+        "order": { "type": "number" },
+        "isVisible": { "type": "boolean" }
+      },
+      "required": ["type", "order", "isVisible"]
+    },
+    "Announcement": {
+      "title": "Announcement",
+      "description": "Active announcement banner",
+      "type": "object",
+      "properties": {
+        "title": { "type": "object" },
+        "body": { "type": "object" },
+        "type": { "type": "string" },
+        "isActive": { "type": "boolean" }
+      },
+      "required": ["title", "body", "type", "isActive"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "User profiles"
+    },
+    "/plans/{planId}": {
+      "schema": { "$ref": "#/entities/Plan" },
+      "description": "Subscription plans"
+    },
+    "/subscriptions/{subId}": {
+      "schema": { "$ref": "#/entities/Subscription" },
+      "description": "User subscriptions with copied plan rules"
+    },
+    "/examAttempts/{attemptId}": {
+      "schema": { "$ref": "#/entities/ExamAttempt" },
+      "description": "Candidate exam attempts and scoring"
+    },
+    "/payments/{paymentId}": {
+      "schema": { "$ref": "#/entities/Payment" },
+      "description": "Payment records"
+    },
+    "/paypackEvents/{eventId}": {
+      "schema": { "$ref": "#/entities/PaypackEvent" },
+      "description": "Raw Paypack webhook events"
+    },
+    "/lessons/{lessonId}": {
+      "schema": { "$ref": "#/entities/Lesson" },
+      "description": "Traffic text lessons from Rwanda National Gazette"
+    },
+    "/videos/{videoId}": {
+      "schema": { "$ref": "#/entities/Video" },
+      "description": "YouTube video lessons"
+    },
+    "/categories/{categoryId}": {
+      "schema": { "$ref": "#/entities/Category" },
+      "description": "Shared learning categories"
+    },
+    "/questions/{questionId}": {
+      "schema": { "$ref": "#/entities/Question" },
+      "description": "Driving exam questions"
+    },
+    "/examSettings/{settingId}": {
+      "schema": { "$ref": "#/entities/ExamSettings" },
+      "description": "Exam configuration settings"
+    },
+    "/siteSettings/{docId}": {
+      "schema": { "$ref": "#/entities/SiteSettings" },
+      "description": "Site settings configuration"
+    },
+    "/homepageSections/{secId}": {
+      "schema": { "$ref": "#/entities/HomepageSection" },
+      "description": "Homepage sections"
+    },
+    "/homepageItems/{itemId}": {
+      "schema": { "$ref": "#/entities/HomepageSection" },
+      "description": "Homepage section items"
+    },
+    "/announcements/{annId}": {
+      "schema": { "$ref": "#/entities/Announcement" },
+      "description": "Announcements"
+    },
+    "/footerGroups/{groupId}": {
+      "schema": { "$ref": "#/entities/HomepageSection" },
+      "description": "Footer column groups"
+    },
+    "/footerLinks/{linkId}": {
+      "schema": { "$ref": "#/entities/HomepageSection" },
+      "description": "Footer links"
+    },
+    "/socialLinks/{socId}": {
+      "schema": { "$ref": "#/entities/HomepageSection" },
+      "description": "Social media links"
+    },
+    "/siteMedia/{mediaId}": {
+      "schema": { "$ref": "#/entities/HomepageSection" },
+      "description": "Uploaded site media library"
+    },
+    "/adminLogs/{logId}": {
+      "schema": { "$ref": "#/entities/HomepageSection" },
+      "description": "Admin activity audit logs"
+    }
+  }
+}

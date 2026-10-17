@@ -1,0 +1,6 @@
+{
+  "name": "TSINDA - Rwanda Driving Theory Prep",
+  "description": "Rwanda driving theory exam preparation platform based on Rwanda National Gazette traffic rules.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
