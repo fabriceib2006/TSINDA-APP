@@ -5,11 +5,14 @@ import { handleFirestoreError, OperationType } from '../../lib/firestoreUtils';
 import { Question, Subscription, Language, CombinedAccess } from '../../types';
 import { normalizeSubscription, getCombinedAccess } from '../../lib/subscriptionUtils';
 import { useAuth } from '../../context/AuthContext';
+import { useLanguage } from '../../context/LanguageContext';
 import { HelpCircle, CheckCircle2, XCircle, ArrowLeft, Lock, Award, RefreshCw } from 'lucide-react';
 import { SubscriptionModal } from './SubscriptionModal';
+import { getLocalizedQuestionText, getLocalizedQuestionOptions, getLocalizedQuestionExplanation, NotTranslatedBadge } from '../../lib/i18n';
 
 export const PracticeQuizView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
-  const { userProfile, language } = useAuth();
+  const { userProfile } = useAuth();
+  const { language } = useLanguage();
   const [questions, setQuestions] = useState<Question[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [selectedOption, setSelectedOption] = useState<number | null>(null);
@@ -35,8 +38,10 @@ export const PracticeQuizView: React.FC<{ onBack: () => void }> = ({ onBack }) =
         setAccess(getCombinedAccess([]));
       }
 
-      // 2. Fetch questions
-      const qSnap = await getDocs(collection(db, 'questions')).catch(err => {
+      // 2. Fetch published questions
+      const qSnap = await getDocs(
+        query(collection(db, 'questions'), where('isPublished', '==', true))
+      ).catch(err => {
         handleFirestoreError(err, OperationType.LIST, 'questions');
         return null;
       });
@@ -260,58 +265,80 @@ export const PracticeQuizView: React.FC<{ onBack: () => void }> = ({ onBack }) =
         )}
 
         {/* Question Prompt */}
-        <h2 className="text-base sm:text-lg font-bold text-slate-900 leading-snug">
-          {currentQ.text[language as Language] || currentQ.text.en}
-        </h2>
+        {(() => {
+          const locText = getLocalizedQuestionText(currentQ, language as Language);
+          const locOpts = getLocalizedQuestionOptions(currentQ, language as Language);
+          const locExp = getLocalizedQuestionExplanation(currentQ, language as Language);
 
-        {/* Options */}
-        <div className="space-y-3">
-          {currentQ.options.map((option, idx) => {
-            let optionStyles = 'border-slate-200 hover:border-blue-400 hover:bg-blue-50/30 text-slate-700';
+          return (
+            <>
+              <div className="flex items-start justify-between gap-3">
+                <h2 className="text-base sm:text-lg font-bold text-slate-900 leading-snug">
+                  {locText.text}
+                </h2>
+                {locText.isFallback && <NotTranslatedBadge />}
+              </div>
 
-            if (selectedOption !== null) {
-              if (idx === currentQ.correctIndex) {
-                optionStyles = 'border-emerald-500 bg-emerald-50 text-emerald-900 font-semibold ring-1 ring-emerald-500';
-              } else if (idx === selectedOption) {
-                optionStyles = 'border-red-500 bg-red-50 text-red-900 ring-1 ring-red-500';
-              } else {
-                optionStyles = 'border-slate-200 opacity-50 text-slate-400';
-              }
-            }
+              {/* Options */}
+              <div className="space-y-3">
+                {locOpts.isFallback && (
+                  <div className="flex items-center gap-2 text-xs text-amber-700 bg-amber-50/70 px-3 py-1.5 rounded-lg border border-amber-200/60 mb-1">
+                    <NotTranslatedBadge />
+                    <span>Options in English (translation pending)</span>
+                  </div>
+                )}
+                {locOpts.options.map((option, idx) => {
+                  let optionStyles = 'border-slate-200 hover:border-blue-400 hover:bg-blue-50/30 text-slate-700';
 
-            return (
-              <button
-                key={idx}
-                disabled={selectedOption !== null}
-                onClick={() => handleSelectOption(idx)}
-                className={`w-full min-h-[44px] p-4 text-left rounded-[10px] border transition-all text-sm flex items-center justify-between gap-3 ${optionStyles}`}
-              >
-                <div className="flex items-center gap-3">
-                  <span className="w-7 h-7 rounded-lg bg-slate-100 text-slate-700 font-bold text-xs flex items-center justify-center shrink-0">
-                    {String.fromCharCode(65 + idx)}
-                  </span>
-                  <span>{option}</span>
+                  if (selectedOption !== null) {
+                    if (idx === currentQ.correctIndex) {
+                      optionStyles = 'border-emerald-500 bg-emerald-50 text-emerald-900 font-semibold ring-1 ring-emerald-500';
+                    } else if (idx === selectedOption) {
+                      optionStyles = 'border-red-500 bg-red-50 text-red-900 ring-1 ring-red-500';
+                    } else {
+                      optionStyles = 'border-slate-200 opacity-50 text-slate-400';
+                    }
+                  }
+
+                  return (
+                    <button
+                      key={idx}
+                      disabled={selectedOption !== null}
+                      onClick={() => handleSelectOption(idx)}
+                      className={`w-full min-h-[44px] p-4 text-left rounded-[10px] border transition-all text-sm flex items-center justify-between gap-3 ${optionStyles}`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <span className="w-7 h-7 rounded-lg bg-slate-100 text-slate-700 font-bold text-xs flex items-center justify-center shrink-0">
+                          {String.fromCharCode(65 + idx)}
+                        </span>
+                        <span>{option}</span>
+                      </div>
+                      {selectedOption !== null && idx === currentQ.correctIndex && (
+                        <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                      )}
+                      {selectedOption === idx && idx !== currentQ.correctIndex && (
+                        <XCircle className="w-5 h-5 text-red-600 shrink-0" />
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Explanation Banner */}
+              {showExplanation && (
+                <div className="p-4 bg-blue-50 rounded-xl border border-blue-100 space-y-1.5 animate-in fade-in duration-200">
+                  <div className="flex items-center justify-between gap-2">
+                    <h4 className="text-xs font-bold text-blue-900 uppercase">Rwanda Gazette Explanation:</h4>
+                    {locExp.isFallback && <NotTranslatedBadge />}
+                  </div>
+                  <p className="text-xs sm:text-sm text-blue-800 leading-relaxed">
+                    {locExp.explanation || "Official Rwanda traffic regulations determine this answer."}
+                  </p>
                 </div>
-                {selectedOption !== null && idx === currentQ.correctIndex && (
-                  <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
-                )}
-                {selectedOption === idx && idx !== currentQ.correctIndex && (
-                  <XCircle className="w-5 h-5 text-red-600 shrink-0" />
-                )}
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Explanation Banner */}
-        {showExplanation && (
-          <div className="p-4 bg-blue-50 rounded-xl border border-blue-100 space-y-1.5 animate-in fade-in duration-200">
-            <h4 className="text-xs font-bold text-blue-900 uppercase">Rwanda Gazette Explanation:</h4>
-            <p className="text-xs sm:text-sm text-blue-800 leading-relaxed">
-              {currentQ.explanation || "Official Rwanda traffic regulations determine this answer."}
-            </p>
-          </div>
-        )}
+              )}
+            </>
+          );
+        })()}
 
         {/* Next / Reset Button */}
         {selectedOption !== null && (

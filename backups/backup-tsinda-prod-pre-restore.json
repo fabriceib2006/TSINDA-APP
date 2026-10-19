@@ -1,0 +1,1255 @@
+{
+  "homepageSections": [
+    {
+      "_id": "sec-1",
+      "id": "sec-1",
+      "type": "hero",
+      "title": {
+        "rw": "Hero",
+        "en": "Hero",
+        "fr": "Héros"
+      },
+      "order": 1,
+      "isVisible": true
+    },
+    {
+      "_id": "sec-2",
+      "id": "sec-2",
+      "type": "announcements",
+      "title": {
+        "rw": "Announcements",
+        "en": "Announcements",
+        "fr": "Annonces"
+      },
+      "order": 2,
+      "isVisible": true
+    },
+    {
+      "_id": "sec-3",
+      "id": "sec-3",
+      "type": "features",
+      "title": {
+        "rw": "Features",
+        "en": "Features",
+        "fr": "Caractéristiques"
+      },
+      "order": 3,
+      "isVisible": true
+    },
+    {
+      "_id": "sec-4",
+      "id": "sec-4",
+      "type": "howItWorks",
+      "title": {
+        "rw": "How It Works",
+        "en": "How It Works",
+        "fr": "Comment ça marche"
+      },
+      "order": 4,
+      "isVisible": true
+    },
+    {
+      "_id": "sec-5",
+      "id": "sec-5",
+      "type": "plans",
+      "title": {
+        "rw": "Plans",
+        "en": "Plans",
+        "fr": "Plans"
+      },
+      "order": 5,
+      "isVisible": true
+    },
+    {
+      "_id": "sec-6",
+      "id": "sec-6",
+      "type": "stats",
+      "title": {
+        "rw": "Stats",
+        "en": "Stats",
+        "fr": "Statistiques"
+      },
+      "order": 6,
+      "isVisible": true
+    },
+    {
+      "_id": "sec-7",
+      "id": "sec-7",
+      "type": "testimonials",
+      "title": {
+        "rw": "Testimonials",
+        "en": "Testimonials",
+        "fr": "Témoignages"
+      },
+      "order": 7,
+      "isVisible": true
+    },
+    {
+      "_id": "sec-8",
+      "id": "sec-8",
+      "type": "faq",
+      "title": {
+        "rw": "FAQ",
+        "en": "FAQ",
+        "fr": "FAQ"
+      },
+      "order": 8,
+      "isVisible": true
+    },
+    {
+      "_id": "sec-9",
+      "id": "sec-9",
+      "type": "cta",
+      "title": {
+        "rw": "CTA",
+        "en": "CTA",
+        "fr": "CTA"
+      },
+      "order": 9,
+      "isVisible": true
+    }
+  ],
+  "homepageItems": [
+    {
+      "_id": "item-1",
+      "id": "item-1",
+      "sectionId": "sec-3",
+      "title": {
+        "rw": "Item 1",
+        "en": "Item 1",
+        "fr": "Item 1"
+      },
+      "description": {
+        "rw": "Desc 1",
+        "en": "Desc 1",
+        "fr": "Desc 1"
+      },
+      "order": 1,
+      "isActive": true
+    },
+    {
+      "_id": "item-10",
+      "id": "item-10",
+      "sectionId": "sec-3",
+      "title": {
+        "rw": "Item 10",
+        "en": "Item 10",
+        "fr": "Item 10"
+      },
+      "description": {
+        "rw": "Desc 10",
+        "en": "Desc 10",
+        "fr": "Desc 10"
+      },
+      "order": 10,
+      "isActive": true
+    },
+    {
+      "_id": "item-11",
+      "id": "item-11",
+      "sectionId": "sec-3",
+      "title": {
+        "rw": "Item 11",
+        "en": "Item 11",
+        "fr": "Item 11"
+      },
+      "description": {
+        "rw": "Desc 11",
+        "en": "Desc 11",
+        "fr": "Desc 11"
+      },
+      "order": 11,
+      "isActive": true
+    },
+    {
+      "_id": "item-12",
+      "id": "item-12",
+      "sectionId": "sec-3",
+      "title": {
+        "rw": "Item 12",
+        "en": "Item 12",
+        "fr": "Item 12"
+      },
+      "description": {
+        "rw": "Desc 12",
+        "en": "Desc 12",
+        "fr": "Desc 12"
+      },
+      "order": 12,
+      "isActive": true
+    },
+    {
+      "_id": "item-13",
+      "id": "item-13",
+      "sectionId": "sec-3",
+      "title": {
+        "rw": "Item 13",
+        "en": "Item 13",
+        "fr": "Item 13"
+      },
+      "description": {
+        "rw": "Desc 13",
+        "en": "Desc 13",
+        "fr": "Desc 13"
+      },
+      "order": 13,
+      "isActive": true
+    },
+    {
+      "_id": "item-2",
+      "id": "item-2",
+      "sectionId": "sec-3",
+      "title": {
+        "rw": "Item 2",
+        "en": "Item 2",
+        "fr": "Item 2"
+      },
+      "description": {
+        "rw": "Desc 2",
+        "en": "Desc 2",
+        "fr": "Desc 2"
+      },
+      "order": 2,
+      "isActive": true
+    },
+    {
+      "_id": "item-3",
+      "id": "item-3",
+      "sectionId": "sec-3",
+      "title": {
+        "rw": "Item 3",
+        "en": "Item 3",
+        "fr": "Item 3"
+      },
+      "description": {
+        "rw": "Desc 3",
+        "en": "Desc 3",
+        "fr": "Desc 3"
+      },
+      "order": 3,
+      "isActive": true
+    },
+    {
+      "_id": "item-4",
+      "id": "item-4",
+      "sectionId": "sec-3",
+      "title": {
+        "rw": "Item 4",
+        "en": "Item 4",
+        "fr": "Item 4"
+      },
+      "description": {
+        "rw": "Desc 4",
+        "en": "Desc 4",
+        "fr": "Desc 4"
+      },
+      "order": 4,
+      "isActive": true
+    },
+    {
+      "_id": "item-5",
+      "id": "item-5",
+      "sectionId": "sec-3",
+      "title": {
+        "rw": "Item 5",
+        "en": "Item 5",
+        "fr": "Item 5"
+      },
+      "description": {
+        "rw": "Desc 5",
+        "en": "Desc 5",
+        "fr": "Desc 5"
+      },
+      "order": 5,
+      "isActive": true
+    },
+    {
+      "_id": "item-6",
+      "id": "item-6",
+      "sectionId": "sec-3",
+      "title": {
+        "rw": "Item 6",
+        "en": "Item 6",
+        "fr": "Item 6"
+      },
+      "description": {
+        "rw": "Desc 6",
+        "en": "Desc 6",
+        "fr": "Desc 6"
+      },
+      "order": 6,
+      "isActive": true
+    },
+    {
+      "_id": "item-7",
+      "id": "item-7",
+      "sectionId": "sec-3",
+      "title": {
+        "rw": "Item 7",
+        "en": "Item 7",
+        "fr": "Item 7"
+      },
+      "description": {
+        "rw": "Desc 7",
+        "en": "Desc 7",
+        "fr": "Desc 7"
+      },
+      "order": 7,
+      "isActive": true
+    },
+    {
+      "_id": "item-8",
+      "id": "item-8",
+      "sectionId": "sec-3",
+      "title": {
+        "rw": "Item 8",
+        "en": "Item 8",
+        "fr": "Item 8"
+      },
+      "description": {
+        "rw": "Desc 8",
+        "en": "Desc 8",
+        "fr": "Desc 8"
+      },
+      "order": 8,
+      "isActive": true
+    },
+    {
+      "_id": "item-9",
+      "id": "item-9",
+      "sectionId": "sec-3",
+      "title": {
+        "rw": "Item 9",
+        "en": "Item 9",
+        "fr": "Item 9"
+      },
+      "description": {
+        "rw": "Desc 9",
+        "en": "Desc 9",
+        "fr": "Desc 9"
+      },
+      "order": 9,
+      "isActive": true
+    }
+  ],
+  "socialLinks": [
+    {
+      "_id": "sl-1",
+      "platform": "whatsapp",
+      "url": "https://whatsapp.com",
+      "icon": "whatsapp",
+      "isActive": true
+    },
+    {
+      "_id": "sl-2",
+      "platform": "twitter",
+      "url": "https://twitter.com",
+      "icon": "twitter",
+      "isActive": true
+    },
+    {
+      "_id": "sl-3",
+      "platform": "youtube",
+      "url": "https://youtube.com",
+      "icon": "youtube",
+      "isActive": true
+    }
+  ],
+  "footerGroups": [
+    {
+      "_id": "fg-1",
+      "title": {
+        "rw": "Ibyerekeye",
+        "en": "About",
+        "fr": "À propos"
+      },
+      "order": 1
+    },
+    {
+      "_id": "fg-2",
+      "title": {
+        "rw": "Ubufasha",
+        "en": "Support",
+        "fr": "Support"
+      },
+      "order": 2
+    }
+  ],
+  "footerLinks": [
+    {
+      "_id": "fl-1",
+      "groupId": "fg-1",
+      "label": {
+        "rw": "Aho tubarizwa",
+        "en": "Contact Us",
+        "fr": "Contactez-nous"
+      },
+      "url": "/contact",
+      "order": 1
+    },
+    {
+      "_id": "fl-2",
+      "groupId": "fg-2",
+      "label": {
+        "rw": "Amategeko n'amabwiriza",
+        "en": "Terms & Conditions",
+        "fr": "Conditions"
+      },
+      "url": "/terms",
+      "order": 1
+    },
+    {
+      "_id": "fl-3",
+      "groupId": "fg-2",
+      "label": {
+        "rw": "Politiki y'ibanga",
+        "en": "Privacy Policy",
+        "fr": "Confidentialité"
+      },
+      "url": "/privacy",
+      "order": 2
+    }
+  ],
+  "imageSlots": [
+    {
+      "_id": "slot-1",
+      "id": "slot-1",
+      "slotName": "Slot 1",
+      "imageUrl": "",
+      "altText": "Image 1"
+    },
+    {
+      "_id": "slot-2",
+      "id": "slot-2",
+      "slotName": "Slot 2",
+      "imageUrl": "",
+      "altText": "Image 2"
+    },
+    {
+      "_id": "slot-3",
+      "id": "slot-3",
+      "slotName": "Slot 3",
+      "imageUrl": "",
+      "altText": "Image 3"
+    },
+    {
+      "_id": "slot-4",
+      "id": "slot-4",
+      "slotName": "Slot 4",
+      "imageUrl": "",
+      "altText": "Image 4"
+    },
+    {
+      "_id": "slot-5",
+      "id": "slot-5",
+      "slotName": "Slot 5",
+      "imageUrl": "",
+      "altText": "Image 5"
+    },
+    {
+      "_id": "slot-6",
+      "id": "slot-6",
+      "slotName": "Slot 6",
+      "imageUrl": "",
+      "altText": "Image 6"
+    },
+    {
+      "_id": "slot-7",
+      "id": "slot-7",
+      "slotName": "Slot 7",
+      "imageUrl": "",
+      "altText": "Image 7"
+    },
+    {
+      "_id": "slot-8",
+      "id": "slot-8",
+      "slotName": "Slot 8",
+      "imageUrl": "",
+      "altText": "Image 8"
+    },
+    {
+      "_id": "slot-9",
+      "id": "slot-9",
+      "slotName": "Slot 9",
+      "imageUrl": "",
+      "altText": "Image 9"
+    }
+  ],
+  "siteSettings": [
+    {
+      "_id": "config",
+      "appName": "TSINDA",
+      "tagline": {
+        "rw": "Witegure Ikizamini cy'uruhushya rwo gutwara ibinyabiziga mu Rwanda",
+        "en": "Master your Rwandan driving theory and exam prep with confidence",
+        "fr": "Maîtrisez votre code de la route et préparation à l'examen au Rwanda"
+      },
+      "logoUrl": "",
+      "faviconUrl": "",
+      "primaryColor": "#2563eb",
+      "contact": {
+        "phone": "+250780000000",
+        "whatsapp": "+250780000000",
+        "email": "info@tsinda.app",
+        "address": "Kigali, Rwanda"
+      },
+      "seo": {
+        "title": "TSINDA - Rwanda Driving Theory & License Exam Prep",
+        "description": "Official Rwandan driving permit theory test preparation platform featuring authorized Rwanda Gazette lessons and timed mock exams."
+      },
+      "maintenanceMode": false
+    }
+  ],
+  "announcements": [
+    {
+      "_id": "ann-1",
+      "title": {
+        "rw": "Ikimenyiso cya Leta",
+        "en": "Official Notice",
+        "fr": "Avis officiel"
+      },
+      "content": {
+        "rw": "Amategeko yashyizweho...",
+        "en": "Regulations updated...",
+        "fr": "Règlement mis à jour..."
+      },
+      "isActive": true,
+      "createdAt": "2026-10-19T10:57:04.671Z"
+    }
+  ],
+  "plans": [
+    {
+      "_id": "plan-14d",
+      "id": "plan-14d",
+      "name": {
+        "rw": "Ibyumweru 2 Standard",
+        "en": "14-Day Standard Pass",
+        "fr": "Pass Standard 14 Jours"
+      },
+      "description": {
+        "rw": "Amategeko y'umuhanda...",
+        "en": "Rwanda Gazette...",
+        "fr": "Règles du code..."
+      },
+      "price": 1500,
+      "durationDays": 14,
+      "access": {
+        "lessonVideos": false,
+        "trafficRules": true,
+        "exams": true
+      },
+      "examLimit": 15,
+      "isActive": true,
+      "isRecommended": false,
+      "sortOrder": 2,
+      "createdAt": "2026-10-19T10:57:02.343Z",
+      "active": true
+    },
+    {
+      "_id": "plan-30d",
+      "id": "plan-30d",
+      "name": {
+        "rw": "Pro Ukwezi Kose",
+        "en": "30-Day Pro Pass",
+        "fr": "Pass Pro 30 Jours"
+      },
+      "description": {
+        "rw": "Amategeko y'umuhanda yose...",
+        "en": "Full Rwanda Gazette rules...",
+        "fr": "Règles du code..."
+      },
+      "price": 2000,
+      "durationDays": 30,
+      "access": {
+        "lessonVideos": true,
+        "trafficRules": true,
+        "exams": true
+      },
+      "examLimit": null,
+      "isActive": true,
+      "isRecommended": true,
+      "sortOrder": 1,
+      "createdAt": "2026-10-19T10:57:02.343Z",
+      "active": true
+    },
+    {
+      "_id": "plan-7d",
+      "id": "plan-7d",
+      "name": {
+        "rw": "Amategeko n'Amashusho",
+        "en": "7-Day Video Theory Pass",
+        "fr": "Pass Théorie & Vidéos 7 Jours"
+      },
+      "description": {
+        "rw": "Amategeko yose...",
+        "en": "Access all...",
+        "fr": "Accès à toutes..."
+      },
+      "price": 1000,
+      "durationDays": 7,
+      "access": {
+        "lessonVideos": true,
+        "trafficRules": true,
+        "exams": false
+      },
+      "examLimit": null,
+      "isActive": true,
+      "isRecommended": false,
+      "sortOrder": 3,
+      "createdAt": "2026-10-19T10:57:02.343Z",
+      "active": true
+    }
+  ],
+  "lessons": [
+    {
+      "_id": "lesson-1",
+      "id": "lesson-1",
+      "title": {
+        "rw": "Ubutware n'amategeko y'ibanze",
+        "en": "Basic Traffic Rules & Principles",
+        "fr": "Règles de base"
+      },
+      "categoryId": "1",
+      "order": 1,
+      "content": {
+        "rw": " ibisobanuro...",
+        "en": "Details...",
+        "fr": "Détails..."
+      }
+    },
+    {
+      "_id": "lesson-2",
+      "id": "lesson-2",
+      "title": {
+        "rw": "Ibyapa biburira n'ibyemeza",
+        "en": "Regulatory and Warning Signs",
+        "fr": "Signaux"
+      },
+      "categoryId": "2",
+      "order": 2,
+      "content": {
+        "rw": " ibisobanuro...",
+        "en": "Details...",
+        "fr": "Détails..."
+      }
+    },
+    {
+      "_id": "lesson-3",
+      "id": "lesson-3",
+      "title": {
+        "rw": "Ibyapa by'ubuyobozi n'itegeko",
+        "en": "Indication Signs",
+        "fr": "Indications"
+      },
+      "categoryId": "4",
+      "order": 3,
+      "content": {
+        "rw": " ibisobanuro...",
+        "en": "Details...",
+        "fr": "Détails..."
+      }
+    },
+    {
+      "_id": "lesson-4",
+      "id": "lesson-4",
+      "title": {
+        "rw": "Umuvuduko n'imiterere y'umuhanda",
+        "en": "Speed limits & Road conditions",
+        "fr": "Vitesse"
+      },
+      "categoryId": "5",
+      "order": 4,
+      "content": {
+        "rw": " ibisobanuro...",
+        "en": "Details...",
+        "fr": "Détails..."
+      }
+    },
+    {
+      "_id": "lesson-5",
+      "id": "lesson-5",
+      "title": {
+        "rw": "Gutambuka no kunyurana",
+        "en": "Right of way and Overtaking",
+        "fr": "Priorité"
+      },
+      "categoryId": "6",
+      "order": 5,
+      "content": {
+        "rw": " ibisobanuro...",
+        "en": "Details...",
+        "fr": "Détails..."
+      }
+    },
+    {
+      "_id": "lesson-6",
+      "id": "lesson-6",
+      "title": {
+        "rw": "Koroherana mu muhanda no gutwara neza",
+        "en": "Road Courtesy & Safety",
+        "fr": "Sécurité"
+      },
+      "categoryId": "1",
+      "order": 6,
+      "content": {
+        "rw": " ibisobanuro...",
+        "en": "Details...",
+        "fr": "Détails..."
+      }
+    },
+    {
+      "_id": "lesson-7",
+      "id": "lesson-7",
+      "title": {
+        "rw": "Ibihano n'amategeko yihariye",
+        "en": "Penalties & Special Regulations",
+        "fr": "Sanctions"
+      },
+      "categoryId": "7",
+      "order": 7,
+      "content": {
+        "rw": " ibisobanuro...",
+        "en": "Details...",
+        "fr": "Détails..."
+      }
+    }
+  ],
+  "questions": [
+    {
+      "_id": "q-1",
+      "id": "q-1",
+      "text": {
+        "rw": "Ikibazo cya 1?",
+        "en": "Question 1?",
+        "fr": "Question 1?"
+      },
+      "options": [
+        {
+          "rw": "Subizo A",
+          "en": "Option A",
+          "fr": "Option A"
+        },
+        {
+          "rw": "Subizo B",
+          "en": "Option B",
+          "fr": "Option B"
+        },
+        {
+          "rw": "Subizo C",
+          "en": "Option C",
+          "fr": "Option C"
+        },
+        {
+          "rw": "Subizo D",
+          "en": "Option D",
+          "fr": "Option D"
+        }
+      ],
+      "correctAnswer": 0,
+      "categoryId": "1",
+      "explanation": {
+        "rw": "Ibisobanuro...",
+        "en": "Explanation...",
+        "fr": "Explication..."
+      }
+    },
+    {
+      "_id": "q-10",
+      "id": "q-10",
+      "text": {
+        "rw": "Ikibazo cya 10?",
+        "en": "Question 10?",
+        "fr": "Question 10?"
+      },
+      "options": [
+        {
+          "rw": "Subizo A",
+          "en": "Option A",
+          "fr": "Option A"
+        },
+        {
+          "rw": "Subizo B",
+          "en": "Option B",
+          "fr": "Option B"
+        },
+        {
+          "rw": "Subizo C",
+          "en": "Option C",
+          "fr": "Option C"
+        },
+        {
+          "rw": "Subizo D",
+          "en": "Option D",
+          "fr": "Option D"
+        }
+      ],
+      "correctAnswer": 0,
+      "categoryId": "1",
+      "explanation": {
+        "rw": "Ibisobanuro...",
+        "en": "Explanation...",
+        "fr": "Explication..."
+      }
+    },
+    {
+      "_id": "q-11",
+      "id": "q-11",
+      "text": {
+        "rw": "Ikibazo cya 11?",
+        "en": "Question 11?",
+        "fr": "Question 11?"
+      },
+      "options": [
+        {
+          "rw": "Subizo A",
+          "en": "Option A",
+          "fr": "Option A"
+        },
+        {
+          "rw": "Subizo B",
+          "en": "Option B",
+          "fr": "Option B"
+        },
+        {
+          "rw": "Subizo C",
+          "en": "Option C",
+          "fr": "Option C"
+        },
+        {
+          "rw": "Subizo D",
+          "en": "Option D",
+          "fr": "Option D"
+        }
+      ],
+      "correctAnswer": 0,
+      "categoryId": "1",
+      "explanation": {
+        "rw": "Ibisobanuro...",
+        "en": "Explanation...",
+        "fr": "Explication..."
+      }
+    },
+    {
+      "_id": "q-12",
+      "id": "q-12",
+      "text": {
+        "rw": "Ikibazo cya 12?",
+        "en": "Question 12?",
+        "fr": "Question 12?"
+      },
+      "options": [
+        {
+          "rw": "Subizo A",
+          "en": "Option A",
+          "fr": "Option A"
+        },
+        {
+          "rw": "Subizo B",
+          "en": "Option B",
+          "fr": "Option B"
+        },
+        {
+          "rw": "Subizo C",
+          "en": "Option C",
+          "fr": "Option C"
+        },
+        {
+          "rw": "Subizo D",
+          "en": "Option D",
+          "fr": "Option D"
+        }
+      ],
+      "correctAnswer": 0,
+      "categoryId": "1",
+      "explanation": {
+        "rw": "Ibisobanuro...",
+        "en": "Explanation...",
+        "fr": "Explication..."
+      }
+    },
+    {
+      "_id": "q-2",
+      "id": "q-2",
+      "text": {
+        "rw": "Ikibazo cya 2?",
+        "en": "Question 2?",
+        "fr": "Question 2?"
+      },
+      "options": [
+        {
+          "rw": "Subizo A",
+          "en": "Option A",
+          "fr": "Option A"
+        },
+        {
+          "rw": "Subizo B",
+          "en": "Option B",
+          "fr": "Option B"
+        },
+        {
+          "rw": "Subizo C",
+          "en": "Option C",
+          "fr": "Option C"
+        },
+        {
+          "rw": "Subizo D",
+          "en": "Option D",
+          "fr": "Option D"
+        }
+      ],
+      "correctAnswer": 0,
+      "categoryId": "1",
+      "explanation": {
+        "rw": "Ibisobanuro...",
+        "en": "Explanation...",
+        "fr": "Explication..."
+      }
+    },
+    {
+      "_id": "q-3",
+      "id": "q-3",
+      "text": {
+        "rw": "Ikibazo cya 3?",
+        "en": "Question 3?",
+        "fr": "Question 3?"
+      },
+      "options": [
+        {
+          "rw": "Subizo A",
+          "en": "Option A",
+          "fr": "Option A"
+        },
+        {
+          "rw": "Subizo B",
+          "en": "Option B",
+          "fr": "Option B"
+        },
+        {
+          "rw": "Subizo C",
+          "en": "Option C",
+          "fr": "Option C"
+        },
+        {
+          "rw": "Subizo D",
+          "en": "Option D",
+          "fr": "Option D"
+        }
+      ],
+      "correctAnswer": 0,
+      "categoryId": "1",
+      "explanation": {
+        "rw": "Ibisobanuro...",
+        "en": "Explanation...",
+        "fr": "Explication..."
+      }
+    },
+    {
+      "_id": "q-4",
+      "id": "q-4",
+      "text": {
+        "rw": "Ikibazo cya 4?",
+        "en": "Question 4?",
+        "fr": "Question 4?"
+      },
+      "options": [
+        {
+          "rw": "Subizo A",
+          "en": "Option A",
+          "fr": "Option A"
+        },
+        {
+          "rw": "Subizo B",
+          "en": "Option B",
+          "fr": "Option B"
+        },
+        {
+          "rw": "Subizo C",
+          "en": "Option C",
+          "fr": "Option C"
+        },
+        {
+          "rw": "Subizo D",
+          "en": "Option D",
+          "fr": "Option D"
+        }
+      ],
+      "correctAnswer": 0,
+      "categoryId": "1",
+      "explanation": {
+        "rw": "Ibisobanuro...",
+        "en": "Explanation...",
+        "fr": "Explication..."
+      }
+    },
+    {
+      "_id": "q-5",
+      "id": "q-5",
+      "text": {
+        "rw": "Ikibazo cya 5?",
+        "en": "Question 5?",
+        "fr": "Question 5?"
+      },
+      "options": [
+        {
+          "rw": "Subizo A",
+          "en": "Option A",
+          "fr": "Option A"
+        },
+        {
+          "rw": "Subizo B",
+          "en": "Option B",
+          "fr": "Option B"
+        },
+        {
+          "rw": "Subizo C",
+          "en": "Option C",
+          "fr": "Option C"
+        },
+        {
+          "rw": "Subizo D",
+          "en": "Option D",
+          "fr": "Option D"
+        }
+      ],
+      "correctAnswer": 0,
+      "categoryId": "1",
+      "explanation": {
+        "rw": "Ibisobanuro...",
+        "en": "Explanation...",
+        "fr": "Explication..."
+      }
+    },
+    {
+      "_id": "q-6",
+      "id": "q-6",
+      "text": {
+        "rw": "Ikibazo cya 6?",
+        "en": "Question 6?",
+        "fr": "Question 6?"
+      },
+      "options": [
+        {
+          "rw": "Subizo A",
+          "en": "Option A",
+          "fr": "Option A"
+        },
+        {
+          "rw": "Subizo B",
+          "en": "Option B",
+          "fr": "Option B"
+        },
+        {
+          "rw": "Subizo C",
+          "en": "Option C",
+          "fr": "Option C"
+        },
+        {
+          "rw": "Subizo D",
+          "en": "Option D",
+          "fr": "Option D"
+        }
+      ],
+      "correctAnswer": 0,
+      "categoryId": "1",
+      "explanation": {
+        "rw": "Ibisobanuro...",
+        "en": "Explanation...",
+        "fr": "Explication..."
+      }
+    },
+    {
+      "_id": "q-7",
+      "id": "q-7",
+      "text": {
+        "rw": "Ikibazo cya 7?",
+        "en": "Question 7?",
+        "fr": "Question 7?"
+      },
+      "options": [
+        {
+          "rw": "Subizo A",
+          "en": "Option A",
+          "fr": "Option A"
+        },
+        {
+          "rw": "Subizo B",
+          "en": "Option B",
+          "fr": "Option B"
+        },
+        {
+          "rw": "Subizo C",
+          "en": "Option C",
+          "fr": "Option C"
+        },
+        {
+          "rw": "Subizo D",
+          "en": "Option D",
+          "fr": "Option D"
+        }
+      ],
+      "correctAnswer": 0,
+      "categoryId": "1",
+      "explanation": {
+        "rw": "Ibisobanuro...",
+        "en": "Explanation...",
+        "fr": "Explication..."
+      }
+    },
+    {
+      "_id": "q-8",
+      "id": "q-8",
+      "text": {
+        "rw": "Ikibazo cya 8?",
+        "en": "Question 8?",
+        "fr": "Question 8?"
+      },
+      "options": [
+        {
+          "rw": "Subizo A",
+          "en": "Option A",
+          "fr": "Option A"
+        },
+        {
+          "rw": "Subizo B",
+          "en": "Option B",
+          "fr": "Option B"
+        },
+        {
+          "rw": "Subizo C",
+          "en": "Option C",
+          "fr": "Option C"
+        },
+        {
+          "rw": "Subizo D",
+          "en": "Option D",
+          "fr": "Option D"
+        }
+      ],
+      "correctAnswer": 0,
+      "categoryId": "1",
+      "explanation": {
+        "rw": "Ibisobanuro...",
+        "en": "Explanation...",
+        "fr": "Explication..."
+      }
+    },
+    {
+      "_id": "q-9",
+      "id": "q-9",
+      "text": {
+        "rw": "Ikibazo cya 9?",
+        "en": "Question 9?",
+        "fr": "Question 9?"
+      },
+      "options": [
+        {
+          "rw": "Subizo A",
+          "en": "Option A",
+          "fr": "Option A"
+        },
+        {
+          "rw": "Subizo B",
+          "en": "Option B",
+          "fr": "Option B"
+        },
+        {
+          "rw": "Subizo C",
+          "en": "Option C",
+          "fr": "Option C"
+        },
+        {
+          "rw": "Subizo D",
+          "en": "Option D",
+          "fr": "Option D"
+        }
+      ],
+      "correctAnswer": 0,
+      "categoryId": "1",
+      "explanation": {
+        "rw": "Ibisobanuro...",
+        "en": "Explanation...",
+        "fr": "Explication..."
+      }
+    }
+  ],
+  "categories": [
+    {
+      "_id": "1",
+      "id": "1",
+      "name": {
+        "rw": "Amategeko y'ibanze",
+        "en": "Basic Rules",
+        "fr": "Règles de base"
+      },
+      "order": 1
+    },
+    {
+      "_id": "2",
+      "id": "2",
+      "name": {
+        "rw": "Ibyapa by'ibitegeko",
+        "en": "Regulatory Signs",
+        "fr": "Signaux réglementaires"
+      },
+      "order": 2
+    },
+    {
+      "_id": "3",
+      "id": "3",
+      "name": {
+        "rw": "Ibyapa by'uburobyi / umuburo",
+        "en": "Warning Signs",
+        "fr": "Signaux d'avertissement"
+      },
+      "order": 3
+    },
+    {
+      "_id": "4",
+      "id": "4",
+      "name": {
+        "rw": "Ibyapa by'ubuyobozi",
+        "en": "Indication Signs",
+        "fr": "Signaux d'indication"
+      },
+      "order": 4
+    },
+    {
+      "_id": "5",
+      "id": "5",
+      "name": {
+        "rw": "Umuvuduko n'intera",
+        "en": "Speed and Following Distance",
+        "fr": "Vitesse et distance"
+      },
+      "order": 5
+    },
+    {
+      "_id": "6",
+      "id": "6",
+      "name": {
+        "rw": "Kunyurana no gutambuka",
+        "en": "Overtaking and Right of Way",
+        "fr": "Dépassement et priorité"
+      },
+      "order": 6
+    },
+    {
+      "_id": "7",
+      "id": "7",
+      "name": {
+        "rw": "Imyitwarire n'ibihano",
+        "en": "Conduct and Penalties",
+        "fr": "Conduite et sanctions"
+      },
+      "order": 7
+    }
+  ],
+  "examSettings": [
+    {
+      "_id": "global-settings",
+      "numQuestions": 20,
+      "durationMinutes": 20,
+      "passMark": 12
+    }
+  ]
+}

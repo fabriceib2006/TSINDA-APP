@@ -1,13 +1,15 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { useLanguage } from '../context/LanguageContext';
 import { t } from '../i18n/translations';
 import { Navbar } from './Navbar';
 import { UserProfileView } from './UserProfileView';
 import { Building2, Users, FileCheck, TrendingUp } from 'lucide-react';
 
 export const SchoolDashboard: React.FC = () => {
-  const { userProfile, language } = useAuth();
-  const dict = t[language];
+  const { userProfile } = useAuth();
+  const { language } = useLanguage();
+  const dict = t[language as keyof typeof t];
   const [showProfile, setShowProfile] = useState(false);
 
   if (showProfile) {

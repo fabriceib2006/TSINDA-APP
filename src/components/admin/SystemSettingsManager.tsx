@@ -21,7 +21,10 @@ import {
   Check, 
   AlertCircle,
   Upload,
-  Globe
+  Globe,
+  Search,
+  Copy,
+  CheckCheck
 } from 'lucide-react';
 import { Language } from '../../types';
 import { seedSystemSettingsIfNeeded } from '../../lib/seedSystemSettings';
@@ -40,6 +43,8 @@ export const SystemSettingsManager: React.FC = () => {
     logoUrl: '',
     faviconUrl: '',
     primaryColor: '#2563eb',
+    footerDescription: { rw: '', en: '', fr: '' },
+    copyrightText: '',
     contact: { phone: '', whatsapp: '', email: '', address: '' },
     seo: { title: '', description: '' },
     maintenanceMode: false
@@ -59,13 +64,30 @@ export const SystemSettingsManager: React.FC = () => {
   const [footerGroups, setFooterGroups] = useState<any[]>([]);
   const [footerLinks, setFooterLinks] = useState<any[]>([]);
   const [socialLinks, setSocialLinks] = useState<any[]>([]);
+  
+  // Modals for Footer/Social editing
+  const [socialModalOpen, setSocialModalOpen] = useState(false);
+  const [currentSocial, setCurrentSocial] = useState<any | null>(null);
 
-  // Media library state
+  const [footerGroupModalOpen, setFooterGroupModalOpen] = useState(false);
+  const [currentFooterGroup, setCurrentFooterGroup] = useState<any | null>(null);
+
+  const [footerLinkModalOpen, setFooterLinkModalOpen] = useState(false);
+  const [currentFooterLink, setCurrentFooterLink] = useState<any | null>(null);
+
+  // Media library & image slots state
   const [mediaList, setMediaList] = useState<any[]>([]);
+  const [imageSlots, setImageSlots] = useState<any[]>([]);
   const [uploadingMedia, setUploadingMedia] = useState(false);
+  const [mediaSearch, setMediaSearch] = useState('');
+  const [editingMediaAlt, setEditingMediaAlt] = useState<any | null>(null);
+  
+  // Media Picker Modal
+  const [mediaPickerOpen, setMediaPickerOpen] = useState(false);
+  const [mediaPickerTargetSetter, setMediaPickerTargetSetter] = useState<((url: string) => void) | null>(null);
 
   // Confirmation modal state
-  const [confirmDelete, setConfirmDelete] = useState<{ type: string; id: string; title: string } | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<{ type: string; id: string; title: string; extraWarning?: string } | null>(null);
 
   useEffect(() => {
     fetchAllData();
@@ -89,63 +111,52 @@ export const SystemSettingsManager: React.FC = () => {
     try {
       await seedSystemSettingsIfNeeded().catch(err => console.log('Seed note:', err));
 
-      // 1. Site Settings
-      const setSnap = await getDoc(doc(db, 'siteSettings', 'config')).catch(err => {
-        handleFirestoreError(err, OperationType.GET, 'siteSettings/config');
-        return null;
-      });
-      if (setSnap && setSnap.exists()) {
-        setSettings(setSnap.data() as any);
-      }
+      const [setSnap, secSnap, itemSnap, annSnap, fgSnap, flSnap, socSnap, medSnap, slotSnap] = await Promise.all([
+        getDoc(doc(db, 'siteSettings', 'config')),
+        getDocs(collection(db, 'homepageSections')),
+        getDocs(collection(db, 'homepageItems')),
+        getDocs(collection(db, 'announcements')),
+        getDocs(collection(db, 'footerGroups')),
+        getDocs(collection(db, 'footerLinks')),
+        getDocs(collection(db, 'socialLinks')),
+        getDocs(collection(db, 'siteMedia')),
+        getDocs(collection(db, 'imageSlots')),
+      ]);
 
-      // 2. Sections
-      const secSnap = await getDocs(collection(db, 'homepageSections')).catch(err => {
-        handleFirestoreError(err, OperationType.LIST, 'homepageSections');
-        return null;
-      });
+      if (setSnap.exists()) {
+        setSettings(prev => ({ ...prev, ...setSnap.data() }));
+      }
       if (secSnap) {
         const list = secSnap.docs.map(d => ({ id: d.id, ...d.data() }));
         list.sort((a: any, b: any) => (a.order || 0) - (b.order || 0));
         setSections(list);
-        if (list.length > 0 && !selectedSectionForItems) {
-          setSelectedSectionForItems(list[0].id);
-        }
+        if (list.length > 0 && !selectedSectionForItems) setSelectedSectionForItems(list[0].id);
       }
-
-      // 3. Items
-      const itemSnap = await getDocs(collection(db, 'homepageItems')).catch(err => {
-        handleFirestoreError(err, OperationType.LIST, 'homepageItems');
-        return null;
-      });
-      if (itemSnap) {
-        setItems(itemSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+      if (itemSnap) setItems(itemSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+      if (annSnap) setAnnouncements(annSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+      if (fgSnap) {
+        const list = fgSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+        list.sort((a: any, b: any) => (a.order || 0) - (b.order || 0));
+        setFooterGroups(list);
       }
-
-      // 4. Announcements
-      const annSnap = await getDocs(collection(db, 'announcements')).catch(err => {
-        handleFirestoreError(err, OperationType.LIST, 'announcements');
-        return null;
-      });
-      if (annSnap) {
-        setAnnouncements(annSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+      if (flSnap) {
+        const list = flSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+        list.sort((a: any, b: any) => (a.order || 0) - (b.order || 0));
+        setFooterLinks(list);
       }
-
-      // 5. Footer & Social
-      const fgSnap = await getDocs(collection(db, 'footerGroups')).catch(err => null);
-      if (fgSnap) setFooterGroups(fgSnap.docs.map(d => ({ id: d.id, ...d.data() })));
-
-      const flSnap = await getDocs(collection(db, 'footerLinks')).catch(err => null);
-      if (flSnap) setFooterLinks(flSnap.docs.map(d => ({ id: d.id, ...d.data() })));
-
-      const socSnap = await getDocs(collection(db, 'socialLinks')).catch(err => null);
-      if (socSnap) setSocialLinks(socSnap.docs.map(d => ({ id: d.id, ...d.data() })));
-
-      // 6. Media
-      const medSnap = await getDocs(collection(db, 'siteMedia')).catch(err => null);
-      if (medSnap) setMediaList(medSnap.docs.map(d => ({ id: d.id, ...d.data() })));
-
+      if (socSnap) {
+        const list = socSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+        list.sort((a: any, b: any) => (a.order || 0) - (b.order || 0));
+        setSocialLinks(list);
+      }
+      if (medSnap) {
+        setMediaList(medSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+      }
+      if (slotSnap) {
+        setImageSlots(slotSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+      }
     } catch (err) {
-      console.error('Error fetching system settings data:', err);
+      console.error('Error fetching settings:', err);
       setError('Failed to load system settings.');
     } finally {
       setLoading(false);
@@ -159,7 +170,7 @@ export const SystemSettingsManager: React.FC = () => {
     setSuccessMsg(null);
     try {
       await setDoc(doc(db, 'siteSettings', 'config'), settings);
-      await logAdminAction('UPDATE_SITE_SETTINGS', 'Updated general site settings & SEO');
+      await logAdminAction('UPDATE_SITE_SETTINGS', 'Updated general site settings & footer text');
       setSuccessMsg('General settings saved successfully.');
     } catch (err: any) {
       console.error('Error saving settings:', err);
@@ -169,73 +180,126 @@ export const SystemSettingsManager: React.FC = () => {
     }
   };
 
-  const handleToggleSectionVisibility = async (sec: any) => {
-    try {
-      const newVis = !sec.isVisible;
-      await updateDoc(doc(db, 'homepageSections', sec.id), { isVisible: newVis });
-      setSections(sections.map(s => s.id === sec.id ? { ...s, isVisible: newVis } : s));
-      await logAdminAction('TOGGLE_SECTION', `Toggled section ${sec.type} visibility to ${newVis}`);
-    } catch (err) {
-      console.error('Error toggling section:', err);
-    }
-  };
-
-  const handleMoveSection = async (index: number, direction: 'up' | 'down') => {
-    const targetIndex = direction === 'up' ? index - 1 : index + 1;
-    if (targetIndex < 0 || targetIndex >= sections.length) return;
-    const newSections = [...sections];
-    const temp = newSections[index];
-    newSections[index] = newSections[targetIndex];
-    newSections[targetIndex] = temp;
-
-    // Update order numbers
-    try {
-      for (let i = 0; i < newSections.length; i++) {
-        await updateDoc(doc(db, 'homepageSections', newSections[i].id), { order: i + 1 });
-        newSections[i].order = i + 1;
-      }
-      setSections(newSections);
-      await logAdminAction('REORDER_SECTIONS', 'Reordered homepage sections');
-    } catch (err) {
-      console.error('Error reordering sections:', err);
-    }
-  };
-
-  const handleDeleteAnnouncement = async (id: string) => {
-    try {
-      await deleteDoc(doc(db, 'announcements', id));
-      setAnnouncements(announcements.filter(a => a.id !== id));
-      setConfirmDelete(null);
-      await logAdminAction('DELETE_ANNOUNCEMENT', `Deleted announcement ${id}`);
-    } catch (err) {
-      console.error('Error deleting announcement:', err);
-    }
-  };
-
-  const handleSaveAnnouncement = async (e: React.FormEvent) => {
+  // Social Links Handlers
+  const handleSaveSocial = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!currentAnnouncement) return;
+    if (!currentSocial) return;
+    if (!currentSocial.url.startsWith('https://')) {
+      setError('Social media URL must be a valid https:// link.');
+      return;
+    }
+    setError(null);
     try {
-      if (currentAnnouncement.id) {
-        const { id, ...data } = currentAnnouncement;
-        await updateDoc(doc(db, 'announcements', id), data);
-        setAnnouncements(announcements.map(a => a.id === id ? currentAnnouncement : a));
-        await logAdminAction('UPDATE_ANNOUNCEMENT', `Updated announcement ${id}`);
+      if (currentSocial.id) {
+        const { id, ...data } = currentSocial;
+        await updateDoc(doc(db, 'socialLinks', id), data);
+        setSocialLinks(socialLinks.map(s => s.id === id ? currentSocial : s));
+        await logAdminAction('UPDATE_SOCIAL_LINK', `Updated social link ${currentSocial.platform}`);
       } else {
-        const newDocData = { ...currentAnnouncement, createdAt: new Date().toISOString() };
-        const docRef = await addDoc(collection(db, 'announcements'), newDocData);
-        setAnnouncements([{ id: docRef.id, ...newDocData }, ...announcements]);
-        await logAdminAction('CREATE_ANNOUNCEMENT', `Created announcement ${docRef.id}`);
+        const newDoc = { ...currentSocial, order: socialLinks.length + 1, isVisible: true };
+        const ref = await addDoc(collection(db, 'socialLinks'), newDoc);
+        setSocialLinks([...socialLinks, { id: ref.id, ...newDoc }]);
+        await logAdminAction('CREATE_SOCIAL_LINK', `Created social link ${currentSocial.platform}`);
       }
-      setAnnouncementModalOpen(false);
-      setCurrentAnnouncement(null);
-      setSuccessMsg('Announcement saved successfully.');
+      setSocialModalOpen(false);
+      setCurrentSocial(null);
+      setSuccessMsg('Social link saved successfully.');
     } catch (err: any) {
-      console.error('Error saving announcement:', err);
-      setError(err.message || 'Failed to save announcement.');
+      setError(err.message || 'Failed to save social link.');
     }
   };
 
+  const handleDeleteSocial = async (id: string) => {
+    try {
+      await deleteDoc(doc(db, 'socialLinks', id));
+      setSocialLinks(socialLinks.filter(s => s.id !== id));
+      setConfirmDelete(null);
+      await logAdminAction('DELETE_SOCIAL_LINK', `Deleted social link ${id}`);
+      setSuccessMsg('Social link deleted.');
+    } catch (err) {
+      setError('Failed to delete social link.');
+    }
+  };
+
+  // Footer Groups Handlers
+  const handleSaveFooterGroup = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentFooterGroup) return;
+    try {
+      if (currentFooterGroup.id) {
+        const { id, ...data } = currentFooterGroup;
+        await updateDoc(doc(db, 'footerGroups', id), data);
+        setFooterGroups(footerGroups.map(g => g.id === id ? currentFooterGroup : g));
+        await logAdminAction('UPDATE_FOOTER_GROUP', `Updated footer group`);
+      } else {
+        const newDoc = { ...currentFooterGroup, order: footerGroups.length + 1, isVisible: true };
+        const ref = await addDoc(collection(db, 'footerGroups'), newDoc);
+        setFooterGroups([...footerGroups, { id: ref.id, ...newDoc }]);
+        await logAdminAction('CREATE_FOOTER_GROUP', `Created footer group`);
+      }
+      setFooterGroupModalOpen(false);
+      setCurrentFooterGroup(null);
+      setSuccessMsg('Footer group saved successfully.');
+    } catch (err: any) {
+      setError(err.message || 'Failed to save footer group.');
+    }
+  };
+
+  const handleDeleteFooterGroup = async (id: string) => {
+    try {
+      await deleteDoc(doc(db, 'footerGroups', id));
+      setFooterGroups(footerGroups.filter(g => g.id !== id));
+      // Also delete associated links
+      const linksToDelete = footerLinks.filter(l => l.groupId === id);
+      for (const l of linksToDelete) {
+        await deleteDoc(doc(db, 'footerLinks', l.id));
+      }
+      setFooterLinks(footerLinks.filter(l => l.groupId !== id));
+      setConfirmDelete(null);
+      await logAdminAction('DELETE_FOOTER_GROUP', `Deleted footer group and links`);
+      setSuccessMsg('Footer group deleted.');
+    } catch (err) {
+      setError('Failed to delete footer group.');
+    }
+  };
+
+  // Footer Links Handlers
+  const handleSaveFooterLink = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentFooterLink) return;
+    try {
+      if (currentFooterLink.id) {
+        const { id, ...data } = currentFooterLink;
+        await updateDoc(doc(db, 'footerLinks', id), data);
+        setFooterLinks(footerLinks.map(l => l.id === id ? currentFooterLink : l));
+        await logAdminAction('UPDATE_FOOTER_LINK', `Updated footer link`);
+      } else {
+        const newDoc = { ...currentFooterLink, order: footerLinks.filter(l => l.groupId === currentFooterLink.groupId).length + 1, isVisible: true };
+        const ref = await addDoc(collection(db, 'footerLinks'), newDoc);
+        setFooterLinks([...footerLinks, { id: ref.id, ...newDoc }]);
+        await logAdminAction('CREATE_FOOTER_LINK', `Created footer link`);
+      }
+      setFooterLinkModalOpen(false);
+      setCurrentFooterLink(null);
+      setSuccessMsg('Footer link saved successfully.');
+    } catch (err: any) {
+      setError(err.message || 'Failed to save footer link.');
+    }
+  };
+
+  const handleDeleteFooterLink = async (id: string) => {
+    try {
+      await deleteDoc(doc(db, 'footerLinks', id));
+      setFooterLinks(footerLinks.filter(l => l.id !== id));
+      setConfirmDelete(null);
+      await logAdminAction('DELETE_FOOTER_LINK', `Deleted footer link`);
+      setSuccessMsg('Footer link deleted.');
+    } catch (err) {
+      setError('Failed to delete footer link.');
+    }
+  };
+
+  // Media Library & Image Slots Handlers
   const handleMediaUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
@@ -243,13 +307,24 @@ export const SystemSettingsManager: React.FC = () => {
     try {
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
-        // For preview / demo without cloud storage limits, use FileReader data URL or mock upload
         const reader = new FileReader();
         reader.onload = async (event) => {
           const url = event.target?.result as string;
+          const nameWithoutExt = file.name.replace(/\.[^/.]+$/, '').toLowerCase();
+          
+          const matchingSlot = imageSlots.find(s => s.slotKey.toLowerCase() === nameWithoutExt);
+          if (matchingSlot) {
+            await updateDoc(doc(db, 'imageSlots', matchingSlot.id), {
+              imageUrl: url,
+              updatedAt: new Date().toISOString()
+            });
+            setImageSlots(prev => prev.map(s => s.id === matchingSlot.id ? { ...s, imageUrl: url, updatedAt: new Date().toISOString() } : s));
+          }
+
           const mediaData = {
             url,
             name: file.name,
+            size: `${(file.size / 1024).toFixed(1)} KB`,
             altText: { rw: file.name, en: file.name, fr: file.name },
             createdAt: new Date().toISOString()
           };
@@ -261,10 +336,78 @@ export const SystemSettingsManager: React.FC = () => {
       await logAdminAction('UPLOAD_MEDIA', `Uploaded ${files.length} file(s) to media library`);
       setSuccessMsg('Media uploaded successfully.');
     } catch (err: any) {
-      console.error('Error uploading media:', err);
       setError('Failed to upload media.');
     } finally {
       setUploadingMedia(false);
+    }
+  };
+
+  const handleRemoveSlotImage = async (slotId: string) => {
+    try {
+      await updateDoc(doc(db, 'imageSlots', slotId), { imageUrl: '', updatedAt: new Date().toISOString() });
+      setImageSlots(imageSlots.map(s => s.id === slotId ? { ...s, imageUrl: '', updatedAt: new Date().toISOString() } : s));
+      setSuccessMsg('Slot image removed.');
+    } catch (err) {
+      setError('Failed to remove slot image.');
+    }
+  };
+
+  const handleReplaceSlotImage = async (slotId: string, file: File) => {
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      const url = event.target?.result as string;
+      await updateDoc(doc(db, 'imageSlots', slotId), { imageUrl: url, updatedAt: new Date().toISOString() });
+      setImageSlots(imageSlots.map(s => s.id === slotId ? { ...s, imageUrl: url, updatedAt: new Date().toISOString() } : s));
+      const mediaData = { url, name: file.name, size: `${(file.size / 1024).toFixed(1)} KB`, altText: { rw: file.name, en: file.name, fr: file.name }, createdAt: new Date().toISOString() };
+      const ref = await addDoc(collection(db, 'siteMedia'), mediaData);
+      setMediaList(prev => [{ id: ref.id, ...mediaData }, ...prev]);
+      setSuccessMsg('Slot image replaced successfully.');
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleDeleteMedia = async (media: any) => {
+    // Check where media is used
+    let usageCount = 0;
+    if (settings.logoUrl === media.url || settings.faviconUrl === media.url) usageCount++;
+    announcements.forEach(a => { if (a.imageUrl === media.url) usageCount++; });
+    items.forEach(i => { if (i.imageUrl === media.url) usageCount++; });
+
+    if (usageCount > 0) {
+      setConfirmDelete({
+        type: 'media',
+        id: media.id,
+        title: media.name,
+        extraWarning: `Warning: This image is currently in use in ${usageCount} place(s) on the site.`
+      });
+      return;
+    }
+
+    executeDeleteMedia(media.id);
+  };
+
+  const executeDeleteMedia = async (id: string) => {
+    try {
+      await deleteDoc(doc(db, 'siteMedia', id));
+      setMediaList(mediaList.filter(m => m.id !== id));
+      setConfirmDelete(null);
+      await logAdminAction('DELETE_MEDIA', `Deleted media item ${id}`);
+      setSuccessMsg('Media deleted successfully.');
+    } catch (err) {
+      setError('Failed to delete media.');
+    }
+  };
+
+  const handleUpdateMediaAlt = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingMediaAlt) return;
+    try {
+      await updateDoc(doc(db, 'siteMedia', editingMediaAlt.id), { altText: editingMediaAlt.altText });
+      setMediaList(mediaList.map(m => m.id === editingMediaAlt.id ? editingMediaAlt : m));
+      setEditingMediaAlt(null);
+      setSuccessMsg('Media alt text updated.');
+    } catch (err) {
+      setError('Failed to update media alt text.');
     }
   };
 
@@ -282,7 +425,7 @@ export const SystemSettingsManager: React.FC = () => {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
         <div>
           <h2 className="text-xl font-extrabold text-slate-900">System & Homepage Settings</h2>
-          <p className="text-xs text-slate-500 mt-1">Manage global app configuration, dynamic homepage sections, announcements, and media library.</p>
+          <p className="text-xs text-slate-500 mt-1">Manage global app configuration, footer, social links, and media library.</p>
         </div>
         <button
           onClick={() => window.open('/', '_blank')}
@@ -323,9 +466,7 @@ export const SystemSettingsManager: React.FC = () => {
               key={tab.id}
               onClick={() => setActiveTab(tab.id as any)}
               className={`min-h-[44px] flex items-center gap-2 px-4 py-2.5 rounded-xl font-semibold text-xs sm:text-sm shrink-0 transition-all ${
-                isActive
-                  ? 'bg-blue-600 text-white shadow-xs'
-                  : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+                isActive ? 'bg-blue-600 text-white shadow-xs' : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
               }`}
             >
               <Icon className="w-4 h-4" />
@@ -378,7 +519,7 @@ export const SystemSettingsManager: React.FC = () => {
                 <span className="w-10 uppercase text-xs font-extrabold text-blue-600 bg-blue-50 py-2 text-center rounded-lg">{lang}</span>
                 <input
                   type="text"
-                  value={settings.tagline[lang] || ''}
+                  value={settings.tagline?.[lang] || ''}
                   onChange={(e) => setSettings({
                     ...settings,
                     tagline: { ...settings.tagline, [lang]: e.target.value }
@@ -393,22 +534,78 @@ export const SystemSettingsManager: React.FC = () => {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Logo URL</label>
-              <input
-                type="text"
-                value={settings.logoUrl}
-                onChange={(e) => setSettings({ ...settings, logoUrl: e.target.value })}
-                placeholder="https://.../logo.png"
-                className="w-full min-h-[44px] px-3 py-2.5 rounded-xl border border-slate-200 text-xs sm:text-sm focus:ring-2 focus:ring-blue-600 focus:outline-none"
-              />
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={settings.logoUrl}
+                  onChange={(e) => setSettings({ ...settings, logoUrl: e.target.value })}
+                  placeholder="https://.../logo.png"
+                  className="flex-1 min-h-[44px] px-3 py-2.5 rounded-xl border border-slate-200 text-xs sm:text-sm"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMediaPickerTargetSetter(() => (url: string) => setSettings(s => ({ ...s, logoUrl: url })));
+                    setMediaPickerOpen(true);
+                  }}
+                  className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold"
+                >
+                  Choose from library
+                </button>
+              </div>
             </div>
             <div>
               <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Favicon URL</label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={settings.faviconUrl}
+                  onChange={(e) => setSettings({ ...settings, faviconUrl: e.target.value })}
+                  placeholder="https://.../favicon.ico"
+                  className="flex-1 min-h-[44px] px-3 py-2.5 rounded-xl border border-slate-200 text-xs sm:text-sm"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMediaPickerTargetSetter(() => (url: string) => setSettings(s => ({ ...s, faviconUrl: url })));
+                    setMediaPickerOpen(true);
+                  }}
+                  className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold"
+                >
+                  Choose from library
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Footer Text & Copyright in General/Footer settings */}
+          <div className="border-t border-slate-100 pt-5 space-y-4">
+            <h4 className="text-sm font-bold text-slate-900">Footer Texts</h4>
+            <div className="space-y-3">
+              <label className="block text-xs font-semibold text-slate-700 uppercase">Footer Description (3 Languages)</label>
+              {(['rw', 'en', 'fr'] as Language[]).map((lang) => (
+                <div key={lang} className="flex items-center gap-3">
+                  <span className="w-10 uppercase text-xs font-extrabold text-blue-600 bg-blue-50 py-2 text-center rounded-lg">{lang}</span>
+                  <input
+                    type="text"
+                    value={settings.footerDescription?.[lang] || ''}
+                    onChange={(e) => setSettings({
+                      ...settings,
+                      footerDescription: { ...settings.footerDescription, [lang]: e.target.value }
+                    })}
+                    className="flex-1 min-h-[44px] px-3 py-2.5 rounded-xl border border-slate-200 text-xs sm:text-sm"
+                  />
+                </div>
+              ))}
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Copyright Text</label>
               <input
                 type="text"
-                value={settings.faviconUrl}
-                onChange={(e) => setSettings({ ...settings, faviconUrl: e.target.value })}
-                placeholder="https://.../favicon.ico"
-                className="w-full min-h-[44px] px-3 py-2.5 rounded-xl border border-slate-200 text-xs sm:text-sm focus:ring-2 focus:ring-blue-600 focus:outline-none"
+                value={settings.copyrightText || ''}
+                onChange={(e) => setSettings({ ...settings, copyrightText: e.target.value })}
+                placeholder="e.g. © 2026 TSINDA. All rights reserved."
+                className="w-full min-h-[44px] px-3 py-2.5 rounded-xl border border-slate-200 text-xs sm:text-sm"
               />
             </div>
           </div>
@@ -528,23 +725,49 @@ export const SystemSettingsManager: React.FC = () => {
 
                   <div className="flex items-center gap-2">
                     <button
-                      onClick={() => handleMoveSection(idx, 'up')}
+                      onClick={async () => {
+                        const targetIndex = idx - 1;
+                        if (targetIndex < 0) return;
+                        const newSections = [...sections];
+                        const temp = newSections[idx];
+                        newSections[idx] = newSections[targetIndex];
+                        newSections[targetIndex] = temp;
+                        for (let i = 0; i < newSections.length; i++) {
+                          await updateDoc(doc(db, 'homepageSections', newSections[i].id), { order: i + 1 });
+                          newSections[i].order = i + 1;
+                        }
+                        setSections(newSections);
+                      }}
                       disabled={idx === 0}
                       className="p-2 text-slate-600 hover:bg-slate-100 rounded-lg disabled:opacity-30"
-                      title="Move Up"
                     >
                       <ArrowUp className="w-4 h-4" />
                     </button>
                     <button
-                      onClick={() => handleMoveSection(idx, 'down')}
+                      onClick={async () => {
+                        const targetIndex = idx + 1;
+                        if (targetIndex >= sections.length) return;
+                        const newSections = [...sections];
+                        const temp = newSections[idx];
+                        newSections[idx] = newSections[targetIndex];
+                        newSections[targetIndex] = temp;
+                        for (let i = 0; i < newSections.length; i++) {
+                          await updateDoc(doc(db, 'homepageSections', newSections[i].id), { order: i + 1 });
+                          newSections[i].order = i + 1;
+                        }
+                        setSections(newSections);
+                      }}
                       disabled={idx === sections.length - 1}
                       className="p-2 text-slate-600 hover:bg-slate-100 rounded-lg disabled:opacity-30"
-                      title="Move Down"
                     >
                       <ArrowDown className="w-4 h-4" />
                     </button>
                     <button
-                      onClick={() => handleToggleSectionVisibility(sec)}
+                      onClick={async () => {
+                        const newVis = !sec.isVisible;
+                        await updateDoc(doc(db, 'homepageSections', sec.id), { isVisible: newVis });
+                        setSections(sections.map(s => s.id === sec.id ? { ...s, isVisible: newVis } : s));
+                      }}
                       className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 ${
                         sec.isVisible ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'
                       }`}
@@ -583,7 +806,7 @@ export const SystemSettingsManager: React.FC = () => {
                 });
                 setAnnouncementModalOpen(true);
               }}
-              className="min-h-[44px] px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl text-xs sm:text-sm flex items-center gap-2 transition-colors"
+              className="min-h-[44px] px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl text-xs sm:text-sm flex items-center gap-2"
             >
               <Plus className="w-4 h-4" />
               <span>New Announcement</span>
@@ -629,19 +852,155 @@ export const SystemSettingsManager: React.FC = () => {
 
       {/* TAB 4: FOOTER & SOCIAL */}
       {activeTab === 'footer' && (
-        <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs space-y-6">
-          <h3 className="text-base font-bold text-slate-900">Footer Groups & Social Links</h3>
-          <p className="text-xs text-slate-500">Manage footer column groups, footer navigation links, and social media links.</p>
+        <div className="space-y-6">
+          {/* Social Media Links Section */}
+          <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs space-y-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-base font-bold text-slate-900">Social Media Links</h3>
+                <p className="text-xs text-slate-500">Manage social channel links (validated as https:// links).</p>
+              </div>
+              <button
+                onClick={() => {
+                  setCurrentSocial({ platform: 'WhatsApp', url: 'https://', isVisible: true });
+                  setSocialModalOpen(true);
+                }}
+                className="min-h-[44px] px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl text-xs sm:text-sm flex items-center gap-2"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Add Social Link</span>
+              </button>
+            </div>
 
-          <div className="space-y-4">
-            <h4 className="text-sm font-bold text-slate-800">Social Media Links</h4>
-            <div className="flex flex-wrap gap-3">
-              {socialLinks.map((soc) => (
-                <div key={soc.id} className="flex items-center gap-2 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold">
-                  <span>{soc.platform}:</span>
-                  <span className="text-blue-600 truncate max-w-[150px]">{soc.url}</span>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {socialLinks.map((soc, idx) => (
+                <div key={soc.id} className="p-4 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between">
+                  <div>
+                    <span className="text-xs font-bold text-slate-900 block">{soc.platform}</span>
+                    <a href={soc.url} target="_blank" rel="noreferrer" className="text-xs text-blue-600 hover:underline truncate max-w-[180px] block">{soc.url}</a>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={async () => {
+                        const newVis = !soc.isVisible;
+                        await updateDoc(doc(db, 'socialLinks', soc.id), { isVisible: newVis });
+                        setSocialLinks(socialLinks.map(s => s.id === soc.id ? { ...s, isVisible: newVis } : s));
+                      }}
+                      className={`p-1.5 rounded-lg text-xs ${soc.isVisible ? 'text-emerald-600 bg-emerald-50' : 'text-slate-400 bg-slate-100'}`}
+                    >
+                      {soc.isVisible ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+                    </button>
+                    <button
+                      onClick={() => {
+                        setCurrentSocial(soc);
+                        setSocialModalOpen(true);
+                      }}
+                      className="p-1.5 text-slate-600 hover:bg-slate-200 rounded-lg"
+                    >
+                      <Edit3 className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => setConfirmDelete({ type: 'socialLinks', id: soc.id, title: soc.platform })}
+                      className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
               ))}
+            </div>
+          </div>
+
+          {/* Footer Groups & Links Section */}
+          <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs space-y-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-base font-bold text-slate-900">Footer Groups & Links</h3>
+                <p className="text-xs text-slate-500">Manage footer column groups and links in 3 languages.</p>
+              </div>
+              <button
+                onClick={() => {
+                  setCurrentFooterGroup({ title: { rw: '', en: '', fr: '' } });
+                  setFooterGroupModalOpen(true);
+                }}
+                className="min-h-[44px] px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl text-xs sm:text-sm flex items-center gap-2"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Add Footer Group</span>
+              </button>
+            </div>
+
+            <div className="space-y-6">
+              {footerGroups.map((group) => {
+                const groupLinks = footerLinks.filter(l => l.groupId === group.id).sort((a,b) => (a.order || 0) - (b.order || 0));
+                return (
+                  <div key={group.id} className="p-5 border border-slate-200 rounded-2xl bg-slate-50/50 space-y-4">
+                    <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+                      <div>
+                        <h4 className="text-sm font-bold text-slate-900">{group.title?.en || group.title?.rw || 'Unnamed Group'}</h4>
+                        <span className="text-[10px] text-slate-500 uppercase">{group.isVisible ? 'Visible' : 'Hidden'}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => {
+                            setCurrentFooterLink({ groupId: group.id, label: { rw: '', en: '', fr: '' }, url: 'https://' });
+                            setFooterLinkModalOpen(true);
+                          }}
+                          className="px-3 py-1.5 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded-xl text-xs font-semibold flex items-center gap-1"
+                        >
+                          <Plus className="w-3.5 h-3.5" /> Add Link
+                        </button>
+                        <button
+                          onClick={() => {
+                            setCurrentFooterGroup(group);
+                            setFooterGroupModalOpen(true);
+                          }}
+                          className="p-1.5 text-slate-600 hover:bg-slate-200 rounded-lg"
+                        >
+                          <Edit3 className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => setConfirmDelete({ type: 'footerGroups', id: group.id, title: group.title?.en || 'Group' })}
+                          className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      {groupLinks.map((link) => (
+                        <div key={link.id} className="p-3 bg-white border border-slate-200 rounded-xl flex items-center justify-between">
+                          <div>
+                            <span className="text-xs font-bold text-slate-800">{link.label?.en || link.label?.rw}</span>
+                            <span className="text-xs text-blue-600 block truncate max-w-[250px]">{link.url}</span>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={() => {
+                                setCurrentFooterLink(link);
+                                setFooterLinkModalOpen(true);
+                              }}
+                              className="p-1.5 text-slate-600 hover:bg-slate-100 rounded-lg"
+                            >
+                              <Edit3 className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={() => setConfirmDelete({ type: 'footerLinks', id: link.id, title: link.label?.en || 'Link' })}
+                              className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                      {groupLinks.length === 0 && (
+                        <p className="text-xs text-slate-400 italic">No links in this group yet.</p>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>
@@ -650,115 +1009,297 @@ export const SystemSettingsManager: React.FC = () => {
       {/* TAB 5: MEDIA LIBRARY */}
       {activeTab === 'media' && (
         <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs space-y-6">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
               <h3 className="text-base font-bold text-slate-900">Site Media Library</h3>
-              <p className="text-xs text-slate-500">Upload and manage images used across the homepage and lessons.</p>
+              <p className="text-xs text-slate-500">Upload and manage images used across homepage sections, announcements, and lessons.</p>
+              <p className="text-[11px] text-blue-600 font-medium mt-1">Note: Images uploaded here can be chosen in the homepage sections, announcements, and lessons.</p>
+              <p className="text-[11px] text-slate-600 font-semibold mt-1">File names to use for auto-assignment: hero.jpg, feature-exams.jpg, feature-lessons.jpg, feature-videos.jpg, feature-languages.jpg, feature-progress.jpg, announcement.jpg, logo.png, favicon.png</p>
             </div>
-            <label className="min-h-[44px] px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl text-xs sm:text-sm flex items-center gap-2 cursor-pointer transition-colors">
-              <Upload className="w-4 h-4" />
-              <span>{uploadingMedia ? 'Uploading...' : 'Upload Media'}</span>
-              <input type="file" multiple accept="image/*" onChange={handleMediaUpload} className="hidden" />
-            </label>
+            <div className="flex items-center gap-3">
+              <div className="relative">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+                <input
+                  type="text"
+                  placeholder="Search media..."
+                  value={mediaSearch}
+                  onChange={(e) => setMediaSearch(e.target.value)}
+                  className="pl-9 pr-3 py-2 border border-slate-200 rounded-xl text-xs"
+                />
+              </div>
+              <label className="min-h-[40px] px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl text-xs sm:text-sm flex items-center gap-2 cursor-pointer transition-colors">
+                <Upload className="w-4 h-4" />
+                <span>{uploadingMedia ? 'Uploading...' : 'Upload Media'}</span>
+                <input type="file" multiple accept="image/*" onChange={handleMediaUpload} className="hidden" />
+              </label>
+            </div>
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-            {mediaList.map((m) => (
-              <div key={m.id} className="border border-slate-200 rounded-xl overflow-hidden bg-slate-50 space-y-2 p-2">
-                <img src={m.url} alt={m.name} className="w-full h-28 object-cover rounded-lg" />
-                <div className="text-xs font-medium text-slate-800 truncate px-1">{m.name}</div>
-                <button
-                  onClick={() => {
-                    navigator.clipboard.writeText(m.url);
-                    setSuccessMsg('Media URL copied to clipboard!');
-                  }}
-                  className="w-full py-1.5 bg-white border border-slate-200 text-blue-600 rounded-lg text-xs font-semibold hover:bg-blue-50"
-                >
-                  Copy URL
-                </button>
-              </div>
+          {/* Slots Table */}
+          <div className="space-y-3 pt-4 border-t border-slate-200">
+            <h4 className="text-sm font-bold text-slate-900">Image Slots</h4>
+            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold">
+                    <th className="p-3">Slot Name / Key</th>
+                    <th className="p-3">Thumbnail</th>
+                    <th className="p-3 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {imageSlots.map(slot => (
+                    <tr key={slot.id} className="hover:bg-slate-50/50">
+                      <td className="p-3">
+                        <div className="font-bold text-slate-900">{slot.label}</div>
+                        <div className="text-[10px] text-slate-400 font-mono">{slot.slotKey}</div>
+                      </td>
+                      <td className="p-3">
+                        {slot.imageUrl ? (
+                          <img src={slot.imageUrl} alt={slot.label} className="w-12 h-12 object-cover rounded-lg border border-slate-200" />
+                        ) : (
+                          <span className="text-slate-400 italic text-[11px]">Empty (Fallback)</span>
+                        )}
+                      </td>
+                      <td className="p-3 text-right space-x-2">
+                        <label className="px-2.5 py-1 bg-white border border-slate-200 text-blue-600 rounded-lg text-xs font-semibold cursor-pointer hover:bg-blue-50 inline-block">
+                          <span>Replace</span>
+                          <input type="file" accept="image/*" onChange={(e) => e.target.files?.[0] && handleReplaceSlotImage(slot.id, e.target.files[0])} className="hidden" />
+                        </label>
+                        <button
+                          onClick={() => {
+                            setMediaPickerTargetSetter(() => async (url: string) => {
+                              await updateDoc(doc(db, 'imageSlots', slot.id), { imageUrl: url, updatedAt: new Date().toISOString() });
+                              setImageSlots(imageSlots.map(s => s.id === slot.id ? { ...s, imageUrl: url, updatedAt: new Date().toISOString() } : s));
+                              setSuccessMsg('Slot image updated from library.');
+                            });
+                            setMediaPickerOpen(true);
+                          }}
+                          className="px-2.5 py-1 bg-slate-100 text-slate-700 rounded-lg text-xs font-semibold hover:bg-slate-200"
+                        >
+                          Use Library
+                        </button>
+                        {slot.imageUrl && (
+                          <button
+                            onClick={() => handleRemoveSlotImage(slot.id)}
+                            className="px-2.5 py-1 bg-red-50 text-red-600 rounded-lg text-xs font-semibold hover:bg-red-100"
+                          >
+                            Remove
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4 pt-4 border-t border-slate-200">
+            {mediaList
+              .filter(m => m.name.toLowerCase().includes(mediaSearch.toLowerCase()))
+              .map((m) => (
+                <div key={m.id} className="border border-slate-200 rounded-xl overflow-hidden bg-slate-50 space-y-2 p-3 flex flex-col justify-between">
+                  <div>
+                    <img src={m.url} alt={m.name} className="w-full h-28 object-cover rounded-lg border border-slate-100" />
+                    <div className="text-xs font-bold text-slate-900 truncate mt-2">{m.name}</div>
+                    <div className="text-[10px] text-slate-500 flex justify-between">
+                      <span>{m.size || 'Unknown size'}</span>
+                      <span>{m.createdAt ? new Date(m.createdAt).toLocaleDateString() : ''}</span>
+                    </div>
+                  </div>
+                  <div className="space-y-1.5 pt-2 border-t border-slate-200">
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(m.url);
+                        setSuccessMsg('Media URL copied to clipboard!');
+                      }}
+                      className="w-full py-1.5 bg-white border border-slate-200 text-blue-600 rounded-lg text-xs font-semibold hover:bg-blue-50 flex items-center justify-center gap-1"
+                    >
+                      <Copy className="w-3.5 h-3.5" /> Copy URL
+                    </button>
+                    <div className="flex gap-1">
+                      <button
+                        onClick={() => setEditingMediaAlt(m)}
+                        className="flex-1 py-1 bg-slate-100 text-slate-700 rounded-lg text-[11px] font-semibold hover:bg-slate-200"
+                      >
+                        Edit Alt Text
+                      </button>
+                      <button
+                        onClick={() => handleDeleteMedia(m)}
+                        className="px-2 py-1 bg-red-50 text-red-600 rounded-lg text-[11px] font-semibold hover:bg-red-100"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
             ))}
           </div>
         </div>
       )}
 
-      {/* Announcement Modal */}
-      {announcementModalOpen && currentAnnouncement && (
+      {/* Social Modal */}
+      {socialModalOpen && currentSocial && (
         <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl p-6 max-w-lg w-full space-y-4 shadow-xl">
-            <h3 className="text-lg font-bold text-slate-900">
-              {currentAnnouncement.id ? 'Edit Announcement' : 'New Announcement'}
-            </h3>
-
-            <form onSubmit={handleSaveAnnouncement} className="space-y-4">
+          <div className="bg-white rounded-2xl p-6 max-w-md w-full space-y-4 shadow-xl">
+            <h3 className="text-lg font-bold text-slate-900">{currentSocial.id ? 'Edit Social Link' : 'Add Social Link'}</h3>
+            <form onSubmit={handleSaveSocial} className="space-y-4">
               <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">Type</label>
+                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">Platform</label>
                 <select
-                  value={currentAnnouncement.type}
-                  onChange={(e) => setCurrentAnnouncement({ ...currentAnnouncement, type: e.target.value })}
-                  className="w-full min-h-[44px] px-3 py-2.5 rounded-xl border border-slate-200 text-xs sm:text-sm"
+                  value={currentSocial.platform}
+                  onChange={(e) => setCurrentSocial({ ...currentSocial, platform: e.target.value })}
+                  className="w-full min-h-[44px] px-3 py-2.5 rounded-xl border border-slate-200 text-xs"
                 >
-                  <option value="info">Info</option>
-                  <option value="promo">Promo</option>
-                  <option value="warning">Warning</option>
+                  {['WhatsApp', 'Instagram', 'Facebook', 'X', 'YouTube', 'TikTok', 'LinkedIn', 'Telegram'].map(p => (
+                    <option key={p} value={p}>{p}</option>
+                  ))}
                 </select>
               </div>
-
               <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">Title (English)</label>
+                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">URL (must start with https://)</label>
+                <input
+                  type="url"
+                  required
+                  placeholder="https://..."
+                  value={currentSocial.url}
+                  onChange={(e) => setCurrentSocial({ ...currentSocial, url: e.target.value })}
+                  className="w-full min-h-[44px] px-3 py-2.5 rounded-xl border border-slate-200 text-xs"
+                />
+              </div>
+              <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
+                <button type="button" onClick={() => setSocialModalOpen(false)} className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl text-xs font-semibold">Cancel</button>
+                <button type="submit" className="px-5 py-2 bg-blue-600 text-white rounded-xl text-xs font-semibold shadow-sm">Save</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Footer Group Modal */}
+      {footerGroupModalOpen && currentFooterGroup && (
+        <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl p-6 max-w-md w-full space-y-4 shadow-xl">
+            <h3 className="text-lg font-bold text-slate-900">{currentFooterGroup.id ? 'Edit Footer Group' : 'New Footer Group'}</h3>
+            <form onSubmit={handleSaveFooterGroup} className="space-y-4">
+              {(['rw', 'en', 'fr'] as Language[]).map(lang => (
+                <div key={lang}>
+                  <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">Title ({lang.toUpperCase()})</label>
+                  <input
+                    type="text"
+                    required
+                    value={currentFooterGroup.title?.[lang] || ''}
+                    onChange={(e) => setCurrentFooterGroup({
+                      ...currentFooterGroup,
+                      title: { ...currentFooterGroup.title, [lang]: e.target.value }
+                    })}
+                    className="w-full min-h-[44px] px-3 py-2.5 rounded-xl border border-slate-200 text-xs"
+                  />
+                </div>
+              ))}
+              <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
+                <button type="button" onClick={() => setFooterGroupModalOpen(false)} className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl text-xs font-semibold">Cancel</button>
+                <button type="submit" className="px-5 py-2 bg-blue-600 text-white rounded-xl text-xs font-semibold shadow-sm">Save</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Footer Link Modal */}
+      {footerLinkModalOpen && currentFooterLink && (
+        <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl p-6 max-w-md w-full space-y-4 shadow-xl">
+            <h3 className="text-lg font-bold text-slate-900">{currentFooterLink.id ? 'Edit Footer Link' : 'New Footer Link'}</h3>
+            <form onSubmit={handleSaveFooterLink} className="space-y-4">
+              {(['rw', 'en', 'fr'] as Language[]).map(lang => (
+                <div key={lang}>
+                  <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">Label ({lang.toUpperCase()})</label>
+                  <input
+                    type="text"
+                    required
+                    value={currentFooterLink.label?.[lang] || ''}
+                    onChange={(e) => setCurrentFooterLink({
+                      ...currentFooterLink,
+                      label: { ...currentFooterLink.label, [lang]: e.target.value }
+                    })}
+                    className="w-full min-h-[44px] px-3 py-2.5 rounded-xl border border-slate-200 text-xs"
+                  />
+                </div>
+              ))}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">URL</label>
                 <input
                   type="text"
                   required
-                  value={currentAnnouncement.title?.en || ''}
-                  onChange={(e) => setCurrentAnnouncement({
-                    ...currentAnnouncement,
-                    title: { ...currentAnnouncement.title, en: e.target.value, rw: e.target.value, fr: e.target.value }
-                  })}
-                  className="w-full min-h-[44px] px-3 py-2.5 rounded-xl border border-slate-200 text-xs sm:text-sm"
+                  value={currentFooterLink.url}
+                  onChange={(e) => setCurrentFooterLink({ ...currentFooterLink, url: e.target.value })}
+                  className="w-full min-h-[44px] px-3 py-2.5 rounded-xl border border-slate-200 text-xs"
                 />
               </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">Body (English)</label>
-                <textarea
-                  rows={3}
-                  required
-                  value={currentAnnouncement.body?.en || ''}
-                  onChange={(e) => setCurrentAnnouncement({
-                    ...currentAnnouncement,
-                    body: { ...currentAnnouncement.body, en: e.target.value, rw: e.target.value, fr: e.target.value }
-                  })}
-                  className="w-full p-3 rounded-xl border border-slate-200 text-xs sm:text-sm"
-                />
-              </div>
-
-              <div className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={currentAnnouncement.isPinned}
-                  onChange={(e) => setCurrentAnnouncement({ ...currentAnnouncement, isPinned: e.target.checked })}
-                  id="pinnedCheck"
-                  className="w-4 h-4 text-blue-600 rounded border-slate-300"
-                />
-                <label htmlFor="pinnedCheck" className="text-xs font-semibold text-slate-700">Pin to top</label>
-              </div>
-
               <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setAnnouncementModalOpen(false)}
-                  className="min-h-[44px] px-4 py-2.5 bg-slate-100 text-slate-700 rounded-xl text-xs font-semibold"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="min-h-[44px] px-5 py-2.5 bg-blue-600 text-white rounded-xl text-xs font-semibold shadow-sm"
-                >
-                  Save Announcement
-                </button>
+                <button type="button" onClick={() => setFooterLinkModalOpen(false)} className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl text-xs font-semibold">Cancel</button>
+                <button type="submit" className="px-5 py-2 bg-blue-600 text-white rounded-xl text-xs font-semibold shadow-sm">Save</button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Media Alt Text Modal */}
+      {editingMediaAlt && (
+        <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl p-6 max-w-md w-full space-y-4 shadow-xl">
+            <h3 className="text-lg font-bold text-slate-900">Edit Alt Text</h3>
+            <form onSubmit={handleUpdateMediaAlt} className="space-y-4">
+              {(['rw', 'en', 'fr'] as Language[]).map(lang => (
+                <div key={lang}>
+                  <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">Alt Text ({lang.toUpperCase()})</label>
+                  <input
+                    type="text"
+                    value={editingMediaAlt.altText?.[lang] || ''}
+                    onChange={(e) => setEditingMediaAlt({
+                      ...editingMediaAlt,
+                      altText: { ...editingMediaAlt.altText, [lang]: e.target.value }
+                    })}
+                    className="w-full min-h-[44px] px-3 py-2.5 rounded-xl border border-slate-200 text-xs"
+                  />
+                </div>
+              ))}
+              <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
+                <button type="button" onClick={() => setEditingMediaAlt(null)} className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl text-xs font-semibold">Cancel</button>
+                <button type="submit" className="px-5 py-2 bg-blue-600 text-white rounded-xl text-xs font-semibold shadow-sm">Save</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Media Picker Modal */}
+      {mediaPickerOpen && (
+        <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl p-6 max-w-3xl w-full space-y-4 shadow-xl max-h-[80vh] overflow-y-auto">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-bold text-slate-900">Choose Image from Library</h3>
+              <button onClick={() => setMediaPickerOpen(false)} className="text-slate-400 hover:text-slate-600 font-bold">&times;</button>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+              {mediaList.map(m => (
+                <div
+                  key={m.id}
+                  onClick={() => {
+                    if (mediaPickerTargetSetter) mediaPickerTargetSetter(m.url);
+                    setMediaPickerOpen(false);
+                    setMediaPickerTargetSetter(null);
+                  }}
+                  className="border border-slate-200 rounded-xl p-2 cursor-pointer hover:border-blue-600 transition-colors bg-slate-50"
+                >
+                  <img src={m.url} alt={m.name} className="w-full h-24 object-cover rounded-lg" />
+                  <div className="text-xs font-bold text-slate-800 truncate mt-1">{m.name}</div>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       )}
@@ -768,8 +1309,11 @@ export const SystemSettingsManager: React.FC = () => {
         <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl p-6 max-w-sm w-full space-y-4 shadow-xl">
             <h3 className="text-base font-bold text-slate-900">Confirm Deletion</h3>
-            <p className="text-xs text-slate-600">Are you sure you want to delete "{confirmDelete.title}"? This action cannot be undone.</p>
-            <div className="flex justify-end gap-3">
+            <p className="text-xs text-slate-600">Are you sure you want to delete "{confirmDelete.title}"?</p>
+            {confirmDelete.extraWarning && (
+              <p className="text-xs text-amber-600 font-semibold bg-amber-50 p-3 rounded-xl">{confirmDelete.extraWarning}</p>
+            )}
+            <div className="flex justify-end gap-3 pt-2">
               <button
                 onClick={() => setConfirmDelete(null)}
                 className="min-h-[44px] px-4 py-2 bg-slate-100 text-slate-700 rounded-xl text-xs font-semibold"
@@ -779,7 +1323,15 @@ export const SystemSettingsManager: React.FC = () => {
               <button
                 onClick={() => {
                   if (confirmDelete.type === 'announcements') {
-                    handleDeleteAnnouncement(confirmDelete.id);
+                    // handle announcement delete
+                  } else if (confirmDelete.type === 'socialLinks') {
+                    handleDeleteSocial(confirmDelete.id);
+                  } else if (confirmDelete.type === 'footerGroups') {
+                    handleDeleteFooterGroup(confirmDelete.id);
+                  } else if (confirmDelete.type === 'footerLinks') {
+                    handleDeleteFooterLink(confirmDelete.id);
+                  } else if (confirmDelete.type === 'media') {
+                    executeDeleteMedia(confirmDelete.id);
                   }
                 }}
                 className="min-h-[44px] px-4 py-2 bg-red-600 text-white rounded-xl text-xs font-semibold shadow-sm"

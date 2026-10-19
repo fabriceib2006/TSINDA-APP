@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { useLanguage } from '../context/LanguageContext';
 import { t } from '../i18n/translations';
 import { Navbar } from './Navbar';
 import { AdminDashboard } from './admin/AdminDashboard';
@@ -25,8 +26,8 @@ import {
 type AdminTab = 'dashboard' | 'users' | 'plans' | 'payments' | 'content' | 'exams' | 'systemSettings' | 'profile';
 
 export const AdminLayout: React.FC = () => {
-  const { language } = useAuth();
-  const dict = t[language];
+  const { language } = useLanguage();
+  const dict = t[language as keyof typeof t];
   const [activeTab, setActiveTab] = useState<AdminTab>('dashboard');
   const [sidebarOpen, setSidebarOpen] = useState(false);
 

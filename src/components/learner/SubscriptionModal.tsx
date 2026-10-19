@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { db, functions } from '../../lib/firebase';
-import { collection, getDocs, doc, onSnapshot } from 'firebase/firestore';
+import { collection, getDocs, doc, onSnapshot, query, where } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { handleFirestoreError, OperationType } from '../../lib/firestoreUtils';
 import { Plan, Promotion } from '../../types';
@@ -8,7 +8,8 @@ import { normalizePlan } from '../../lib/subscriptionUtils';
 import { getBestPromotion } from '../../lib/promotionUtils';
 import { formatCountdown } from '../../lib/timeUtils';
 import { useAuth } from '../../context/AuthContext';
-import { normalizeRwandanPhone, detectNetwork } from '../../lib/phoneUtils';
+import { useLanguage } from '../../context/LanguageContext';
+import { normalizePhone, validatePhone, detectNetwork } from '../../lib/phoneUtils';
 import { Award, Check, X, ShieldCheck, CreditCard, Star, AlertCircle, Smartphone, RefreshCw } from 'lucide-react';
 
 interface SubscriptionModalProps {
@@ -20,10 +21,12 @@ interface SubscriptionModalProps {
 type ModalPaymentStep = 'select_and_pay' | 'waiting_prompt' | 'success' | 'failed';
 
 export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ isOpen, onClose, onSubscribed }) => {
-  const { userProfile, language } = useAuth();
+  const { userProfile } = useAuth();
+  const { language } = useLanguage();
   const [plans, setPlans] = useState<Plan[]>([]);
   const [promotions, setPromotions] = useState<Promotion[]>([]);
   const [selectedPlan, setSelectedPlan] = useState<Plan | null>(null);
+  const [activeSub, setActiveSub] = useState<{ planName: string; endDate: string } | null>(null);
   const [phone, setPhone] = useState(userProfile?.phone || '');
   const network = phone ? detectNetwork(phone) : null;
   const [step, setStep] = useState<ModalPaymentStep>('select_and_pay');
@@ -31,6 +34,28 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ isOpen, on
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [activePaymentId, setActivePaymentId] = useState<string | null>(null);
   const unsubscribeSnapshotRef = useRef<(() => void) | null>(null);
+
+  const formatCatDate = (dateInput: string | Date | number): string => {
+    const d = typeof dateInput === 'string' || typeof dateInput === 'number' ? new Date(dateInput) : dateInput;
+    if (!d || isNaN(d.getTime())) return '';
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Africa/Kigali',
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).formatToParts(d);
+
+    const day = parts.find(p => p.type === 'day')?.value || '';
+    const month = parts.find(p => p.type === 'month')?.value || '';
+    const year = parts.find(p => p.type === 'year')?.value || '';
+    const hour = parts.find(p => p.type === 'hour')?.value || '';
+    const minute = parts.find(p => p.type === 'minute')?.value || '';
+
+    return `${day}/${month}/${year} ${hour}:${minute} CAT`;
+  };
 
   // Clean up Firestore listener on unmount
   useEffect(() => {
@@ -63,6 +88,28 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ isOpen, on
         if (promoSnap) {
           setPromotions(promoSnap.docs.map(d => ({ id: d.id, ...d.data() } as Promotion)));
         }
+
+        if (userProfile?.uid) {
+          const subsSnap = await getDocs(
+            query(collection(db, 'subscriptions'), where('userId', '==', userProfile.uid), where('status', '==', 'active'))
+          ).catch(() => null);
+
+          if (subsSnap) {
+            const now = new Date();
+            const active = subsSnap.docs
+              .map(d => d.data() as { planName?: string; endDate?: string })
+              .find(s => s.endDate && new Date(s.endDate) > now);
+
+            if (active && active.endDate) {
+              setActiveSub({
+                planName: active.planName || 'Active Plan',
+                endDate: active.endDate,
+              });
+            } else {
+              setActiveSub(null);
+            }
+          }
+        }
       } catch (err) {
         console.error('Error fetching plans/promotions:', err);
       }
@@ -73,17 +120,24 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ isOpen, on
       setErrorMsg(null);
       setProcessing(false);
     }
-  }, [isOpen]);
+  }, [isOpen, userProfile]);
 
   if (!isOpen) return null;
 
   const handleStartPayment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedPlan || !userProfile) return;
+    if (activeSub) return;
 
-    const normalizedPhone = normalizeRwandanPhone(phone);
-    if (!normalizedPhone || !network) {
-      setErrorMsg('Please enter a valid Rwandan MTN (078/079) or Airtel (072/073) number.');
+    const normalizedPhone = normalizePhone(phone);
+    if (!normalizedPhone || !validatePhone(normalizedPhone)) {
+      setErrorMsg(
+        language === 'rw'
+          ? 'Nyamuneka andika nimero nyayo ya MTN (078/079) cyangwa Airtel (072/073).'
+          : language === 'fr'
+          ? 'Veuillez saisir un numéro valide MTN (078/079) ou Airtel (072/073).'
+          : 'Please enter a valid Rwandan MTN (078/079) or Airtel (072/073) number.'
+      );
       return;
     }
 
@@ -91,40 +145,18 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ isOpen, on
     setErrorMsg(null);
 
     try {
-      let paymentId = '';
+      // Payments start ONLY through the Cloud Function startPayment (takes user from auth token)
+      const startPaymentCallable = httpsCallable<
+        { planId: string; phone: string },
+        { success: boolean; paymentId: string; paypackRef: string }
+      >(functions, 'startPayment');
 
-      // Try local full-stack server route first
-      try {
-        const resp = await fetch('/api/paypack/start-payment', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            planId: selectedPlan.id,
-            phone: normalizedPhone,
-            userId: userProfile.uid,
-            userEmail: userProfile.email,
-          }),
-        });
-        if (resp.ok) {
-          const resData = await resp.json();
-          paymentId = resData.paymentId;
-        }
-      } catch (e) {
-        console.warn('Direct server start-payment skipped, falling back to callable:', e);
-      }
+      const result = await startPaymentCallable({
+        planId: selectedPlan.id,
+        phone: normalizedPhone,
+      });
 
-      // Fallback to Cloud Function callable if server route was unavailable
-      if (!paymentId) {
-        const startPaymentCallable = httpsCallable<{ planId: string; phone: string }, { success: boolean; paymentId: string; paypackRef: string }>(
-          functions,
-          'startPayment'
-        );
-        const result = await startPaymentCallable({
-          planId: selectedPlan.id,
-          phone: normalizedPhone,
-        });
-        paymentId = result.data.paymentId;
-      }
+      const paymentId = result.data.paymentId;
 
       setActivePaymentId(paymentId);
       setStep('waiting_prompt');
@@ -167,8 +199,36 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ isOpen, on
       );
     } catch (err: any) {
       console.error('Error initiating Paypack payment:', err);
-      const message = err?.message || 'Failed to start payment. Please check your phone number and connection.';
-      setErrorMsg(message);
+      const code = err?.details?.code || err?.code || '';
+      const msg = err?.message || '';
+
+      if (code === 'ACTIVE_PLAN_EXISTS' || msg.includes('ACTIVE_PLAN_EXISTS')) {
+        const subDate = (activeSub as { endDate?: string } | null)?.endDate;
+        const endDateFormatted = err?.details?.endDate ? formatCatDate(err.details.endDate) : (subDate ? formatCatDate(subDate) : '');
+        const errorText =
+          language === 'rw'
+            ? `Ufite ifatabuguzi rikora kugeza ${endDateFormatted}. Ntushobora kugura irindi mugihe iri rigikora.`
+            : language === 'fr'
+            ? `Vous avez déjà un abonnement actif jusqu'au ${endDateFormatted}. Vous ne pouvez pas souscrire à un nouveau plan tant que celui-ci est actif.`
+            : `You already have an active plan until ${endDateFormatted}. You cannot purchase a new plan while one is active.`;
+        setErrorMsg(errorText);
+      } else if (code === 'PENDING_PAYMENT_EXISTS' || msg.includes('PENDING_PAYMENT_EXISTS')) {
+        const errorText =
+          language === 'rw'
+            ? 'Ufite ubwishyu burimo gutegerezwa bwatangiye mu minota 3 ishize. Reba kuri telefone yawe wemeze kode ya USSD.'
+            : language === 'fr'
+            ? 'Une demande de paiement initiée il y a moins de 3 minutes est en cours. Veuillez vérifier votre téléphone pour le message USSD.'
+            : 'You have a pending payment request initiated within the last 3 minutes. Please check your phone for the USSD prompt.';
+        setErrorMsg(errorText);
+      } else {
+        setErrorMsg(
+          language === 'rw'
+            ? 'Gutangiza ubwishyu byanze. Nyamuneka ongera ugerageze.'
+            : language === 'fr'
+            ? "L'initiation du paiement a échoué. Veuillez réessayer."
+            : err?.message || 'Failed to start payment. Please check your phone number and connection.'
+        );
+      }
       setProcessing(false);
     }
   };
@@ -212,6 +272,21 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ isOpen, on
             <X className="w-5 h-5" />
           </button>
         </div>
+
+        {activeSub && (
+          <div className="p-4 bg-emerald-50 text-emerald-800 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-3 border border-emerald-200">
+            <ShieldCheck className="w-5 h-5 text-emerald-600 shrink-0" />
+            <div>
+              <span>
+                {language === 'rw'
+                  ? `Ufite ifatabuguzi rikora kugeza ${formatCatDate(activeSub.endDate)}`
+                  : language === 'fr'
+                  ? `Vous avez un abonnement actif jusqu'au ${formatCatDate(activeSub.endDate)}`
+                  : `You have an active plan until ${formatCatDate(activeSub.endDate)}`}
+              </span>
+            </div>
+          </div>
+        )}
 
         {errorMsg && step !== 'failed' && (
           <div className="p-3 bg-red-50 text-red-700 rounded-[10px] text-xs font-semibold flex items-center gap-2 border border-red-200">
@@ -421,6 +496,7 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ isOpen, on
                     </div>
                   )}
                 </div>
+                <span className="text-[11px] text-slate-500 mt-1 block">Example: 0788123456</span>
                 {!network && phone.length > 2 && (
                   <p className="text-xs text-amber-600 mt-1">Please enter an MTN (078/079) or Airtel (072/073) number.</p>
                 )}
@@ -429,14 +505,20 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ isOpen, on
 
             <button
               type="submit"
-              disabled={processing || !selectedPlan || !network}
-              className="w-full min-h-[44px] py-3.5 px-4 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-[10px] shadow-sm transition-colors text-sm disabled:opacity-50 flex items-center justify-center gap-2"
+              disabled={processing || !!activeSub || !selectedPlan || !network}
+              className={`w-full min-h-[44px] py-3.5 px-4 font-semibold rounded-[10px] shadow-sm transition-colors text-sm flex items-center justify-center gap-2 ${
+                activeSub
+                  ? 'bg-slate-300 text-slate-500 cursor-not-allowed'
+                  : 'bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50'
+              }`}
             >
               <CreditCard className="w-4 h-4" />
               <span>
-                {processing
-                  ? 'Initiating Paypack Payment...'
-                  : `Pay RWF ${selectedPlan?.price.toLocaleString() || 0} via Paypack`}
+                {activeSub
+                  ? (language === 'rw' ? 'Ufite ifatabuguzi rikora' : language === 'fr' ? 'Abonnement actif en cours' : 'Active Plan in Progress')
+                  : processing
+                  ? (language === 'rw' ? 'Ubwishyu burimo gutegurwa...' : language === 'fr' ? 'Initialisation du paiement...' : 'Initiating Paypack Payment...')
+                  : `${language === 'rw' ? 'Ishyura' : language === 'fr' ? 'Payer' : 'Pay'} RWF ${selectedPlan?.price.toLocaleString() || 0}`}
               </span>
             </button>
           </form>

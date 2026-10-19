@@ -1,0 +1,230 @@
+[
+  {
+    "id": "q-1",
+    "category": "Speed Limits",
+    "text_en": "What is the maximum speed limit in urban areas (cities and towns) in Rwanda?",
+    "text_rw": "Umuvuduko ntarengwa mu mijyi yo mu Rwanda ni uwuhe?",
+    "text_fr": "Quelle est la vitesse maximale en agglomération au Rwanda?",
+    "options_en": [
+      "50 km/h",
+      "60 km/h",
+      "80 km/h",
+      "100 km/h"
+    ],
+    "options_rw": [],
+    "options_fr": [],
+    "correctIndex": 0,
+    "explanation_en": "According to Article 42 of Rwanda Traffic Law, urban areas have a general speed limit of 50 km/h.",
+    "explanation_rw": "",
+    "explanation_fr": ""
+  },
+  {
+    "id": "q-2",
+    "category": "Priority & Right of Way",
+    "text_en": "When approaching a roundabout, who has the right of way?",
+    "text_rw": "Mbere yo kwinjira ku mzunguko, ni nde ufite uburenganzira bwo gutambuka?",
+    "text_fr": "À l'approche d'un rond-point, qui a la priorité?",
+    "options_en": [
+      "Vehicles entering the roundabout",
+      "Vehicles already circulating inside the roundabout",
+      "Large buses only",
+      "Vehicles coming from the right"
+    ],
+    "options_rw": [],
+    "options_fr": [],
+    "correctIndex": 1,
+    "explanation_en": "Traffic already circulating inside the roundabout always has priority unless traffic police or signals direct otherwise.",
+    "explanation_rw": "",
+    "explanation_fr": ""
+  },
+  {
+    "id": "q-3",
+    "category": "Overtaking",
+    "text_en": "On which side should you overtake another vehicle in Rwanda?",
+    "text_rw": "Gucira ikindi kinyabiziga bikorerwa ku ruhe ruhande?",
+    "text_fr": "De quel côté devez-vous dépasser un autre véhicule?",
+    "options_en": [
+      "On the right side",
+      "On the left side",
+      "On either side",
+      "Only on the shoulder"
+    ],
+    "options_rw": [],
+    "options_fr": [],
+    "correctIndex": 1,
+    "explanation_en": "Overtaking must strictly be executed on the left side of the vehicle being passed.",
+    "explanation_rw": "",
+    "explanation_fr": ""
+  },
+  {
+    "id": "q-4",
+    "category": "Driver Conduct",
+    "text_en": "What is the legal blood alcohol limit for drivers in Rwanda?",
+    "text_rw": "Ikigero cy'alukole cyemewe ku batwara ibinyabiziga mu Rwanda ni iki?",
+    "text_fr": "Quel est le taux d'alcoolémie légal pour les conducteurs?",
+    "options_en": [
+      "0.5g/l",
+      "0.8g/l",
+      "0.00g/l (Zero tolerance)",
+      "0.2g/l"
+    ],
+    "options_rw": [],
+    "options_fr": [],
+    "correctIndex": 2,
+    "explanation_en": "Rwanda maintains a strict zero tolerance policy (0.00g/l) for alcohol in drivers.",
+    "explanation_rw": "",
+    "explanation_fr": ""
+  },
+  {
+    "id": "q-5",
+    "category": "Safety Equipment",
+    "text_en": "Are front and rear seatbelts mandatory for all vehicle occupants?",
+    "text_rw": "Ese kwambara umukand-umutekano ni ngombwa ku bari mu modoka bose?",
+    "text_fr": "La ceinture de sécurité est-elle obligatoire pour tous les occupants?",
+    "options_en": [
+      "Only for the driver",
+      "Only for front passengers",
+      "Mandatory for all occupants",
+      "Optional"
+    ],
+    "options_rw": [],
+    "options_fr": [],
+    "correctIndex": 2,
+    "explanation_en": "All occupants in both front and rear seats must wear seatbelts while the vehicle is in motion.",
+    "explanation_rw": "",
+    "explanation_fr": ""
+  },
+  {
+    "id": "q-6",
+    "category": "Traffic Signs",
+    "text_en": "What does a triangular traffic sign with a red border indicate?",
+    "text_rw": "Ikimenyetso cy'umuhanda gifite ifasi y'mpande eshatu n'umutuku kivuga iki?",
+    "text_fr": "Que signifie un panneau de signalisation triangulaire à bord rouge?",
+    "options_en": [
+      "Mandatory direction",
+      "Danger / Warning sign",
+      "Information sign",
+      "Prohibition sign"
+    ],
+    "options_rw": [],
+    "options_fr": [],
+    "correctIndex": 1,
+    "explanation_en": "Triangular signs with a red border warn drivers of upcoming road dangers or hazards.",
+    "explanation_rw": "",
+    "explanation_fr": ""
+  },
+  {
+    "id": "q-7",
+    "category": "Parking",
+    "text_en": "Can you park your vehicle on a pedestrian crossing or within 5 meters of it?",
+    "text_rw": "Ese ushobora guhagarara ku cyambukiriro cy'abanyamaguru cyangwa hafi yacyo?",
+    "text_fr": "Pouvez-vous stationner sur un passage pour piétons?",
+    "options_en": [
+      "Yes, for 5 minutes",
+      "Yes, if hazard lights are on",
+      "No, it is strictly prohibited",
+      "Only at night"
+    ],
+    "options_rw": [],
+    "options_fr": [],
+    "correctIndex": 2,
+    "explanation_en": "Parking or stopping on or immediately near pedestrian crossings obstructs visibility and is strictly prohibited.",
+    "explanation_rw": "",
+    "explanation_fr": ""
+  },
+  {
+    "id": "q-8",
+    "category": "Speed Limits",
+    "text_en": "What is the speed limit on rural roads in Rwanda unless posted otherwise?",
+    "text_rw": "Umuvuduko ku mihanda yo mu cyaro mu Rwanda ni uwuhe?",
+    "text_fr": "Quelle est la vitesse sur les routes rurales au Rwanda?",
+    "options_en": [
+      "50 km/h",
+      "80 km/h",
+      "100 km/h",
+      "120 km/h"
+    ],
+    "options_rw": [],
+    "options_fr": [],
+    "correctIndex": 1,
+    "explanation_en": "Rural roads have a standard speed limit of 80 km/h.",
+    "explanation_rw": "",
+    "explanation_fr": ""
+  },
+  {
+    "id": "q-9",
+    "category": "Traffic Signals",
+    "text_en": "What should a driver do when approaching a yellow traffic light?",
+    "text_rw": "Umuyobozi w'ikinyabiziga agomba gukora iki abonye amatara y'umuhondo?",
+    "text_fr": "Que doit faire un conducteur à l'approche d'un feu jaune?",
+    "options_en": [
+      "Accelerate quickly",
+      "Stop if it can be done safely",
+      "Ignore it",
+      "Honk horn"
+    ],
+    "options_rw": [],
+    "options_fr": [],
+    "correctIndex": 1,
+    "explanation_en": "A yellow light means stop unless you are too close to stop safely before the intersection.",
+    "explanation_rw": "",
+    "explanation_fr": ""
+  },
+  {
+    "id": "q-10",
+    "category": "Safety Equipment",
+    "text_en": "Who must wear a certified helmet while riding a motorcycle?",
+    "text_rw": "Ni nde ugomba kwambara ingofero (helmet) yemejwe igihe atwaye ipikipiki?",
+    "text_fr": "Qui doit porter un casque homologué à moto?",
+    "options_en": [
+      "Only the driver",
+      "Only the passenger",
+      "Both driver and passenger",
+      "Not required"
+    ],
+    "options_rw": [],
+    "options_fr": [],
+    "correctIndex": 2,
+    "explanation_en": "Both the motorcycle operator and passenger must wear certified safety helmets at all times.",
+    "explanation_rw": "",
+    "explanation_fr": ""
+  },
+  {
+    "id": "q-11",
+    "category": "Legal Requirements",
+    "text_en": "What documents must a driver always carry while operating a motor vehicle in Rwanda?",
+    "text_rw": "Ni ayahe nyandiko umuyobozi w'ikinyabiziga agomba kugira igihe cyose?",
+    "text_fr": "Quels documents un conducteur doit-il toujours avoir sur lui?",
+    "options_en": [
+      "Driving license, vehicle registration, and insurance",
+      "Only passport",
+      "Only ID card",
+      "None"
+    ],
+    "options_rw": [],
+    "options_fr": [],
+    "correctIndex": 0,
+    "explanation_en": "Drivers must carry their valid driving license, vehicle registration card, and proof of valid motor insurance.",
+    "explanation_rw": "",
+    "explanation_fr": ""
+  },
+  {
+    "id": "q-12",
+    "category": "Road Markings",
+    "text_en": "What does a solid continuous white line in the middle of the road mean?",
+    "text_rw": "Umurongo wera udacagase mu hagati y'umuhanda usobanura iki?",
+    "text_fr": "Que signifie une ligne blanche continue au milieu de la route?",
+    "options_en": [
+      "Overtaking allowed",
+      "Crossing or overtaking is strictly prohibited",
+      "Parking zone",
+      "Bus lane"
+    ],
+    "options_rw": [],
+    "options_fr": [],
+    "correctIndex": 1,
+    "explanation_en": "A solid white line indicates that crossing or overtaking is strictly forbidden.",
+    "explanation_rw": "",
+    "explanation_fr": ""
+  }
+]

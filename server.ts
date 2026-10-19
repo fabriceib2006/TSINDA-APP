@@ -1,7 +1,7 @@
 import express, { Request, Response } from 'express';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
-import { initializeApp, getApps } from 'firebase-admin/app';
+import { initializeApp, getApps, cert } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import { getFirestore, Timestamp, FieldValue } from 'firebase-admin/firestore';
 import axios from 'axios';
@@ -9,11 +9,24 @@ import * as crypto from 'crypto';
 
 // Initialize Firebase Admin
 if (!getApps().length) {
-  initializeApp();
+  const serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT;
+  if (serviceAccountJson) {
+    try {
+      const serviceAccount = JSON.parse(serviceAccountJson);
+      initializeApp({
+        credential: cert(serviceAccount),
+        projectId: 'tsinda-prod'
+      });
+    } catch (e) {
+      console.error('Failed to parse FIREBASE_SERVICE_ACCOUNT:', e);
+      initializeApp({ projectId: 'tsinda-prod' });
+    }
+  } else {
+    initializeApp({ projectId: 'tsinda-prod' });
+  }
 }
 
-const databaseId = process.env.FIRESTORE_DATABASE_ID || 'ai-studio-6f0c13d4-6a9f-45c4-9fe8-a73b160765fe';
-const db = getFirestore(databaseId);
+const db = getFirestore('(default)');
 const PAYPACK_BASE_URL = 'https://payments.paypack.rw/api';
 
 function getSecret(key: string): string {
@@ -109,40 +122,71 @@ async function processSuccessfulPayment(paymentDocSnapshot: FirebaseFirestore.Do
       return;
     }
 
+    // Blocking amount check: compare Paypack's reported amount with amount recorded in payment record
+    const recordedAmount = Number(paymentData.amount);
+    if (reportedAmount !== undefined && reportedAmount !== null && Number(reportedAmount) !== recordedAmount) {
+      console.warn(`Amount mismatch for payment ${curDoc.id}: reported ${reportedAmount}, expected ${recordedAmount}`);
+      transaction.update(paymentRef, {
+        status: 'needsReview',
+        needsReview: true,
+        reviewReason: `Amount mismatch: reported ${reportedAmount}, recorded ${recordedAmount}`,
+        failureReason: `Amount mismatch: reported ${reportedAmount}, recorded ${recordedAmount}`,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      return;
+    }
+
     const planDoc = await transaction.get(db.collection('plans').doc(paymentData.planId));
     if (!planDoc.exists) {
       console.error(`Plan ${paymentData.planId} not found when activating payment ${curDoc.id}`);
+      transaction.update(paymentRef, {
+        status: 'needsReview',
+        needsReview: true,
+        reviewReason: `Plan ${paymentData.planId} not found`,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
       return;
     }
     const plan = planDoc.data()!;
 
-    const expectedPrice = Number(plan.price);
-    const paidAmount = Number(paymentData.amount);
-    if (reportedAmount && Number(reportedAmount) !== expectedPrice) {
-      console.warn(`Amount mismatch for payment ${curDoc.id}: reported ${reportedAmount}, expected ${expectedPrice}`);
-    }
-
     const durationDays = Number(plan.durationDays) || 30;
+    const serverNow = new Date();
 
-    // Subscription start chaining: if user has active subscription, new one starts when current ends
+    // Check if user has an active unexpired subscription
     const existingSubsSnap = await transaction.get(
       db.collection('subscriptions')
         .where('userId', '==', paymentData.userId)
         .where('status', '==', 'active')
     );
 
-    let latestEndDate = new Date();
+    let latestEndDate = serverNow;
+    let hasActivePlan = false;
     existingSubsSnap.docs.forEach(d => {
       const sub = d.data();
       const end = new Date(sub.endDate);
-      if (end > latestEndDate) {
-        latestEndDate = end;
+      if (end > serverNow) {
+        hasActivePlan = true;
+        if (end > latestEndDate) {
+          latestEndDate = end;
+        }
       }
     });
 
-    const now = new Date();
-    const startDate = latestEndDate > now ? latestEndDate : now;
-    const endDate = new Date(startDate.getTime() + durationDays * 24 * 60 * 60 * 1000);
+    let startDate: Date;
+    let endDate: Date;
+    let needsReview = false;
+    let reviewReason: string | null = null;
+
+    if (hasActivePlan) {
+      // Chaining after an active plan is only a safety net and must set needsReview true
+      startDate = latestEndDate;
+      endDate = new Date(startDate.getTime() + durationDays * 24 * 60 * 60 * 1000);
+      needsReview = true;
+      reviewReason = `Chained after active subscription ending at ${latestEndDate.toISOString()}`;
+    } else {
+      startDate = serverNow;
+      endDate = new Date(startDate.getTime() + durationDays * 24 * 60 * 60 * 1000);
+    }
 
     const subRef = db.collection('subscriptions').doc();
     const subData = {
@@ -150,7 +194,7 @@ async function processSuccessfulPayment(paymentDocSnapshot: FirebaseFirestore.Do
       userId: paymentData.userId,
       planId: paymentData.planId,
       planName: paymentData.planName,
-      price: paidAmount,
+      price: recordedAmount,
       durationDays,
       startDate: startDate.toISOString(),
       endDate: endDate.toISOString(),
@@ -172,8 +216,10 @@ async function processSuccessfulPayment(paymentDocSnapshot: FirebaseFirestore.Do
 
     transaction.set(subRef, subData);
     transaction.update(paymentRef, {
-      status: 'successful',
+      status: needsReview ? 'needsReview' : 'successful',
       subscriptionId: subRef.id,
+      needsReview,
+      reviewReason,
       updatedAt: FieldValue.serverTimestamp(),
     });
   });
@@ -339,141 +385,7 @@ async function startServer() {
     res.json(result);
   });
 
-  // ==========================================
-  // API: START PAYMENT
-  // ==========================================
-  app.post('/api/paypack/start-payment', async (req: Request, res: Response) => {
-    try {
-      const { planId, phone, userId: bodyUid, userEmail: bodyEmail } = req.body || {};
-      const authUser = await verifyAuth(req);
-      const userId = authUser?.uid || bodyUid;
-      const userEmail = authUser?.email || bodyEmail || '';
 
-      if (!userId) {
-        res.status(401).json({ error: 'User must be authenticated to initiate payment.' });
-        return;
-      }
-      if (!planId || !phone) {
-        res.status(400).json({ error: 'Missing planId or phone number.' });
-        return;
-      }
-
-      const { normalizedPhone, network } = parseRwandanPhone(phone);
-
-      const planDoc = await db.collection('plans').doc(planId).get();
-      if (!planDoc.exists) {
-        res.status(404).json({ error: 'Plan not found.' });
-        return;
-      }
-      const planData = planDoc.data()!;
-      if (!planData.isActive) {
-        res.status(400).json({ error: 'Selected plan is inactive.' });
-        return;
-      }
-      const planPrice = Number(planData.price);
-
-      // Evaluate promotions server-side using Africa/Kigali time
-      const nowKigali = new Date(new Date().toLocaleString('en-US', { timeZone: 'Africa/Kigali' }));
-      const promoSnap = await db.collection('promotions').where('isActive', '==', true).get();
-      let finalPrice = planPrice;
-      let appliedPromoId: string | null = null;
-      let discountAmount = 0;
-
-      promoSnap.docs.forEach(d => {
-        const promo = d.data();
-        if (promo.planId === 'all' || promo.planId === planId) {
-          const start = new Date(promo.startAt).getTime();
-          const end = new Date(promo.endAt).getTime();
-          const now = nowKigali.getTime();
-          if (now >= start && now <= end) {
-            let candPrice = planPrice;
-            let candDiscount = 0;
-            if (promo.discountType === 'percent') {
-              candDiscount = Math.round(planPrice * (Number(promo.discountValue) / 100));
-            } else if (promo.discountType === 'fixed') {
-              candDiscount = Number(promo.discountValue);
-            }
-            candPrice = Math.max(100, planPrice - candDiscount);
-            if (candPrice < finalPrice) {
-              finalPrice = candPrice;
-              appliedPromoId = d.id;
-              discountAmount = planPrice - finalPrice;
-            }
-          }
-        }
-      });
-
-      // Check double charge in last 3 mins
-      const threeMinsAgo = new Date(Date.now() - 3 * 60 * 1000);
-      const pendingSnap = await db.collection('payments')
-        .where('userId', '==', userId)
-        .where('planId', '==', planId)
-        .where('status', '==', 'pending')
-        .where('createdAt', '>=', Timestamp.fromDate(threeMinsAgo))
-        .limit(1)
-        .get();
-
-      if (!pendingSnap.empty) {
-        res.status(409).json({ error: 'A pending payment for this plan is already in progress. Please check your phone.' });
-        return;
-      }
-
-      const token = await getPaypackToken();
-
-      const cashinRes = await axios.post(
-        `${PAYPACK_BASE_URL}/transactions/cashin`,
-        { amount: finalPrice, number: normalizedPhone },
-        { headers: { 'Content-Type': 'application/json', Accept: 'application/json', Authorization: `Bearer ${token}` }, timeout: 20000 }
-      );
-
-      const paypackRef = cashinRes.data?.ref || cashinRes.data?.data?.ref;
-      if (!paypackRef) {
-        res.status(502).json({ error: 'Paypack did not return a transaction reference.' });
-        return;
-      }
-
-      let planNameString = 'Subscription Pass';
-      if (typeof planData.name === 'object' && planData.name !== null) {
-        planNameString = planData.name.en || planData.name.rw || planData.name.fr || 'Subscription Pass';
-      } else if (typeof planData.name === 'string') {
-        planNameString = planData.name;
-      }
-
-      const paymentRef = db.collection('payments').doc();
-      await paymentRef.set({
-        id: paymentRef.id,
-        paypackRef,
-        userId,
-        userEmail,
-        planId,
-        planName: planNameString,
-        originalPrice: planPrice,
-        discountAmount,
-        promotionId: appliedPromoId,
-        amount: finalPrice,
-        phone: normalizedPhone,
-        network,
-        kind: 'cashin',
-        status: 'pending',
-        subscriptionId: null,
-        failureReason: null,
-        createdAt: FieldValue.serverTimestamp(),
-        updatedAt: FieldValue.serverTimestamp(),
-      });
-
-      res.json({
-        success: true,
-        paymentId: paymentRef.id,
-        paypackRef,
-        amount: finalPrice,
-        phone: normalizedPhone,
-        network,
-      });
-    } catch (err: any) {
-      console.error('Error starting payment:', err);
-      res.status(500).json({ error: err.response?.data?.message || err.message || 'Payment initiation failed' });
-    }
-  });
 
   // ==========================================
   // API: PAYPACK WEBHOOK (Handles both /paypackWebhook & /api/paypack/webhook)

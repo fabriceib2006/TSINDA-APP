@@ -115,10 +115,19 @@ export const ContentManager: React.FC = () => {
 
   // Bulk Import Modal (Lessons)
   const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
-  const [, setBulkCsvFile] = useState<File | null>(null);
+  const [bulkCsvFile, setBulkCsvFile] = useState<File | null>(null);
   const [bulkImageFiles, setBulkImageFiles] = useState<FileList | null>(null);
   const [parsedPreview, setParsedPreview] = useState<any[]>([]);
+  const [validationReport, setValidationReport] = useState<{
+    validCount: number;
+    errors: { row: number; message: string }[];
+    missingImages: string[];
+    unusedImages: string[];
+    duplicateImages: string[];
+    existingIds: { id: string; row: number }[];
+  } | null>(null);
   const [bulkImporting, setBulkImporting] = useState(false);
+  const [updateExisting, setUpdateExisting] = useState(false);
   const [bulkError, setBulkError] = useState<string | null>(null);
 
   // Fetch all content
@@ -498,10 +507,64 @@ export const ContentManager: React.FC = () => {
           return;
         }
         setParsedPreview(results.data as any[]);
+        validateLessonsImport(results.data as any[]);
       },
       error: (err) => {
         setBulkError(`CSV Parse Error: ${err.message}`);
       },
+    });
+  };
+
+  const validateLessonsImport = (rows: any[]) => {
+    const errors: { row: number; message: string }[] = [];
+    const imageNamesSet = new Set(bulkImageFiles ? Array.from(bulkImageFiles).map(img => img.name.toLowerCase()) : []);
+    const seenImageNames = new Set<string>();
+    const duplicateImages = new Set<string>();
+    const existingIds: { id: string; row: number }[] = [];
+    const matchedImagesInRows = new Set<string>();
+
+    rows.forEach((row, index) => {
+      const rowNum = index + 1;
+      if (!row.title_en && !row.title_rw && !row.title) {
+        errors.push({ row: rowNum, message: "Missing title." });
+      }
+      if (row.id && lessons.some(l => l.id === row.id)) {
+        existingIds.push({ id: row.id, row: rowNum });
+      }
+      const rowImageNames = (row.images || row.image_names || row.image || '')
+          .split(/[,;|]/)
+          .map((s: string) => s.trim().toLowerCase())
+          .filter(Boolean);
+      
+      rowImageNames.forEach((imgName: string) => {
+        if (seenImageNames.has(imgName)) {
+            duplicateImages.add(imgName);
+        }
+        seenImageNames.add(imgName);
+        if (imageNamesSet.has(imgName)) {
+            matchedImagesInRows.add(imgName);
+        }
+      });
+    });
+
+    const missingImages = rows
+      .map(r => r.images || r.image_names || r.image || '')
+      .map(s => s.split(/[,;|]/).map((x: string) => x.trim().toLowerCase()))
+      .flat()
+      .filter(Boolean)
+      .filter(imgName => !imageNamesSet.has(imgName));
+
+    const unusedImages = bulkImageFiles 
+        ? Array.from(bulkImageFiles).map(img => img.name.toLowerCase()).filter(imgName => !matchedImagesInRows.has(imgName))
+        : [];
+
+    setValidationReport({
+      validCount: rows.length - errors.length,
+      errors,
+      missingImages: Array.from(new Set(missingImages)),
+      unusedImages,
+      duplicateImages: Array.from(duplicateImages),
+      existingIds
     });
   };
 
@@ -525,7 +588,10 @@ export const ContentManager: React.FC = () => {
 
       // 2. Iterate and create documents in Firestore
       let addedCount = 0;
-      for (const row of parsedPreview) {
+      for (const [index, row] of parsedPreview.entries()) {
+        const isExisting = validationReport?.existingIds.some(e => e.id === row.id);
+        if (isExisting && !updateExisting) continue;
+
         const titleEn = row.title_en || row.title || row.Title || 'Lesson';
         const titleRw = row.title_rw || row.Title_rw || titleEn;
         const titleFr = row.title_fr || row.Title_fr || titleEn;
@@ -560,11 +626,14 @@ export const ContentManager: React.FC = () => {
           order: orderNum,
           isPublished: isPub,
           isFreePreview: false,
-          createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         };
 
-        await addDoc(collection(db, 'lessons'), newDoc);
+        if (isExisting) {
+            await updateDoc(doc(db, 'lessons', row.id), newDoc);
+        } else {
+            await addDoc(collection(db, 'lessons'), { ...newDoc, createdAt: serverTimestamp() });
+        }
         addedCount++;
       }
 
@@ -1707,6 +1776,131 @@ export const ContentManager: React.FC = () => {
                 Done
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Import Modal */}
+      {isBulkModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs overflow-y-auto">
+          <div className="w-full max-w-2xl bg-white rounded-xl shadow-xl p-8 my-8 space-y-6">
+            <div className="flex justify-between items-center pb-4 border-b border-slate-100">
+              <h3 className="text-lg font-bold text-slate-900">Bulk Import Lessons</h3>
+              <button onClick={() => setIsBulkModalOpen(false)} className="p-2 text-slate-400 hover:text-slate-600 rounded-full"><X className="w-5 h-5"/></button>
+            </div>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">
+                  Step 1: Upload Lessons File (.csv)
+                </label>
+                <input
+                  type="file"
+                  accept=".csv"
+                  onChange={handleBulkFileChange}
+                  className="w-full min-h-[44px] text-base sm:text-sm text-slate-500 file:mr-4 file:py-2.5 file:px-4 file:rounded-[10px] file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 border border-slate-200 rounded-[10px] p-2"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">
+                  Step 2: Upload Images (Optional)
+                </label>
+                <input
+                  type="file"
+                  multiple
+                  accept="image/*"
+                  onChange={(e) => setBulkImageFiles(e.target.files)}
+                  className="w-full min-h-[44px] text-base sm:text-sm text-slate-500 file:mr-4 file:py-2.5 file:px-4 file:rounded-[10px] file:border-0 file:text-xs file:font-semibold file:bg-purple-50 file:text-purple-700 border border-slate-200 rounded-[10px] p-2"
+                />
+              </div>
+            </div>
+
+            {validationReport && (
+              <div className="p-6 bg-white rounded-xl border border-slate-200 shadow-sm space-y-4">
+                <h4 className="font-bold text-slate-900 text-sm">Validation Preview Report</h4>
+                
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-xs font-medium">
+                  <div className="p-3 bg-slate-50 rounded-[10px] border">
+                    <span className="text-slate-500 block">Valid Rows:</span>
+                    <span className="text-lg font-bold text-emerald-600">{validationReport.validCount}</span>
+                  </div>
+                  <div className="p-3 bg-slate-50 rounded-[10px] border">
+                    <span className="text-slate-500 block">Errors:</span>
+                    <span className={`text-lg font-bold ${validationReport.errors.length > 0 ? 'text-red-600' : 'text-emerald-600'}`}>
+                      {validationReport.errors.length}
+                    </span>
+                  </div>
+                  <div className="p-3 bg-slate-50 rounded-[10px] border">
+                    <span className="text-slate-500 block">Conflicts:</span>
+                    <span className={`text-lg font-bold ${validationReport.existingIds.length > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>
+                      {validationReport.existingIds.length}
+                    </span>
+                  </div>
+                </div>
+
+                {validationReport.errors.length > 0 && (
+                  <div className="space-y-1">
+                    <span className="text-xs font-bold text-red-700">Row Errors:</span>
+                    <ul className="text-xs text-red-600 space-y-1 max-h-32 overflow-y-auto bg-slate-50 p-3 rounded-[10px] border">
+                      {validationReport.errors.map((err, idx) => (
+                        <li key={idx}>Row {err.row}: {err.message}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {validationReport.duplicateImages.length > 0 && (
+                  <div className="space-y-1">
+                    <span className="text-xs font-bold text-red-700">Duplicate Image References:</span>
+                    <p className="text-xs text-red-600 bg-slate-50 p-3 rounded-[10px] border">
+                      {validationReport.duplicateImages.join(', ')}
+                    </p>
+                  </div>
+                )}
+
+                {validationReport.missingImages.length > 0 && (
+                  <div className="space-y-1">
+                    <span className="text-xs font-bold text-amber-700">Missing Uploaded Images:</span>
+                    <p className="text-xs text-amber-800 bg-slate-50 p-3 rounded-[10px] border">
+                      {validationReport.missingImages.join(', ')}
+                    </p>
+                  </div>
+                )}
+
+                {validationReport.unusedImages.length > 0 && (
+                  <div className="space-y-1">
+                    <span className="text-xs font-bold text-slate-700">Unused Uploaded Images:</span>
+                    <p className="text-xs text-slate-600 bg-slate-50 p-3 rounded-[10px] border">
+                      {validationReport.unusedImages.join(', ')}
+                    </p>
+                  </div>
+                )}
+
+                {validationReport.existingIds.length > 0 && (
+                  <div className="flex items-center gap-2 pt-2">
+                    <input
+                      type="checkbox"
+                      id="updateExisting"
+                      checked={updateExisting}
+                      onChange={(e) => setUpdateExisting(e.target.checked)}
+                      className="w-4 h-4 text-blue-600 rounded border-slate-300"
+                    />
+                    <label htmlFor="updateExisting" className="text-xs font-bold text-slate-700">
+                      Update existing lesson IDs (Skip if unchecked)
+                    </label>
+                  </div>
+                )}
+
+                <button
+                  onClick={handleExecuteBulkImport}
+                  disabled={bulkImporting || validationReport.validCount === 0}
+                  className="w-full min-h-[44px] py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-[10px] text-sm shadow-sm transition-colors disabled:opacity-50"
+                >
+                  {bulkImporting ? "Importing..." : `Confirm Import (${validationReport.validCount} Valid Rows)`}
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}

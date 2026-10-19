@@ -5,6 +5,7 @@ import { handleFirestoreError, OperationType } from '../../lib/firestoreUtils';
 import { Lesson, VideoLesson, Language, CombinedAccess } from '../../types';
 import { normalizeSubscription, getCombinedAccess } from '../../lib/subscriptionUtils';
 import { useAuth } from '../../context/AuthContext';
+import { useLanguage } from '../../context/LanguageContext';
 import {
   BookOpen,
   Lock,
@@ -27,7 +28,8 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
   onBack,
   initialTab = 'lessons',
 }) => {
-  const { userProfile, language } = useAuth();
+  const { userProfile } = useAuth();
+  const { language } = useLanguage();
   const [activeSection, setActiveSection] = useState<'lessons' | 'videos'>(initialTab);
   const [lessons, setLessons] = useState<Lesson[]>([]);
   const [videos, setVideos] = useState<VideoLesson[]>([]);

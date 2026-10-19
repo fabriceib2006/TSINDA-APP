@@ -1,10 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { db } from '../../lib/firebase';
-import { collection, getDocs, doc, query, where, addDoc, updateDoc, runTransaction } from 'firebase/firestore';
+import { db, functions } from '../../lib/firebase';
+import { collection, getDocs, doc, query, where, addDoc, updateDoc } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
 import { handleFirestoreError, OperationType } from '../../lib/firestoreUtils';
 import { Question, ExamSettings, Language, Subscription, CombinedAccess, ExamAttempt } from '../../types';
 import { normalizeSubscription, getCombinedAccess } from '../../lib/subscriptionUtils';
 import { useAuth } from '../../context/AuthContext';
+import { useLanguage } from '../../context/LanguageContext';
 import { 
   Clock, 
   ArrowLeft, 
@@ -19,6 +21,7 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { SubscriptionModal } from './SubscriptionModal';
+import { getLocalizedQuestionText, getLocalizedQuestionOptions, getLocalizedQuestionExplanation, NotTranslatedBadge } from '../../lib/i18n';
 
 interface ExamResult {
   id?: string;
@@ -31,8 +34,27 @@ interface ExamResult {
   answers: { question: Question; selectedIndex: number; correct: boolean }[];
 }
 
+export interface ServerExamReviewItem {
+  questionId: string;
+  questionIndex: number;
+  correctIndex: number;
+  studentAnswer: number | null;
+  isCorrect: boolean;
+}
+
+export interface ServerExamResult {
+  success?: boolean;
+  score: number;
+  passed: boolean;
+  total: number;
+  passMark: number;
+  expired?: boolean;
+  review: ServerExamReviewItem[];
+}
+
 export const MockExamView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
-  const { userProfile, language } = useAuth();
+  const { userProfile } = useAuth();
+  const { language } = useLanguage();
   const [allQuestions, setAllQuestions] = useState<Question[]>([]);
   const [examQuestions, setExamQuestions] = useState<Question[]>([]);
   const [settings, setSettings] = useState<ExamSettings>({ id: 'global', numQuestions: 20, durationMinutes: 20, passMark: 12 });
@@ -43,6 +65,7 @@ export const MockExamView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   const [currentAttemptId, setCurrentAttemptId] = useState<string | null>(null);
   const [activeSubId, setActiveSubId] = useState<string | null>(null);
   const [isResumed, setIsResumed] = useState(false);
+  const [serverResult, setServerResult] = useState<ServerExamResult | null>(null);
 
   const [currentIndex, setCurrentIndex] = useState(0);
   const [userAnswers, setUserAnswers] = useState<Record<number, number>>({});
@@ -158,41 +181,29 @@ export const MockExamView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     attemptId: string, 
     attempt: ExamAttempt, 
     allQ: Question[], 
-    passMark: number
+    _passMark: number
   ) => {
     try {
       const qIds = attempt.questionIds || [];
       const questionsList = qIds.map(id => allQ.find(q => q.id === id)).filter(Boolean) as Question[];
-      const savedAnswers = attempt.userAnswers || {};
 
-      let correct = 0;
-      questionsList.forEach((q, idx) => {
-        if (savedAnswers[idx] === q.correctIndex) correct++;
-      });
-      const passed = correct >= passMark;
+      // Finalize attempt on server via submitExam Cloud Function (never touches subscriptions directly)
+      const submitExamCallable = httpsCallable<
+        { attemptId: string },
+        ServerExamResult
+      >(functions, 'submitExam');
 
-      // Increment examsUsed via transaction and mark completed
-      await runTransaction(db, async (transaction) => {
-        if (attempt.subscriptionId) {
-          const subRef = doc(db, 'subscriptions', attempt.subscriptionId);
-          const subDoc = await transaction.get(subRef);
-          if (subDoc.exists()) {
-            const currentUsed = subDoc.data().examsUsed || 0;
-            transaction.update(subRef, { examsUsed: currentUsed + 1 });
-          }
-        }
-        const attemptRef = doc(db, 'examAttempts', attemptId);
-        transaction.update(attemptRef, {
-          status: 'completed',
-          finishedAt: new Date().toISOString(),
-          score: correct,
-          passed
-        });
+      const res = await submitExamCallable({
+        attemptId,
       });
+
+      if (res.data) {
+        setServerResult(res.data);
+      }
 
       // Show submitted view
       setExamQuestions(questionsList);
-      setUserAnswers(savedAnswers);
+      setUserAnswers(attempt.userAnswers || {});
       setExamState('submitted');
     } catch (e) {
       console.error("Error finalizing expired attempt:", e);
@@ -230,39 +241,58 @@ export const MockExamView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     setLoading(true);
     try {
       // Pick random published questions
-      const shuffled = [...allQuestions].sort(() => 0.5 - Math.random());
+      const shuffled = [...allQuestions];
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      }
       const selected = shuffled.slice(0, settings.numQuestions);
-      setExamQuestions(selected);
-      setUserAnswers({});
-      setCurrentIndex(0);
-      setTimeLeft(settings.durationMinutes * 60);
 
-      const targetSubId = access.activeSubscriptionId || '';
-      setActiveSubId(targetSubId);
+      // Call startExam Cloud Function (creates attempt and increments examsUsed atomically on server)
+      const startExamCallable = httpsCallable<
+        { questionIds: string[] },
+        {
+          resumed: boolean;
+          attemptId: string;
+          startedAt: string;
+          expiresAt?: string;
+          durationMinutes: number;
+          numQuestions?: number;
+          passMark?: number;
+          attempt?: any;
+        }
+      >(functions, 'startExam');
 
-      // Create exam attempt record with status "in_progress"
-      const newAttemptData = {
-        userId: userProfile.uid,
-        subscriptionId: targetSubId,
-        startedAt: new Date().toISOString(),
-        finishedAt: null,
-        score: 0,
-        passed: false,
-        status: 'in_progress',
+      const result = await startExamCallable({
         questionIds: selected.map(q => q.id),
-        userAnswers: {},
-        durationMinutes: settings.durationMinutes,
-      };
-
-      const docRef = await addDoc(collection(db, 'examAttempts'), newAttemptData).catch(err => {
-        handleFirestoreError(err, OperationType.CREATE, 'examAttempts');
-        return null;
       });
 
-      if (docRef) {
-        setCurrentAttemptId(docRef.id);
+      const resData = result.data;
+      if (resData.resumed && resData.attempt) {
+        const existing = resData.attempt;
+        const qIds = existing.questionIds || [];
+        const questionsList = qIds.map((id: string) => allQuestions.find(q => q.id === id)).filter(Boolean) as Question[];
+        setExamQuestions(questionsList.length > 0 ? questionsList : selected);
+        setUserAnswers(existing.userAnswers || {});
+        setCurrentIndex(0);
+        setCurrentAttemptId(resData.attemptId);
+        setActiveSubId(existing.subscriptionId || '');
+        const expiresAtTime = resData.expiresAt
+          ? new Date(resData.expiresAt).getTime()
+          : (new Date(resData.startedAt).getTime() + (resData.durationMinutes || 20) * 60 * 1000);
+        const remaining = Math.max(0, Math.floor((expiresAtTime - Date.now()) / 1000));
+        setTimeLeft(remaining);
+      } else {
+        setExamQuestions(selected);
+        setUserAnswers({});
+        setCurrentIndex(0);
+        const dur = resData.durationMinutes || settings.durationMinutes;
+        setTimeLeft(dur * 60);
+        setCurrentAttemptId(resData.attemptId);
+        setActiveSubId(access.activeSubscriptionId || '');
       }
 
+      setServerResult(null);
       setExamState('running');
     } catch (err) {
       console.error("Error starting exam attempt:", err);
@@ -271,74 +301,72 @@ export const MockExamView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     }
   };
 
-  // Answer selection: updates local state and saves to attempt document for resume integrity
+  // Answer selection: updates local state and saves to attempt via saveAnswer callable
   const handleSelectOption = (idx: number) => {
     if (examState !== 'running') return;
     const updated = { ...userAnswers, [currentIndex]: idx };
     setUserAnswers(updated);
 
-    // Persist answers in background so learner can resume cleanly
+    // Persist answer on server via saveAnswer callable
     if (currentAttemptId) {
-      updateDoc(doc(db, 'examAttempts', currentAttemptId), {
-        userAnswers: updated
-      }).catch(() => null);
+      const saveAnswerCallable = httpsCallable<
+        { attemptId: string; questionIndex: number; optionIndex: number },
+        { success: boolean }
+      >(functions, 'saveAnswer');
+
+      saveAnswerCallable({
+        attemptId: currentAttemptId,
+        questionIndex: currentIndex,
+        optionIndex: idx,
+      }).catch(err => {
+        console.error("Error saving answer via saveAnswer callable:", err);
+      });
     }
   };
 
-  // Submit Exam & Execute Transaction to increment examsUsed
+  // Submit Exam on server via submitExam callable
   const handleSubmitExam = async () => {
-    if (submitting || examState === 'submitted' || !userProfile) return;
+    if (submitting || examState === 'submitted' || !userProfile || !currentAttemptId) return;
     setSubmitting(true);
 
-    let correctCount = 0;
-    const evaluatedAnswers = examQuestions.map((q, idx) => {
-      const selected = userAnswers[idx];
-      const correct = selected === q.correctIndex;
-      if (correct) correctCount++;
-      return { question: q, selectedIndex: selected ?? -1, correct };
-    });
-
-    const passed = correctCount >= settings.passMark;
-
     try {
-      // Execute Firestore transaction:
-      // 1. Increment examsUsed by 1 on the user's active subscription
-      // 2. Mark examAttempts as completed
-      await runTransaction(db, async (transaction) => {
-        if (activeSubId) {
-          const subRef = doc(db, 'subscriptions', activeSubId);
-          const subDoc = await transaction.get(subRef);
-          if (subDoc.exists()) {
-            const currentUsed = subDoc.data().examsUsed || 0;
-            transaction.update(subRef, { examsUsed: currentUsed + 1 });
-          }
-        }
+      // Finalize attempt on server via submitExam Cloud Function (never touches subscriptions directly)
+      const submitExamCallable = httpsCallable<
+        { attemptId: string },
+        ServerExamResult
+      >(functions, 'submitExam');
 
-        if (currentAttemptId) {
-          const attemptRef = doc(db, 'examAttempts', currentAttemptId);
-          transaction.update(attemptRef, {
-            status: 'completed',
-            finishedAt: new Date().toISOString(),
-            score: correctCount,
-            passed,
-            userAnswers,
-          });
-        }
+      const res = await submitExamCallable({
+        attemptId: currentAttemptId,
       });
 
-      // Also create record in examResults for learner history
-      const resultData: Omit<ExamResult, 'id'> = {
-        userId: userProfile.uid,
-        score: correctCount,
-        total: examQuestions.length,
-        passMark: settings.passMark,
-        passed,
-        date: new Date().toISOString(),
-        answers: evaluatedAnswers
-      };
-      await addDoc(collection(db, 'examResults'), resultData).catch(err => {
-        handleFirestoreError(err, OperationType.CREATE, 'examResults');
-      });
+      const serverRes = res.data;
+      if (serverRes) {
+        setServerResult(serverRes);
+
+        const evaluatedAnswers = serverRes.review.map(r => {
+          const q = examQuestions[r.questionIndex] || allQuestions.find(item => item.id === r.questionId);
+          return {
+            question: q as Question,
+            selectedIndex: r.studentAnswer ?? -1,
+            correct: r.isCorrect,
+          };
+        }).filter(a => !!a.question);
+
+        // Also create record in examResults for learner history
+        const resultData: Omit<ExamResult, 'id'> = {
+          userId: userProfile.uid,
+          score: serverRes.score,
+          total: serverRes.total,
+          passMark: serverRes.passMark,
+          passed: serverRes.passed,
+          date: new Date().toISOString(),
+          answers: evaluatedAnswers,
+        };
+        await addDoc(collection(db, 'examResults'), resultData).catch(err => {
+          handleFirestoreError(err, OperationType.CREATE, 'examResults');
+        });
+      }
 
       setExamState('submitted');
     } catch (err) {
@@ -549,11 +577,11 @@ export const MockExamView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
 
   // 5. Exam Submitted / Results Screen
   if (examState === 'submitted') {
-    let correctCount = 0;
-    examQuestions.forEach((q, idx) => {
-      if (userAnswers[idx] === q.correctIndex) correctCount++;
-    });
-    const passed = correctCount >= settings.passMark;
+    const finalScore = serverResult ? serverResult.score : 0;
+    const finalTotal = serverResult ? serverResult.total : examQuestions.length;
+    const finalPassMark = serverResult ? serverResult.passMark : settings.passMark;
+    const passed = serverResult ? serverResult.passed : false;
+    const isExpired = serverResult?.expired;
 
     return (
       <div className="max-w-2xl mx-auto space-y-6">
@@ -569,18 +597,23 @@ export const MockExamView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
             <p className="text-sm text-slate-500 max-w-md mx-auto leading-relaxed">
               {passed 
                 ? "You have achieved the required passing score according to Rwanda Gazette criteria." 
-                : "You did not achieve the required passing mark of 12. Review the official answers and try again."}
+                : `You did not achieve the required passing mark of ${finalPassMark}. Review the official answers and try again.`}
             </p>
+            {isExpired && (
+              <div className="inline-block mt-2 px-3 py-1 bg-amber-50 text-amber-800 text-xs font-semibold rounded-full border border-amber-200">
+                Exam time expired &mdash; finalized with saved answers
+              </div>
+            )}
           </div>
 
           <div className="grid grid-cols-3 gap-3 sm:gap-4 p-4 bg-slate-50 rounded-xl border border-slate-100">
             <div>
               <div className="text-xs text-slate-500 font-semibold uppercase">Your Score</div>
-              <div className="text-xl sm:text-2xl font-bold text-slate-900 mt-1">{correctCount} / {examQuestions.length}</div>
+              <div className="text-xl sm:text-2xl font-bold text-slate-900 mt-1">{finalScore} / {finalTotal}</div>
             </div>
             <div>
               <div className="text-xs text-slate-500 font-semibold uppercase">Pass Mark</div>
-              <div className="text-xl sm:text-2xl font-bold text-blue-600 mt-1">{settings.passMark}</div>
+              <div className="text-xl sm:text-2xl font-bold text-blue-600 mt-1">{finalPassMark}</div>
             </div>
             <div>
               <div className="text-xs text-slate-500 font-semibold uppercase">Status</div>
@@ -600,6 +633,9 @@ export const MockExamView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
             <button
               onClick={() => {
                 setExamState('ready');
+                setServerResult(null);
+                setUserAnswers({});
+                setReviewMode(false);
                 initData();
               }}
               className="flex-1 min-h-[44px] py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-[10px] text-sm transition-colors"
@@ -618,39 +654,74 @@ export const MockExamView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
         {reviewMode && (
           <div className="space-y-4">
             <h3 className="text-lg font-bold text-slate-900">Review Questions & Explanations</h3>
-            {examQuestions.map((q, idx) => {
-              const selected = userAnswers[idx];
-              const isCorrect = selected === q.correctIndex;
+            {(serverResult?.review && serverResult.review.length > 0
+              ? serverResult.review
+              : examQuestions.map((q, idx) => ({
+                  questionId: q.id,
+                  questionIndex: idx,
+                  correctIndex: q.correctIndex,
+                  studentAnswer: userAnswers[idx] ?? null,
+                  isCorrect: userAnswers[idx] === q.correctIndex,
+                }))
+            ).map((rev) => {
+              const q = examQuestions[rev.questionIndex] || allQuestions.find(item => item.id === rev.questionId);
+              if (!q) return null;
+              const selected = rev.studentAnswer;
+              const isCorrect = rev.isCorrect;
+              const correctIdx = rev.correctIndex;
               return (
                 <div key={q.id} className="bg-white rounded-xl border border-slate-200 p-5 space-y-3 shadow-xs">
                   <div className="flex items-center justify-between text-xs">
-                    <span className="font-bold text-slate-900">Question {idx + 1}</span>
+                    <span className="font-bold text-slate-900">Question {rev.questionIndex + 1}</span>
                     <span className={`px-2 py-0.5 rounded-full font-bold ${isCorrect ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
                       {isCorrect ? 'Correct' : 'Incorrect'}
                     </span>
                   </div>
-                  <p className="text-sm font-semibold text-slate-900">{q.text[language as Language] || q.text.en}</p>
-                  <div className="space-y-1.5 text-xs">
-                    {q.options.map((opt, oIdx) => (
-                      <div
-                        key={oIdx}
-                        className={`p-2.5 rounded-lg border ${
-                          oIdx === q.correctIndex
-                            ? 'bg-emerald-50 border-emerald-300 text-emerald-900 font-bold'
-                            : oIdx === selected
-                            ? 'bg-red-50 border-red-300 text-red-900 line-through'
-                            : 'border-slate-100 text-slate-600'
-                        }`}
-                      >
-                        {String.fromCharCode(65 + oIdx)}. {opt}
-                      </div>
-                    ))}
-                  </div>
-                  {q.explanation && (
-                    <div className="p-3 bg-blue-50/70 rounded-lg text-xs text-blue-900 border border-blue-100">
-                      <strong>Rwanda Gazette Note:</strong> {q.explanation}
-                    </div>
-                  )}
+                  {(() => {
+                    const locText = getLocalizedQuestionText(q, language as Language);
+                    const locOpts = getLocalizedQuestionOptions(q, language as Language);
+                    const locExp = getLocalizedQuestionExplanation(q, language as Language);
+
+                    return (
+                      <>
+                        <div className="flex items-start justify-between gap-3">
+                          <p className="text-sm font-semibold text-slate-900">{locText.text}</p>
+                          {locText.isFallback && <NotTranslatedBadge />}
+                        </div>
+                        <div className="space-y-1.5 text-xs">
+                          {locOpts.isFallback && (
+                            <div className="flex items-center gap-1.5 text-[11px] text-amber-700 bg-amber-50/70 px-2 py-1 rounded border border-amber-200/50">
+                              <NotTranslatedBadge />
+                              <span>Options in English (translation pending)</span>
+                            </div>
+                          )}
+                          {locOpts.options.map((opt, oIdx) => (
+                            <div
+                              key={oIdx}
+                              className={`p-2.5 rounded-lg border ${
+                                oIdx === correctIdx
+                                  ? 'bg-emerald-50 border-emerald-300 text-emerald-900 font-bold'
+                                  : oIdx === selected
+                                  ? 'bg-red-50 border-red-300 text-red-900 line-through'
+                                  : 'border-slate-100 text-slate-600'
+                              }`}
+                            >
+                              {String.fromCharCode(65 + oIdx)}. {opt}
+                            </div>
+                          ))}
+                        </div>
+                        {locExp.explanation && (
+                          <div className="p-3 bg-blue-50/70 rounded-lg text-xs text-blue-900 border border-blue-100 space-y-1">
+                            <div className="flex items-center justify-between gap-2">
+                              <strong>Rwanda Gazette Note:</strong>
+                              {locExp.isFallback && <NotTranslatedBadge />}
+                            </div>
+                            <p>{locExp.explanation}</p>
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
               );
             })}
@@ -729,37 +800,55 @@ export const MockExamView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
           </div>
         )}
 
-        <h2 className="text-base sm:text-lg font-bold text-slate-900 leading-snug">
-          {currentQ.text[language as Language] || currentQ.text.en}
-        </h2>
+        {(() => {
+          const locText = getLocalizedQuestionText(currentQ, language as Language);
+          const locOpts = getLocalizedQuestionOptions(currentQ, language as Language);
 
-        {/* Options Selection */}
-        <div className="space-y-3">
-          {currentQ.options.map((option, idx) => {
-            const isSelected = userAnswers[currentIndex] === idx;
-            return (
-              <button
-                key={idx}
-                onClick={() => handleSelectOption(idx)}
-                className={`w-full min-h-[44px] p-4 text-left rounded-[10px] border transition-all text-sm flex items-center justify-between gap-3 ${
-                  isSelected
-                    ? 'border-blue-600 bg-blue-50/70 font-semibold text-blue-900 ring-2 ring-blue-600/20'
-                    : 'border-slate-200 hover:border-blue-300 hover:bg-slate-50/60 text-slate-700'
-                }`}
-              >
-                <div className="flex items-center gap-3">
-                  <span className={`w-7 h-7 rounded-lg text-xs font-bold flex items-center justify-center shrink-0 ${
-                    isSelected ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-700'
-                  }`}>
-                    {String.fromCharCode(65 + idx)}
-                  </span>
-                  <span>{option}</span>
-                </div>
-                {isSelected && <CheckCircle2 className="w-5 h-5 text-blue-600 shrink-0" />}
-              </button>
-            );
-          })}
-        </div>
+          return (
+            <>
+              <div className="flex items-start justify-between gap-3">
+                <h2 className="text-base sm:text-lg font-bold text-slate-900 leading-snug">
+                  {locText.text}
+                </h2>
+                {locText.isFallback && <NotTranslatedBadge />}
+              </div>
+
+              {/* Options Selection */}
+              <div className="space-y-3">
+                {locOpts.isFallback && (
+                  <div className="flex items-center gap-2 text-xs text-amber-700 bg-amber-50/70 px-3 py-1.5 rounded-lg border border-amber-200/60 mb-1">
+                    <NotTranslatedBadge />
+                    <span>Options in English (translation pending)</span>
+                  </div>
+                )}
+                {locOpts.options.map((option, idx) => {
+                  const isSelected = userAnswers[currentIndex] === idx;
+                  return (
+                    <button
+                      key={idx}
+                      onClick={() => handleSelectOption(idx)}
+                      className={`w-full min-h-[44px] p-4 text-left rounded-[10px] border transition-all text-sm flex items-center justify-between gap-3 ${
+                        isSelected
+                          ? 'border-blue-600 bg-blue-50/70 font-semibold text-blue-900 ring-2 ring-blue-600/20'
+                          : 'border-slate-200 hover:border-blue-300 hover:bg-slate-50/60 text-slate-700'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <span className={`w-7 h-7 rounded-lg text-xs font-bold flex items-center justify-center shrink-0 ${
+                          isSelected ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-700'
+                        }`}>
+                          {String.fromCharCode(65 + idx)}
+                        </span>
+                        <span>{option}</span>
+                      </div>
+                      {isSelected && <CheckCircle2 className="w-5 h-5 text-blue-600 shrink-0" />}
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          );
+        })()}
 
         {/* Footer Navigation */}
         <div className="flex items-center justify-between pt-4 border-t border-slate-100">

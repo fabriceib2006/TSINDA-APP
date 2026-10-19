@@ -187,102 +187,198 @@ export async function seedInitialData() {
       const sampleQuestions = [
         {
           text: { en: "What is the maximum speed limit in urban areas (cities and towns) in Rwanda?", rw: "Umuvuduko ntarengwa mu mijyi yo mu Rwanda ni uwuhe?", fr: "Quelle est la vitesse maximale en agglomération au Rwanda?" },
-          options: ["50 km/h", "60 km/h", "80 km/h", "100 km/h"],
+          options: {
+            en: ["50 km/h", "60 km/h", "80 km/h", "100 km/h"],
+            rw: [],
+            fr: []
+          },
           correctIndex: 0,
-          explanation: "According to Article 42 of Rwanda Traffic Law, urban areas have a general speed limit of 50 km/h.",
+          explanation: {
+            en: "According to Article 42 of Rwanda Traffic Law, urban areas have a general speed limit of 50 km/h.",
+            rw: "",
+            fr: ""
+          },
           category: "Speed Limits",
           isPublished: true
         },
         {
           text: { en: "When approaching a roundabout, who has the right of way?", rw: "Mbere yo kwinjira ku mzunguko, ni nde ufite uburenganzira bwo gutambuka?", fr: "À l'approche d'un rond-point, qui a la priorité?" },
-          options: [
-            "Vehicles entering the roundabout",
-            "Vehicles already circulating inside the roundabout",
-            "Large buses only",
-            "Vehicles coming from the right"
-          ],
+          options: {
+            en: [
+              "Vehicles entering the roundabout",
+              "Vehicles already circulating inside the roundabout",
+              "Large buses only",
+              "Vehicles coming from the right"
+            ],
+            rw: [],
+            fr: []
+          },
           correctIndex: 1,
-          explanation: "Traffic already circulating inside the roundabout always has priority unless traffic police or signals direct otherwise.",
+          explanation: {
+            en: "Traffic already circulating inside the roundabout always has priority unless traffic police or signals direct otherwise.",
+            rw: "",
+            fr: ""
+          },
           category: "Priority & Right of Way",
           isPublished: true
         },
         {
           text: { en: "On which side should you overtake another vehicle in Rwanda?", rw: "Gucira ikindi kinyabiziga bikorerwa ku ruhe ruhande?", fr: "De quel côté devez-vous dépasser un autre véhicule?" },
-          options: ["On the right side", "On the left side", "On either side", "Only on the shoulder"],
+          options: {
+            en: ["On the right side", "On the left side", "On either side", "Only on the shoulder"],
+            rw: [],
+            fr: []
+          },
           correctIndex: 1,
-          explanation: "Overtaking must strictly be executed on the left side of the vehicle being passed.",
+          explanation: {
+            en: "Overtaking must strictly be executed on the left side of the vehicle being passed.",
+            rw: "",
+            fr: ""
+          },
           category: "Overtaking",
           isPublished: true
         },
         {
           text: { en: "What is the legal blood alcohol limit for drivers in Rwanda?", rw: "Ikigero cy'alukole cyemewe ku batwara ibinyabiziga mu Rwanda ni iki?", fr: "Quel est le taux d'alcoolémie légal pour les conducteurs?" },
-          options: ["0.5g/l", "0.8g/l", "0.00g/l (Zero tolerance)", "0.2g/l"],
+          options: {
+            en: ["0.5g/l", "0.8g/l", "0.00g/l (Zero tolerance)", "0.2g/l"],
+            rw: [],
+            fr: []
+          },
           correctIndex: 2,
-          explanation: "Rwanda maintains a strict zero tolerance policy (0.00g/l) for alcohol in drivers.",
+          explanation: {
+            en: "Rwanda maintains a strict zero tolerance policy (0.00g/l) for alcohol in drivers.",
+            rw: "",
+            fr: ""
+          },
           category: "Driver Conduct",
           isPublished: true
         },
         {
           text: { en: "Are front and rear seatbelts mandatory for all vehicle occupants?", rw: "Ese kwambara umukand-umutekano ni ngombwa ku bari mu modoka bose?", fr: "La ceinture de sécurité est-elle obligatoire pour tous les occupants?" },
-          options: ["Only for the driver", "Only for front passengers", "Mandatory for all occupants", "Optional"],
+          options: {
+            en: ["Only for the driver", "Only for front passengers", "Mandatory for all occupants", "Optional"],
+            rw: [],
+            fr: []
+          },
           correctIndex: 2,
-          explanation: "All occupants in both front and rear seats must wear seatbelts while the vehicle is in motion.",
+          explanation: {
+            en: "All occupants in both front and rear seats must wear seatbelts while the vehicle is in motion.",
+            rw: "",
+            fr: ""
+          },
           category: "Safety Equipment",
           isPublished: true
         },
         {
           text: { en: "What does a triangular traffic sign with a red border indicate?", rw: "Ikimenyetso cy'umuhanda gifite ifasi y'mpande eshatu n'umutuku kivuga iki?", fr: "Que signifie un panneau de signalisation triangulaire à bord rouge?" },
-          options: ["Mandatory direction", "Danger / Warning sign", "Information sign", "Prohibition sign"],
+          options: {
+            en: ["Mandatory direction", "Danger / Warning sign", "Information sign", "Prohibition sign"],
+            rw: [],
+            fr: []
+          },
           correctIndex: 1,
-          explanation: "Triangular signs with a red border warn drivers of upcoming road dangers or hazards.",
+          explanation: {
+            en: "Triangular signs with a red border warn drivers of upcoming road dangers or hazards.",
+            rw: "",
+            fr: ""
+          },
           category: "Traffic Signs",
           isPublished: true
         },
         {
           text: { en: "Can you park your vehicle on a pedestrian crossing or within 5 meters of it?", rw: "Ese ushobora guhagarara ku cyambukiriro cy'abanyamaguru cyangwa hafi yacyo?", fr: "Pouvez-vous stationner sur un passage pour piétons?" },
-          options: ["Yes, for 5 minutes", "Yes, if hazard lights are on", "No, it is strictly prohibited", "Only at night"],
+          options: {
+            en: ["Yes, for 5 minutes", "Yes, if hazard lights are on", "No, it is strictly prohibited", "Only at night"],
+            rw: [],
+            fr: []
+          },
           correctIndex: 2,
-          explanation: "Parking or stopping on or immediately near pedestrian crossings obstructs visibility and is strictly prohibited.",
+          explanation: {
+            en: "Parking or stopping on or immediately near pedestrian crossings obstructs visibility and is strictly prohibited.",
+            rw: "",
+            fr: ""
+          },
           category: "Parking",
           isPublished: true
         },
         {
           text: { en: "What is the speed limit on rural roads in Rwanda unless posted otherwise?", rw: "Umuvuduko ku mihanda yo mu cyaro mu Rwanda ni uwuhe?", fr: "Quelle est la vitesse sur les routes rurales au Rwanda?" },
-          options: ["50 km/h", "80 km/h", "100 km/h", "120 km/h"],
+          options: {
+            en: ["50 km/h", "80 km/h", "100 km/h", "120 km/h"],
+            rw: [],
+            fr: []
+          },
           correctIndex: 1,
-          explanation: "Rural roads have a standard speed limit of 80 km/h.",
+          explanation: {
+            en: "Rural roads have a standard speed limit of 80 km/h.",
+            rw: "",
+            fr: ""
+          },
           category: "Speed Limits",
           isPublished: true
         },
         {
           text: { en: "What should a driver do when approaching a yellow traffic light?", rw: "Umuyobozi w'ikinyabiziga agomba gukora iki abonye amatara y'umuhondo?", fr: "Que doit faire un conducteur à l'approche d'un feu jaune?" },
-          options: ["Accelerate quickly", "Stop if it can be done safely", "Ignore it", "Honk horn"],
+          options: {
+            en: ["Accelerate quickly", "Stop if it can be done safely", "Ignore it", "Honk horn"],
+            rw: [],
+            fr: []
+          },
           correctIndex: 1,
-          explanation: "A yellow light means stop unless you are too close to stop safely before the intersection.",
+          explanation: {
+            en: "A yellow light means stop unless you are too close to stop safely before the intersection.",
+            rw: "",
+            fr: ""
+          },
           category: "Traffic Signals",
           isPublished: true
         },
         {
           text: { en: "Who must wear a certified helmet while riding a motorcycle?", rw: "Ni nde ugomba kwambara ingofero (helmet) yemejwe igihe atwaye ipikipiki?", fr: "Qui doit porter un casque homologué à moto?" },
-          options: ["Only the driver", "Only the passenger", "Both driver and passenger", "Not required"],
+          options: {
+            en: ["Only the driver", "Only the passenger", "Both driver and passenger", "Not required"],
+            rw: [],
+            fr: []
+          },
           correctIndex: 2,
-          explanation: "Both the motorcycle operator and passenger must wear certified safety helmets at all times.",
+          explanation: {
+            en: "Both the motorcycle operator and passenger must wear certified safety helmets at all times.",
+            rw: "",
+            fr: ""
+          },
           category: "Safety Equipment",
           isPublished: true
         },
         {
           text: { en: "What documents must a driver always carry while operating a motor vehicle in Rwanda?", rw: "Ni ayahe nyandiko umuyobozi w'ikinyabiziga agomba kugira igihe cyose?", fr: "Quels documents un conducteur doit-il toujours avoir sur lui?" },
-          options: ["Driving license, vehicle registration, and insurance", "Only passport", "Only ID card", "None"],
+          options: {
+            en: ["Driving license, vehicle registration, and insurance", "Only passport", "Only ID card", "None"],
+            rw: [],
+            fr: []
+          },
           correctIndex: 0,
-          explanation: "Drivers must carry their valid driving license, vehicle registration card, and proof of valid motor insurance.",
+          explanation: {
+            en: "Drivers must carry their valid driving license, vehicle registration card, and proof of valid motor insurance.",
+            rw: "",
+            fr: ""
+          },
           category: "Legal Requirements",
           isPublished: true
         },
         {
           text: { en: "What does a solid continuous white line in the middle of the road mean?", rw: "Umurongo wera udacagase mu hagati y'umuhanda usobanura iki?", fr: "Que signifie une ligne blanche continue au milieu de la route?" },
-          options: ["Overtaking allowed", "Crossing or overtaking is strictly prohibited", "Parking zone", "Bus lane"],
+          options: {
+            en: ["Overtaking allowed", "Crossing or overtaking is strictly prohibited", "Parking zone", "Bus lane"],
+            rw: [],
+            fr: []
+          },
           correctIndex: 1,
-          explanation: "A solid white line indicates that crossing or overtaking is strictly forbidden.",
+          explanation: {
+            en: "A solid white line indicates that crossing or overtaking is strictly forbidden.",
+            rw: "",
+            fr: ""
+          },
           category: "Road Markings",
           isPublished: true
         }

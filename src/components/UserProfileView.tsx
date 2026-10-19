@@ -1,20 +1,23 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { useLanguage } from '../context/LanguageContext';
 import { t } from '../i18n/translations';
 import { db } from '../lib/firebase';
 import { doc, updateDoc } from 'firebase/firestore';
 import { handleFirestoreError, OperationType } from '../lib/firestoreUtils';
 import { User, Phone, Mail, Shield, Save, CheckCircle, ArrowLeft } from 'lucide-react';
-import { normalizeRwandanPhone } from '../lib/phoneUtils';
+import { normalizePhone, validatePhone } from '../lib/phoneUtils';
 
 export const UserProfileView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
-  const { userProfile, language } = useAuth();
+  const { userProfile } = useAuth();
+  const { language } = useLanguage();
   const dict = t[language];
 
   const [name, setName] = useState(userProfile?.name || '');
   const [phone, setPhone] = useState(userProfile?.phone || '');
   const [saving, setSaving] = useState(false);
   const [successMessage, setSuccessMessage] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const isEditable = userProfile?.role === 'learner';
 
@@ -23,11 +26,12 @@ export const UserProfileView: React.FC<{ onBack: () => void }> = ({ onBack }) =>
     if (!userProfile || !isEditable) return;
     setSaving(true);
     setSuccessMessage(false);
+    setErrorMessage(null);
 
     try {
-      const normalizedPhone = normalizeRwandanPhone(phone);
-      if (!normalizedPhone) {
-        alert("Please enter a valid Rwandan phone number.");
+      const normalizedPhone = normalizePhone(phone);
+      if (!normalizedPhone || !validatePhone(normalizedPhone)) {
+        setErrorMessage("Please enter a valid Rwandan MTN (078/079) or Airtel (072/073) phone number.");
         setSaving(false);
         return;
       }
@@ -74,6 +78,12 @@ export const UserProfileView: React.FC<{ onBack: () => void }> = ({ onBack }) =>
           </div>
         </div>
 
+        {errorMessage && (
+          <div className="flex items-center gap-2.5 p-4 bg-red-50 text-red-800 rounded-[10px] text-sm font-medium border border-red-200">
+            <span>{errorMessage}</span>
+          </div>
+        )}
+
         {successMessage && (
           <div className="flex items-center gap-2.5 p-4 bg-emerald-50 text-emerald-800 rounded-[10px] text-sm font-medium border border-emerald-200">
             <CheckCircle className="w-5 h-5 text-emerald-600 shrink-0" />
@@ -114,8 +124,9 @@ export const UserProfileView: React.FC<{ onBack: () => void }> = ({ onBack }) =>
                 className="w-full min-h-[44px] pl-10 pr-4 py-2.5 rounded-[10px] border border-slate-200 text-base sm:text-sm bg-white disabled:bg-slate-50 disabled:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-600"
               />
             </div>
-            {phone && !normalizeRwandanPhone(phone) && (
-              <p className="text-xs text-red-500 mt-1">Please enter a valid Rwandan phone number.</p>
+            <span className="text-[11px] text-slate-500 mt-1 block">Example: 0788123456</span>
+            {phone && !validatePhone(phone) && (
+              <p className="text-xs text-red-500 mt-1">Please enter a valid Rwandan MTN or Airtel phone number.</p>
             )}
           </div>
 

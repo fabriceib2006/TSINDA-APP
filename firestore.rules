@@ -7,157 +7,216 @@ service cloud.firestore {
     }
 
     function isAdmin() {
-      return isSignedIn() && request.auth.token.email == 'fabriceib2006@gmail.com';
+      return isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
     }
 
     function isOwner(userId) {
       return isSignedIn() && request.auth.uid == userId;
     }
 
-    // Users collection
+    // =========================================================================
+    // USERS COLLECTION & SUBCOLLECTIONS
+    // =========================================================================
     match /users/{userId} {
-      allow read: if isSignedIn();
-      allow create: if isSignedIn() && request.auth.uid == userId && (
-        (request.auth.token.email == 'fabriceib2006@gmail.com' && request.resource.data.role == 'admin') ||
-        (request.auth.token.email != 'fabriceib2006@gmail.com' && request.resource.data.role == 'learner')
-      );
-      allow update: if isSignedIn() && (
-        isAdmin() || 
-        (isOwner(userId) && request.resource.data.role == resource.data.role)
-      );
-      allow delete: if isAdmin();
-    }
+      allow read: if isOwner(userId) || isAdmin();
 
-    // Plans collection - Public read, Admin write only
-    match /plans/{planId} {
-      allow read: if true;
-      allow write: if isAdmin();
-    }
-
-    // Subscriptions collection - Only admin can create or delete.
-    // Learners can only read their own subscription and strictly increment examsUsed by 1 on exam completion.
-    match /subscriptions/{subId} {
-      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
-      allow create, delete: if isAdmin();
-      allow update: if isAdmin() || (
+      // Student signup (role 'student', phone email match, exact keys) OR Admin profile creation
+      allow create: if (isAdmin() && isOwner(userId)) || (
         isSignedIn() && 
-        resource.data.userId == request.auth.uid &&
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['examsUsed']) &&
-        request.resource.data.examsUsed == resource.data.examsUsed + 1
+        request.auth.uid == userId &&
+        request.auth.token.email == request.resource.data.phone + '@students.tsinda.app' &&
+        request.resource.data.role == 'student' &&
+        request.resource.data.status == 'active' &&
+        request.resource.data.keys().hasOnly(['uid', 'name', 'phone', 'email', 'role', 'status', 'createdAt'])
       );
-    }
 
-    // Exam Attempts collection - Learners manage their own attempts
-    match /examAttempts/{attemptId} {
-      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
-      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
-      allow update: if isSignedIn() && resource.data.userId == request.auth.uid;
+      // Profile updates: safe profile fields only for students; admin updates for account management
+      allow update: if isAdmin() || (
+        isOwner(userId) && 
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'email', 'updatedAt', 'language', 'avatar']) &&
+        request.resource.data.role == resource.data.role &&
+        request.resource.data.uid == resource.data.uid &&
+        request.resource.data.phone == resource.data.phone
+      );
+
       allow delete: if isAdmin();
+
+      // Purchases subcollection (owner read, server/admin write only)
+      match /purchases/{purchaseId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow write: if isAdmin();
+      }
+
+      // Access entitlement cache (owner read, server/admin write only)
+      match /access/{docId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow write: if isAdmin();
+      }
+
+      // Progress subcollection (owner read, owner update for designated learning fields)
+      match /progress/{progressId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow create, update: if isOwner(userId) &&
+          request.resource.data.keys().hasOnly(['lessonId', 'completed', 'quizScore', 'lastAccessed', 'updatedAt', 'score', 'percent', 'answers']);
+        allow delete: if isAdmin();
+      }
     }
 
-    // Payments collection - Read only for owner and admin. Written exclusively by Cloud Functions (Admin SDK).
-    match /payments/{paymentId} {
-      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+    // =========================================================================
+    // ADMINS COLLECTION
+    // Keyed by auth uid; read by owner only; client writes strictly disallowed
+    // =========================================================================
+    match /admins/{uid} {
+      allow read: if isSignedIn() && request.auth.uid == uid;
       allow write: if false;
     }
 
-    // Lessons collection - Public read for published, Admin write only
-    match /lessons/{lessonId} {
-      allow read: if resource.data.isPublished == true || isAdmin();
+    // =========================================================================
+    // PLANS & PROMOTIONS
+    // Active plans public read; all plans admin read; write admin only
+    // =========================================================================
+    match /plans/{planId} {
+      allow read: if (resource.data.active == true || resource.data.isActive == true) || isAdmin();
       allow write: if isAdmin();
     }
 
-    // Videos collection - Public read for published, Admin write only
-    match /videos/{videoId} {
-      allow read: if resource.data.isPublished == true || isAdmin();
-      allow write: if isAdmin();
-    }
-
-    // Categories collection - Public read, Admin write only
-    match /categories/{categoryId} {
-      allow read: if true;
-      allow write: if isAdmin();
-    }
-
-    // Questions collection - Public read for published, Admin write only
-    match /questions/{questionId} {
-      allow read: if resource.data.isPublished == true || isAdmin();
-      allow write: if isAdmin();
-    }
-
-    // Exam settings collection - Public read, Admin write only
-    match /examSettings/{settingId} {
-      allow read: if true;
-      allow write: if isAdmin();
-    }
-
-    // Exam Results collection
-    match /examResults/{resultId} {
-      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
-      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
-      allow delete: if isAdmin();
-    }
-
-    // Site Settings collection - Public read, Admin write
-    match /siteSettings/{docId} {
-      allow read: if true;
-      allow write: if isAdmin();
-    }
-
-    // Homepage Sections collection - Public read if visible, Admin write
-    match /homepageSections/{secId} {
-      allow read: if resource.data.isVisible == true || isAdmin();
-      allow write: if isAdmin();
-    }
-
-    // Homepage Items collection - Public read if visible, Admin write
-    match /homepageItems/{itemId} {
-      allow read: if resource.data.isVisible == true || isAdmin();
-      allow write: if isAdmin();
-    }
-
-    // Announcements collection - Public read if active, Admin write
-    match /announcements/{annId} {
-      allow read: if resource.data.isActive == true || isAdmin();
-      allow write: if isAdmin();
-    }
-
-    // Footer Groups collection - Public read if visible, Admin write
-    match /footerGroups/{groupId} {
-      allow read: if resource.data.isVisible == true || isAdmin();
-      allow write: if isAdmin();
-    }
-
-    // Footer Links collection - Public read if visible, Admin write
-    match /footerLinks/{linkId} {
-      allow read: if resource.data.isVisible == true || isAdmin();
-      allow write: if isAdmin();
-    }
-
-    // Social Links collection - Public read if visible, Admin write
-    match /socialLinks/{socId} {
-      allow read: if resource.data.isVisible == true || isAdmin();
-      allow write: if isAdmin();
-    }
-
-    // Site Media collection - Public read, Admin write
-    match /siteMedia/{mediaId} {
-      allow read: if true;
-      allow write: if isAdmin();
-    }
-
-    // Admin Logs collection - Admin read/write only
-    match /adminLogs/{logId} {
-      allow read, write: if isAdmin();
-    }
-
-    // Promotions collection - Public read, Admin write only
     match /promotions/{promoId} {
       allow read: if true;
       allow write: if isAdmin();
     }
 
-    // Default deny catch-all
+    // =========================================================================
+    // SUBSCRIPTIONS & PAYMENTS
+    // =========================================================================
+    match /subscriptions/{subId} {
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /payments/{paymentId} {
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow write: if false;
+    }
+
+    // =========================================================================
+    // LESSONS & VIDEOS (Public metadata for catalog; quizzes gated by login)
+    // =========================================================================
+    match /lessons/{lessonId} {
+      allow read: if true;
+      allow write: if isAdmin();
+
+      // TEMPORARY: Quizzes readable by signed-in users.
+      // NEXT PHASE: Gate behind lesson entitlement check hasLessons().
+      match /quizzes/{quizId} {
+        allow read: if isSignedIn();
+        allow write: if isAdmin();
+      }
+    }
+
+    match /videos/{videoId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /categories/{categoryId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // =========================================================================
+    // QUESTIONS & EXAMS
+    // TEMPORARY: Signed-in users can read questions for practice/mock exam in browser.
+    // NEXT PHASE: Move question delivery and scoring to secure server endpoint (/api/exams).
+    // =========================================================================
+    match /questions/{questionId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    match /examSettings/{settingId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /examAttempts/{attemptId} {
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create, update, delete: if isAdmin();
+    }
+
+    // KNOWN WEAKNESS (TEMPORARY):
+    // Client currently creates examResults in MockExamView.tsx after server scoring.
+    // NEXT PHASE: Move result writing to server endpoint with Admin SDK; client read-only.
+    match /examResults/{resultId} {
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow update: if false;
+      allow delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // HOMEPAGE, CMS & PUBLIC STATS
+    // Public read for visitors; admin write only
+    // =========================================================================
+    match /siteStats/{docId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /siteSettings/{docId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /homepageSections/{secId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /homepageItems/{itemId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /announcements/{annId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /footerGroups/{groupId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /footerLinks/{linkId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /socialLinks/{socId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /siteMedia/{mediaId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /imageSlots/{slotId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // =========================================================================
+    // ADMIN LOGS
+    // =========================================================================
+    match /adminLogs/{logId} {
+      allow read, write: if isAdmin();
+    }
+
+    // =========================================================================
+    // DEFAULT DENY
+    // =========================================================================
     match /{document=**} {
       allow read, write: if false;
     }

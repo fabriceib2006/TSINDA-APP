@@ -389,15 +389,27 @@ export const PlansManager: React.FC = () => {
 
                     <div className="space-y-1.5 pt-3 border-t border-slate-100 text-xs font-medium text-slate-700">
                       <div className="flex items-center gap-2">
-                        <Check className="w-4 h-4 text-emerald-600" />
+                        {plan.access.trafficRules ? (
+                          <Check className="w-4 h-4 text-emerald-600" />
+                        ) : (
+                          <X className="w-4 h-4 text-slate-400" />
+                        )}
                         <span>Traffic Rules: {plan.access.trafficRules ? 'Enabled' : 'Disabled'}</span>
                       </div>
                       <div className="flex items-center gap-2">
-                        <Check className="w-4 h-4 text-emerald-600" />
+                        {plan.access.lessonVideos ? (
+                          <Check className="w-4 h-4 text-emerald-600" />
+                        ) : (
+                          <X className="w-4 h-4 text-slate-400" />
+                        )}
                         <span>Video Lessons: {plan.access.lessonVideos ? 'Enabled' : 'Disabled'}</span>
                       </div>
                       <div className="flex items-center gap-2">
-                        <Check className="w-4 h-4 text-emerald-600" />
+                        {plan.access.exams ? (
+                          <Check className="w-4 h-4 text-emerald-600" />
+                        ) : (
+                          <X className="w-4 h-4 text-slate-400" />
+                        )}
                         <span>Exams: {plan.access.exams ? (plan.examLimit === null ? 'Unlimited Exams' : `${plan.examLimit} Mock Exams`) : 'Disabled'}</span>
                       </div>
                     </div>

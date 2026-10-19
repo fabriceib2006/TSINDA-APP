@@ -63,32 +63,61 @@ async function getPaypackToken(): Promise<string> {
   return token;
 }
 
-// Helper to normalize phone number and detect network
-function parseRwandanPhone(phone: string): { normalizedPhone: string; network: 'MTN' | 'Airtel' } {
-  let clean = phone.replace(/[^0-9]/g, '');
-  if (clean.startsWith('250')) {
-    clean = clean.slice(3);
+// Helpers to normalize phone number, validate, and detect network
+function normalizePhone(input: string | null | undefined): string | null {
+  if (!input) return null;
+  let cleaned = input.replace(/[\s\-\.\(\)\[\]]/g, '');
+  if (cleaned.startsWith('+')) {
+    cleaned = cleaned.substring(1);
+  } else if (cleaned.startsWith('00')) {
+    cleaned = cleaned.substring(2);
   }
-  if (clean.startsWith('0')) {
-    clean = clean.slice(1);
+  if (cleaned.startsWith('0')) {
+    cleaned = '250' + cleaned.substring(1);
+  } else if (cleaned.startsWith('7') && cleaned.length === 9) {
+    cleaned = '250' + cleaned;
   }
+  if (/^250\d{9}$/.test(cleaned)) {
+    return cleaned;
+  }
+  return null;
+}
 
-  if (clean.length !== 9) {
-    throw new functions.https.HttpsError('invalid-argument', 'Phone number must be a valid 9-digit Rwandan number (e.g. 078XXXXXXX).');
-  }
+function validatePhone(input: string | null | undefined): boolean {
+  const normalized = normalizePhone(input);
+  if (!normalized) return false;
+  const digitsAfter250 = normalized.substring(3);
+  const prefix = digitsAfter250.substring(0, 2);
+  return prefix === '78' || prefix === '79' || prefix === '72' || prefix === '73';
+}
 
-  const prefix = clean.slice(0, 2);
-  let network: 'MTN' | 'Airtel';
+function detectNetwork(input: string | null | undefined): 'MTN' | 'Airtel' | null {
+  if (!input) return null;
+  const normalized = input.startsWith('250') && input.length === 12 ? input : normalizePhone(input);
+  if (!normalized) return null;
+  const prefix = normalized.substring(3, 5);
   if (prefix === '78' || prefix === '79') {
-    network = 'MTN';
-  } else if (prefix === '72' || prefix === '73') {
-    network = 'Airtel';
-  } else {
+    return 'MTN';
+  }
+  if (prefix === '72' || prefix === '73') {
+    return 'Airtel';
+  }
+  return null;
+}
+
+function parseRwandanPhone(phone: string): { normalizedPhone: string; network: 'MTN' | 'Airtel' } {
+  const normalized = normalizePhone(phone);
+  if (!normalized || !validatePhone(normalized)) {
+    throw new functions.https.HttpsError('invalid-argument', 'Please enter a valid Rwandan MTN (078/079) or Airtel (072/073) phone number.');
+  }
+
+  const network = detectNetwork(normalized);
+  if (!network) {
     throw new functions.https.HttpsError('invalid-argument', 'Phone number must be an MTN (078/079) or Airtel (072/073) number.');
   }
 
   return {
-    normalizedPhone: `0${clean}`,
+    normalizedPhone: normalized,
     network,
   };
 }
@@ -108,23 +137,71 @@ async function processSuccessfulPayment(paymentDocSnapshot: FirebaseFirestore.Do
       return;
     }
 
+    // Blocking amount check: compare Paypack's reported amount with amount recorded in payment record
+    const recordedAmount = Number(paymentData.amount);
+    if (reportedAmount !== undefined && reportedAmount !== null && Number(reportedAmount) !== recordedAmount) {
+      console.warn(`Amount mismatch for payment ${curDoc.id}: reported ${reportedAmount}, expected ${recordedAmount}`);
+      transaction.update(paymentRef, {
+        status: 'needsReview',
+        needsReview: true,
+        reviewReason: `Amount mismatch: reported ${reportedAmount}, recorded ${recordedAmount}`,
+        failureReason: `Amount mismatch: reported ${reportedAmount}, recorded ${recordedAmount}`,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      return;
+    }
+
     const planDoc = await transaction.get(db.collection('plans').doc(paymentData.planId));
     if (!planDoc.exists) {
       console.error(`Plan ${paymentData.planId} not found when activating payment ${curDoc.id}`);
+      transaction.update(paymentRef, {
+        status: 'needsReview',
+        needsReview: true,
+        reviewReason: `Plan ${paymentData.planId} not found`,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
       return;
     }
     const plan = planDoc.data()!;
 
-    // Check amount matches plan price
-    const expectedPrice = Number(plan.price);
-    const paidAmount = Number(paymentData.amount);
-    if (reportedAmount && Number(reportedAmount) !== expectedPrice) {
-      console.warn(`Amount mismatch for payment ${curDoc.id}: reported ${reportedAmount}, expected ${expectedPrice}`);
-    }
-
     const durationDays = Number(plan.durationDays) || 30;
-    const startDate = new Date();
-    const endDate = new Date(startDate.getTime() + durationDays * 24 * 60 * 60 * 1000);
+    const serverNow = new Date();
+
+    // Check if user has an active unexpired subscription
+    const existingSubsSnap = await transaction.get(
+      db.collection('subscriptions')
+        .where('userId', '==', paymentData.userId)
+        .where('status', '==', 'active')
+    );
+
+    let latestEndDate = serverNow;
+    let hasActivePlan = false;
+    existingSubsSnap.docs.forEach(d => {
+      const sub = d.data();
+      const end = new Date(sub.endDate);
+      if (end > serverNow) {
+        hasActivePlan = true;
+        if (end > latestEndDate) {
+          latestEndDate = end;
+        }
+      }
+    });
+
+    let startDate: Date;
+    let endDate: Date;
+    let needsReview = false;
+    let reviewReason: string | null = null;
+
+    if (hasActivePlan) {
+      // Chaining after an active plan is only a safety net and must set needsReview true
+      startDate = latestEndDate;
+      endDate = new Date(startDate.getTime() + durationDays * 24 * 60 * 60 * 1000);
+      needsReview = true;
+      reviewReason = `Chained after active subscription ending at ${latestEndDate.toISOString()}`;
+    } else {
+      startDate = serverNow;
+      endDate = new Date(startDate.getTime() + durationDays * 24 * 60 * 60 * 1000);
+    }
 
     const subRef = db.collection('subscriptions').doc();
     const subData = {
@@ -132,7 +209,7 @@ async function processSuccessfulPayment(paymentDocSnapshot: FirebaseFirestore.Do
       userId: paymentData.userId,
       planId: paymentData.planId,
       planName: paymentData.planName,
-      price: paidAmount,
+      price: recordedAmount,
       durationDays,
       startDate: startDate.toISOString(),
       endDate: endDate.toISOString(),
@@ -154,8 +231,10 @@ async function processSuccessfulPayment(paymentDocSnapshot: FirebaseFirestore.Do
 
     transaction.set(subRef, subData);
     transaction.update(paymentRef, {
-      status: 'successful',
+      status: needsReview ? 'needsReview' : 'successful',
       subscriptionId: subRef.id,
+      needsReview,
+      reviewReason,
       updatedAt: FieldValue.serverTimestamp(),
     });
   });
@@ -193,12 +272,37 @@ export const startPayment = functions.runWith({ secrets: SECRETS }).https.onCall
     throw new functions.https.HttpsError('failed-precondition', 'Invalid plan price configured in Firestore.');
   }
 
-  // Prevent double charges: reject if user already has a pending payment for the same plan in the last 3 minutes
+  // 1. BLOCK DOUBLE PLANS: reject if user has any subscription with status "active" and endDate in the future
+  const serverNow = new Date();
+  const activeSubsQuery = await db
+    .collection('subscriptions')
+    .where('userId', '==', userId)
+    .where('status', '==', 'active')
+    .get();
+
+  const activeSubDoc = activeSubsQuery.docs.find(d => {
+    const end = new Date(d.data().endDate);
+    return end > serverNow;
+  });
+
+  if (activeSubDoc) {
+    const activeSub = activeSubDoc.data();
+    throw new functions.https.HttpsError(
+      'already-exists',
+      'ACTIVE_PLAN_EXISTS',
+      {
+        code: 'ACTIVE_PLAN_EXISTS',
+        endDate: activeSub.endDate,
+        planName: activeSub.planName || 'Active Plan',
+      }
+    );
+  }
+
+  // 2. Reject if user already has a pending payment newer than 3 minutes
   const threeMinutesAgo = new Date(Date.now() - 3 * 60 * 1000);
   const pendingQuery = await db
     .collection('payments')
     .where('userId', '==', userId)
-    .where('planId', '==', planId)
     .where('status', '==', 'pending')
     .where('createdAt', '>=', Timestamp.fromDate(threeMinutesAgo))
     .limit(1)
@@ -207,12 +311,18 @@ export const startPayment = functions.runWith({ secrets: SECRETS }).https.onCall
   if (!pendingQuery.empty) {
     throw new functions.https.HttpsError(
       'already-exists',
-      'You already have a pending payment request for this plan within the last 3 minutes. Please check your phone for the USSD prompt.'
+      'PENDING_PAYMENT_EXISTS',
+      {
+        code: 'PENDING_PAYMENT_EXISTS',
+      }
     );
   }
 
   // Authenticate with Paypack
   const token = await getPaypackToken();
+
+  // Paypack expects 07XXXXXXXX format for cashin (convert from stored 250 format)
+  const paypackNumber = '0' + normalizedPhone.substring(3);
 
   // Call Paypack cashin
   let cashinRes;
@@ -221,7 +331,7 @@ export const startPayment = functions.runWith({ secrets: SECRETS }).https.onCall
       `${PAYPACK_BASE_URL}/transactions/cashin`,
       {
         amount: planPrice,
-        number: normalizedPhone,
+        number: paypackNumber,
       },
       {
         headers: {
@@ -679,13 +789,8 @@ export const requestPasswordReset = functions.https.onCall(async (data, context)
     throw new functions.https.HttpsError('invalid-argument', 'Phone number is required.');
   }
 
-  let cleaned = phone.replace(/[\\s\\-\\(\\)]/g, '');
-  if (cleaned.startsWith('+250')) cleaned = cleaned.substring(1);
-  if (cleaned.startsWith('0')) cleaned = '250' + cleaned.substring(1);
-  if (cleaned.length === 9 && cleaned.startsWith('7')) cleaned = '250' + cleaned;
-  const normalizedPhone = cleaned;
-
-  if (!/^2507\\d{8}$/.test(normalizedPhone)) {
+  const normalizedPhone = normalizePhone(phone);
+  if (!normalizedPhone || !validatePhone(normalizedPhone)) {
     return { success: true, message: "If this number is registered, a reset link was sent to its email" };
   }
 
@@ -744,3 +849,479 @@ export const requestPasswordReset = functions.https.onCall(async (data, context)
 
   return { success: true, message: "If this number is registered, a reset link was sent to its email" };
 });
+
+// Helper to calculate exam score and finalize attempt document
+async function calculateAndFinalizeAttempt(
+  attemptRef: FirebaseFirestore.DocumentReference,
+  attempt: FirebaseFirestore.DocumentData,
+  expired: boolean
+) {
+  const questionIds: string[] = Array.isArray(attempt.questionIds) ? attempt.questionIds : [];
+  const questionDocs = await Promise.all(
+    questionIds.map(id => db.collection('questions').doc(id).get())
+  );
+
+  let score = 0;
+  const savedAnswers = attempt.userAnswers || {};
+  const review = questionDocs.map((docSnap, idx) => {
+    const qData = docSnap.exists ? docSnap.data() : null;
+    const correctIndex = typeof qData?.correctIndex === 'number' ? qData.correctIndex : -1;
+    const studentAnswer =
+      savedAnswers[idx] !== undefined && savedAnswers[idx] !== null
+        ? Number(savedAnswers[idx])
+        : null;
+    const isCorrect = studentAnswer !== null && studentAnswer === correctIndex;
+    if (isCorrect) {
+      score++;
+    }
+    return {
+      questionId: docSnap.id,
+      questionIndex: idx,
+      correctIndex,
+      studentAnswer,
+      isCorrect,
+    };
+  });
+
+  const passMark = Number(attempt.passMark) || 12;
+  const passed = score >= passMark;
+  const total = questionIds.length;
+
+  await attemptRef.update({
+    status: 'completed',
+    finishedAt: new Date().toISOString(),
+    score,
+    passed,
+    total,
+    passMark,
+    expired: Boolean(expired),
+    updatedAt: FieldValue.serverTimestamp(),
+  });
+
+  return {
+    score,
+    passed,
+    total,
+    passMark,
+    expired: Boolean(expired),
+    review,
+  };
+}
+
+// 7. START EXAM (Callable Cloud Function)
+export const startExam = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'User must be signed in to start an exam.');
+  }
+  const userId = context.auth.uid;
+  const { questionIds } = data || {};
+
+  const serverNow = new Date();
+
+  // 1. Fetch examSettings to copy settings at start time
+  const settingsSnap = await db.collection('examSettings').limit(1).get();
+  let numQuestions = 20;
+  let durationMinutes = 20;
+  let passMark = 12;
+  if (!settingsSnap.empty) {
+    const s = settingsSnap.docs[0].data();
+    if (typeof s.numQuestions === 'number' && s.numQuestions > 0) numQuestions = s.numQuestions;
+    if (typeof s.durationMinutes === 'number' && s.durationMinutes > 0) durationMinutes = s.durationMinutes;
+    if (typeof s.passMark === 'number' && s.passMark > 0) passMark = s.passMark;
+  }
+
+  const startedAt = serverNow.toISOString();
+  const expiresAt = new Date(serverNow.getTime() + durationMinutes * 60 * 1000).toISOString();
+
+  // 2. Check if user already has an in_progress attempt that has not expired
+  const inProgressQuery = await db
+    .collection('examAttempts')
+    .where('userId', '==', userId)
+    .where('status', '==', 'in_progress')
+    .get();
+
+  for (const docSnap of inProgressQuery.docs) {
+    const attempt = docSnap.data();
+    const expTime = attempt.expiresAt
+      ? new Date(attempt.expiresAt).getTime()
+      : (attempt.startedAt ? new Date(attempt.startedAt).getTime() + (Number(attempt.durationMinutes) || 20) * 60 * 1000 : 0);
+    if (serverNow.getTime() < expTime) {
+      // Unexpired in_progress attempt found! Return that attempt and do NOT increase count.
+      return {
+        resumed: true,
+        attemptId: docSnap.id,
+        attempt: { id: docSnap.id, ...attempt },
+        startedAt: attempt.startedAt,
+        expiresAt: attempt.expiresAt || new Date(expTime).toISOString(),
+        durationMinutes: Number(attempt.durationMinutes) || durationMinutes,
+        numQuestions: Number(attempt.numQuestions) || numQuestions,
+        passMark: Number(attempt.passMark) || passMark,
+      };
+    }
+  }
+
+  // 3. Find active subscription with exam access
+  const activeSubsQuery = await db
+    .collection('subscriptions')
+    .where('userId', '==', userId)
+    .where('status', '==', 'active')
+    .get();
+
+  const validSubs = activeSubsQuery.docs.filter(d => {
+    const sub = d.data();
+    const end = new Date(sub.endDate);
+    return end > serverNow && sub.access?.exams === true;
+  });
+
+  if (validSubs.length === 0) {
+    throw new functions.https.HttpsError(
+      'permission-denied',
+      'NO_ACTIVE_EXAM_SUBSCRIPTION'
+    );
+  }
+
+  // Find a subscription that hasn't reached its exam limit
+  const chosenSubDoc = validSubs.find(d => {
+    const sub = d.data();
+    if (sub.examLimit === null || sub.examLimit === undefined) return true;
+    return (sub.examsUsed || 0) < sub.examLimit;
+  });
+
+  if (!chosenSubDoc) {
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      'EXAM_LIMIT_REACHED'
+    );
+  }
+
+  const subRef = chosenSubDoc.ref;
+  const attemptRef = db.collection('examAttempts').doc();
+
+  // 4. In ONE transaction, create the examAttempt (startedAt = server time) and increase examsUsed by 1
+  await db.runTransaction(async (transaction) => {
+    const subDoc = await transaction.get(subRef);
+    if (!subDoc.exists) {
+      throw new functions.https.HttpsError('not-found', 'Subscription not found.');
+    }
+    const subData = subDoc.data()!;
+    const currentUsed = subData.examsUsed || 0;
+    const limit = subData.examLimit;
+    if (limit !== null && limit !== undefined && currentUsed >= limit) {
+      throw new functions.https.HttpsError('failed-precondition', 'EXAM_LIMIT_REACHED');
+    }
+
+    transaction.update(subRef, {
+      examsUsed: currentUsed + 1,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+
+    const attemptData = {
+      id: attemptRef.id,
+      userId,
+      subscriptionId: subRef.id,
+      startedAt,
+      expiresAt,
+      durationMinutes,
+      numQuestions,
+      passMark,
+      finishedAt: null,
+      score: 0,
+      passed: false,
+      status: 'in_progress',
+      questionIds: Array.isArray(questionIds) ? questionIds : [],
+      userAnswers: {},
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    };
+
+    transaction.set(attemptRef, attemptData);
+  });
+
+  return {
+    resumed: false,
+    attemptId: attemptRef.id,
+    startedAt,
+    expiresAt,
+    durationMinutes,
+    numQuestions,
+    passMark,
+  };
+});
+
+// 8. SAVE ANSWER (Callable Cloud Function)
+export const saveAnswer = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'User must be signed in.');
+  }
+  const userId = context.auth.uid;
+  const { attemptId, questionIndex, optionIndex } = data || {};
+
+  if (!attemptId || typeof attemptId !== 'string') {
+    throw new functions.https.HttpsError('invalid-argument', 'Missing or invalid attemptId.');
+  }
+  const qIdx = Number(questionIndex);
+  const optIdx = Number(optionIndex);
+  if (!Number.isInteger(qIdx) || qIdx < 0) {
+    throw new functions.https.HttpsError('invalid-argument', 'Invalid questionIndex.');
+  }
+  if (!Number.isInteger(optIdx) || optIdx < 0) {
+    throw new functions.https.HttpsError('invalid-argument', 'Invalid optionIndex.');
+  }
+
+  const attemptRef = db.collection('examAttempts').doc(attemptId);
+  const attemptSnap = await attemptRef.get();
+  if (!attemptSnap.exists) {
+    throw new functions.https.HttpsError('not-found', 'Exam attempt not found.');
+  }
+  const attempt = attemptSnap.data()!;
+  if (attempt.userId !== userId) {
+    throw new functions.https.HttpsError('permission-denied', 'Not your exam attempt.');
+  }
+  if (attempt.status !== 'in_progress') {
+    throw new functions.https.HttpsError('failed-precondition', 'Exam attempt is not in progress.');
+  }
+
+  const now = Date.now();
+  const expiresAtMs = attempt.expiresAt
+    ? new Date(attempt.expiresAt).getTime()
+    : (attempt.startedAt ? new Date(attempt.startedAt).getTime() + (Number(attempt.durationMinutes) || 20) * 60 * 1000 : 0);
+  if (now >= expiresAtMs) {
+    throw new functions.https.HttpsError('deadline-exceeded', 'Exam time has expired.');
+  }
+
+  const questionIds: string[] = Array.isArray(attempt.questionIds) ? attempt.questionIds : [];
+  if (qIdx >= questionIds.length) {
+    throw new functions.https.HttpsError('invalid-argument', 'questionIndex out of bounds.');
+  }
+
+  const targetQuestionId = questionIds[qIdx];
+  const questionSnap = await db.collection('questions').doc(targetQuestionId).get();
+  if (!questionSnap.exists) {
+    throw new functions.https.HttpsError('not-found', 'Question not found.');
+  }
+  const qData = questionSnap.data()!;
+  const options = Array.isArray(qData.options) ? qData.options : [];
+  if (optIdx >= options.length) {
+    throw new functions.https.HttpsError('invalid-argument', 'optionIndex out of range.');
+  }
+
+  await attemptRef.update({
+    [`userAnswers.${qIdx}`]: optIdx,
+    updatedAt: FieldValue.serverTimestamp(),
+  });
+
+  return { success: true };
+});
+
+// 9. SUBMIT EXAM (Callable Cloud Function)
+export const submitExam = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'User must be signed in.');
+  }
+  const userId = context.auth.uid;
+  const { attemptId } = data || {};
+
+  if (!attemptId || typeof attemptId !== 'string') {
+    throw new functions.https.HttpsError('invalid-argument', 'Missing or invalid attemptId.');
+  }
+
+  const attemptRef = db.collection('examAttempts').doc(attemptId);
+  const attemptSnap = await attemptRef.get();
+  if (!attemptSnap.exists) {
+    throw new functions.https.HttpsError('not-found', 'Exam attempt not found.');
+  }
+  const attempt = attemptSnap.data()!;
+  if (attempt.userId !== userId) {
+    throw new functions.https.HttpsError('permission-denied', 'Not your exam attempt.');
+  }
+
+  const questionIds: string[] = Array.isArray(attempt.questionIds) ? attempt.questionIds : [];
+
+  // Idempotent: If the attempt is already completed, return stored result and change nothing
+  if (attempt.status === 'completed') {
+    const questionDocs = await Promise.all(
+      questionIds.map(id => db.collection('questions').doc(id).get())
+    );
+    const savedAnswers = attempt.userAnswers || {};
+    const review = questionDocs.map((docSnap, idx) => {
+      const qData = docSnap.exists ? docSnap.data() : null;
+      const correctIndex = typeof qData?.correctIndex === 'number' ? qData.correctIndex : -1;
+      const studentAnswer =
+        savedAnswers[idx] !== undefined && savedAnswers[idx] !== null
+          ? Number(savedAnswers[idx])
+          : null;
+      const isCorrect = studentAnswer !== null && studentAnswer === correctIndex;
+      return {
+        questionId: docSnap.id,
+        questionIndex: idx,
+        correctIndex,
+        studentAnswer,
+        isCorrect,
+      };
+    });
+
+    return {
+      success: true,
+      attemptId,
+      score: attempt.score || 0,
+      passed: Boolean(attempt.passed),
+      total: attempt.total || questionIds.length,
+      passMark: attempt.passMark || 12,
+      expired: Boolean(attempt.expired),
+      review,
+    };
+  }
+
+  const now = Date.now();
+  const expiresAtMs = attempt.expiresAt
+    ? new Date(attempt.expiresAt).getTime()
+    : (attempt.startedAt ? new Date(attempt.startedAt).getTime() + (Number(attempt.durationMinutes) || 20) * 60 * 1000 : 0);
+  const isExpired = now >= expiresAtMs;
+
+  const result = await calculateAndFinalizeAttempt(attemptRef, attempt, isExpired);
+
+  return {
+    success: true,
+    attemptId,
+    ...result,
+  };
+});
+
+// 10. FINALIZE EXPIRED EXAMS (Scheduled Cloud Function)
+export const finalizeExpiredExams = functions.pubsub
+  .schedule('every 10 minutes')
+  .timeZone('Africa/Kigali')
+  .onRun(async () => {
+    const serverNowMs = Date.now();
+    const inProgressSnap = await db
+      .collection('examAttempts')
+      .where('status', '==', 'in_progress')
+      .get();
+
+    for (const docSnap of inProgressSnap.docs) {
+      const attempt = docSnap.data();
+      const expiresAtMs = attempt.expiresAt
+        ? new Date(attempt.expiresAt).getTime()
+        : (attempt.startedAt ? new Date(attempt.startedAt).getTime() + (Number(attempt.durationMinutes) || 20) * 60 * 1000 : 0);
+
+      if (serverNowMs >= expiresAtMs) {
+        try {
+          await calculateAndFinalizeAttempt(docSnap.ref, attempt, true);
+        } catch (err) {
+          console.error(`Failed to auto-finalize expired attempt ${docSnap.id}:`, err);
+        }
+      }
+    }
+    return null;
+  });
+
+// Password hashing and verification helpers
+function hashPassword(password: string, salt?: string): { hash: string; salt: string } {
+  const s = salt || crypto.randomBytes(16).toString('hex');
+  const hash = crypto.pbkdf2Sync(password, s, 1000, 64, 'sha512').toString('hex');
+  return { hash, salt: s };
+}
+
+function verifyPassword(password: string, hash: string, salt: string): boolean {
+  const h = crypto.pbkdf2Sync(password, salt, 1000, 64, 'sha512').toString('hex');
+  return h === hash;
+}
+
+export const signUpWithPhone = functions.https.onCall(async (data, context) => {
+  const { name, phone, email, password } = data;
+  const normalized = normalizePhone(phone);
+  const maskedPhone = phone ? phone.replace(/^(\d{3})\d{6}(\d{2})$/, '$1******$2') : 'null';
+
+  if (!normalized || !validatePhone(normalized)) {
+    console.warn(`[signUpWithPhone] Invalid phone number provided: ${maskedPhone}`);
+    throw new functions.https.HttpsError('invalid-argument', 'Invalid phone number.');
+  }
+  if (!password || password.length < 8) {
+    console.warn(`[signUpWithPhone] Weak password for phone ${maskedPhone}`);
+    throw new functions.https.HttpsError('invalid-argument', 'Password must be at least 8 characters.');
+  }
+
+  const internalEmail = `${normalized}@students.tsinda.app`;
+
+  let uid: string;
+  try {
+    const existing = await admin.auth().getUserByEmail(internalEmail).catch(() => null);
+    if (existing) {
+      console.warn(`[signUpWithPhone] Duplicate registration attempt for ${maskedPhone}`);
+      throw new functions.https.HttpsError('already-exists', 'This phone number is already registered.');
+    }
+
+    const { hash, salt } = hashPassword(password);
+
+    const userRecord = await admin.auth().createUser({
+      email: internalEmail,
+      displayName: name,
+    });
+    uid = userRecord.uid;
+
+    const profile = {
+      uid,
+      name,
+      phone: normalized,
+      email: email || '',
+      role: 'learner',
+      status: 'active',
+      passwordHash: hash,
+      passwordSalt: salt,
+      createdAt: new Date().toISOString()
+    };
+    await db.collection('users').doc(uid).set(profile);
+  } catch (err: any) {
+    console.error(`[signUpWithPhone] Error code: ${err.code || 'unknown'}, message: ${err.message || 'none'} for phone ${maskedPhone}`);
+    if (err instanceof functions.https.HttpsError) {
+      throw err;
+    }
+    if (err.code === 'auth/operation-not-allowed' || err.message?.includes('operation-not-allowed')) {
+      throw new functions.https.HttpsError('permission-denied', 'Email/Password authentication provider is not enabled in Firebase Console.');
+    }
+    if (err.code === 'already-exists' || err.message?.includes('already registered')) {
+      throw new functions.https.HttpsError('already-exists', 'This phone number is already registered.');
+    }
+    throw new functions.https.HttpsError('internal', 'Could not create account. Please try again.');
+  }
+
+  const customToken = await admin.auth().createCustomToken(uid);
+  return { customToken };
+});
+
+export const signInWithPhone = functions.https.onCall(async (data, context) => {
+  const { phone, password } = data;
+  const normalized = normalizePhone(phone);
+  if (!normalized || !validatePhone(normalized)) {
+    throw new functions.https.HttpsError('invalid-argument', 'Please enter a valid Rwandan MTN (078/079) or Airtel (072/073) phone number.');
+  }
+
+  const internalEmail = `${normalized}@students.tsinda.app`;
+
+  let userRecord;
+  try {
+    userRecord = await admin.auth().getUserByEmail(internalEmail);
+  } catch (err) {
+    throw new functions.https.HttpsError('not-found', 'Invalid phone number or password.');
+  }
+
+  const userDoc = await db.collection('users').doc(userRecord.uid).get();
+  if (!userDoc.exists) {
+    throw new functions.https.HttpsError('not-found', 'Invalid phone number or password.');
+  }
+
+  const userData = userDoc.data()!;
+  if (!userData.passwordHash || !userData.passwordSalt) {
+    throw new functions.https.HttpsError('invalid-argument', 'Please reset your password or register.');
+  }
+
+  const isValid = verifyPassword(password, userData.passwordHash, userData.passwordSalt);
+  if (!isValid) {
+    throw new functions.https.HttpsError('invalid-argument', 'Invalid phone number or password.');
+  }
+
+  const customToken = await admin.auth().createCustomToken(userRecord.uid);
+  return { customToken };
+});
+
+

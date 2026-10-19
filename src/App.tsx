@@ -4,11 +4,14 @@
  */
 
 import React from 'react';
-import { AuthProvider, useAuth } from './context/AuthContext';
+import { AuthProvider } from './context/AuthContext';
+import { LanguageProvider } from './context/LanguageContext';
 import { AuthScreen } from './components/AuthScreen';
+import { AdminAuthScreen } from './components/AdminAuthScreen';
 import { AdminLayout } from './components/AdminLayout';
 import { LearnerDashboard } from './components/LearnerDashboard';
 import { HomePage } from './components/HomePage';
+import { useAuth } from './context/AuthContext';
 
 const AppContent: React.FC = () => {
   const { firebaseUser, userProfile, loading } = useAuth();
@@ -27,38 +30,40 @@ const AppContent: React.FC = () => {
 
   // 1. Admin route (/admin...)
   if (path.startsWith('/admin')) {
-    if (!firebaseUser || !userProfile) {
-      return <AuthScreen />;
-    }
-    if (userProfile.role !== 'admin') {
-      // Student cannot access admin portal -> redirect to /student
-      window.history.replaceState({}, '', '/student');
-      return <LearnerDashboard />;
+    if (!firebaseUser || !userProfile || userProfile.role !== 'admin') {
+      return <AdminAuthScreen />;
     }
     return <AdminLayout />;
   }
 
+  // 2. Student route (/student...)
   // 2. Student route (/student...)
   if (path.startsWith('/student')) {
     if (!firebaseUser || !userProfile) {
       return <AuthScreen />;
     }
     if (userProfile.role === 'admin') {
-      // Admin cannot access student portal -> redirect to /admin
       window.history.replaceState({}, '', '/admin');
       return <AdminLayout />;
     }
     return <LearnerDashboard />;
   }
 
-  // 3. Root Home Page (/) is ALWAYS the public homepage for everyone (visitor, admin, or student)
+  if (path.startsWith('/signup')) {
+    window.history.replaceState({}, '', '/student?mode=signup');
+    return <AuthScreen />;
+  }
+
+  // 3. Root Home Page (/)
   return <HomePage />;
 };
 
 export default function App() {
   return (
-    <AuthProvider>
-      <AppContent />
-    </AuthProvider>
+    <LanguageProvider>
+      <AuthProvider>
+        <AppContent />
+      </AuthProvider>
+    </LanguageProvider>
   );
 }

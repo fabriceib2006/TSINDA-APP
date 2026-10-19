@@ -1,4 +1,4 @@
-export type Role = 'learner' | 'admin';
+export type Role = 'student' | 'learner' | 'admin';
 export type Language = 'rw' | 'en' | 'fr';
 
 export interface UserProfile {
@@ -8,6 +8,7 @@ export interface UserProfile {
   email: string;
   role: Role;
   status: 'active' | 'suspended';
+  language?: Language;
   createdAt: string;
 }
 
@@ -136,9 +137,9 @@ export interface VideoLesson {
 export interface Question {
   id: string;
   text: Record<Language, string>;
-  options: string[];
+  options: Record<Language, string[]>;
   correctIndex: number;
-  explanation: string;
+  explanation: Record<Language, string>;
   category: string;
   imageUrl?: string;
   isPublished: boolean;

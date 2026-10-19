@@ -45,15 +45,31 @@ export const ExamsManager: React.FC = () => {
   const [questionToDelete, setQuestionToDelete] = useState<Question | null>(null);
 
   // Question form state
+  const [formLang, setFormLang] = useState<'en' | 'rw' | 'fr'>('en');
   const [qTextEn, setQTextEn] = useState('');
   const [qTextRw, setQTextRw] = useState('');
   const [qTextFr, setQTextFr] = useState('');
-  const [opt1, setOpt1] = useState('');
-  const [opt2, setOpt2] = useState('');
-  const [opt3, setOpt3] = useState('');
-  const [opt4, setOpt4] = useState('');
+  
+  const [opt1En, setOpt1En] = useState('');
+  const [opt2En, setOpt2En] = useState('');
+  const [opt3En, setOpt3En] = useState('');
+  const [opt4En, setOpt4En] = useState('');
+
+  const [opt1Rw, setOpt1Rw] = useState('');
+  const [opt2Rw, setOpt2Rw] = useState('');
+  const [opt3Rw, setOpt3Rw] = useState('');
+  const [opt4Rw, setOpt4Rw] = useState('');
+
+  const [opt1Fr, setOpt1Fr] = useState('');
+  const [opt2Fr, setOpt2Fr] = useState('');
+  const [opt3Fr, setOpt3Fr] = useState('');
+  const [opt4Fr, setOpt4Fr] = useState('');
+
+  const [explanationEn, setExplanationEn] = useState('');
+  const [explanationRw, setExplanationRw] = useState('');
+  const [explanationFr, setExplanationFr] = useState('');
+
   const [correctIdx, setCorrectIdx] = useState(0);
-  const [explanation, setExplanation] = useState('');
   const [qCategory, setQCategory] = useState('Traffic Signs');
   const [imageUrl, setImageUrl] = useState('');
   const [qPublished, setQPublished] = useState(true);
@@ -67,7 +83,10 @@ export const ExamsManager: React.FC = () => {
     errors: { row: number; message: string }[];
     missingImages: string[];
     unusedImages: string[];
+    duplicateImages: string[];
+    existingIds: { id: string; row: number }[];
   } | null>(null);
+  const [updateExisting, setUpdateExisting] = useState(false);
   const [importing, setImporting] = useState(false);
 
   const [firestoreCategories, setFirestoreCategories] = useState<string[]>([]);
@@ -139,10 +158,18 @@ export const ExamsManager: React.FC = () => {
   const handleSaveQuestion = async (e: React.FormEvent) => {
     e.preventDefault();
     const questionData = {
-      text: { en: qTextEn, rw: qTextRw, fr: qTextFr },
-      options: [opt1, opt2, opt3, opt4].filter(Boolean),
+      text: { en: qTextEn.trim(), rw: qTextRw.trim(), fr: qTextFr.trim() },
+      options: {
+        en: [opt1En, opt2En, opt3En, opt4En].map(s => s.trim()).filter(Boolean),
+        rw: [opt1Rw, opt2Rw, opt3Rw, opt4Rw].map(s => s.trim()).filter(Boolean),
+        fr: [opt1Fr, opt2Fr, opt3Fr, opt4Fr].map(s => s.trim()).filter(Boolean)
+      },
       correctIndex: Number(correctIdx),
-      explanation,
+      explanation: {
+        en: explanationEn.trim(),
+        rw: explanationRw.trim(),
+        fr: explanationFr.trim()
+      },
       category: qCategory,
       imageUrl,
       isPublished: qPublished
@@ -233,6 +260,10 @@ export const ExamsManager: React.FC = () => {
     const errors: { row: number; message: string }[] = [];
     const imageNamesSet = new Set(images.map(img => img.name.toLowerCase()));
     const matchedImages = new Set<string>();
+    const seenImageNames = new Set<string>();
+    const duplicateImages = new Set<string>();
+    const existingIds: { id: string; row: number }[] = [];
+    const matchedImagesInRows = new Set<string>();
 
     rows.forEach((row, index) => {
       const rowNum = index + 1;
@@ -245,10 +276,18 @@ export const ExamsManager: React.FC = () => {
       if (row.correct_index === undefined || row.correct_index === '' || isNaN(Number(row.correct_index))) {
         errors.push({ row: rowNum, message: "Missing or invalid correct_index (0-3)." });
       }
+      if (row.id && questions.some(q => q.id === row.id)) {
+        existingIds.push({ id: row.id, row: rowNum });
+      }
       if (row.image_name) {
         const imgName = row.image_name.trim().toLowerCase();
+        if (seenImageNames.has(imgName)) {
+            duplicateImages.add(imgName);
+        }
+        seenImageNames.add(imgName);
         if (imageNamesSet.has(imgName)) {
-          matchedImages.add(imgName);
+            matchedImages.add(imgName);
+            matchedImagesInRows.add(imgName);
         }
       }
     });
@@ -260,13 +299,15 @@ export const ExamsManager: React.FC = () => {
 
     const unusedImages = images
       .map(img => img.name)
-      .filter(imgName => !matchedImages.has(imgName.toLowerCase()));
+      .filter(imgName => !matchedImagesInRows.has(imgName.toLowerCase()));
 
     setValidationReport({
       validCount: rows.length - errors.length,
       errors,
       missingImages: Array.from(new Set(missingImages)),
-      unusedImages
+      unusedImages,
+      duplicateImages: Array.from(duplicateImages),
+      existingIds
     });
   };
 
@@ -288,14 +329,26 @@ export const ExamsManager: React.FC = () => {
       }
 
       let importedCount = 0;
-      for (const row of parsedRows) {
+      for (const [index, row] of parsedRows.entries()) {
+        const rowNum = index + 1;
+        const isExisting = validationReport?.existingIds.some(e => e.id === row.id);
+        if (isExisting && !updateExisting) continue;
+
         const textEn = row.text_en || '';
         const textRw = row.text_rw || '';
         const textFr = row.text_fr || textEn;
-        const options = [row.option_1, row.option_2, row.option_3, row.option_4].filter(Boolean);
+        const options = {
+          en: [row.option_1, row.option_2, row.option_3, row.option_4].filter(Boolean),
+          rw: [row.option_1_rw, row.option_2_rw, row.option_3_rw, row.option_4_rw].filter(Boolean),
+          fr: [row.option_1_fr, row.option_2_fr, row.option_3_fr, row.option_4_fr].filter(Boolean)
+        };
         const correctIndex = Number(row.correct_index ?? 0);
         const category = row.category || 'General';
-        const explanation = row.explanation || '';
+        const explanation = {
+          en: row.explanation || row.explanation_en || '',
+          rw: row.explanation_rw || '',
+          fr: row.explanation_fr || ''
+        };
         const imageName = row.image_name?.trim().toLowerCase();
         const imageUrlVal = imageName ? imageUrlMap.get(imageName) || '' : '';
 
@@ -309,7 +362,11 @@ export const ExamsManager: React.FC = () => {
           isPublished: true
         };
 
-        await addDoc(collection(db, 'questions'), questionData);
+        if (isExisting) {
+            await updateDoc(doc(db, 'questions', row.id), questionData);
+        } else {
+            await addDoc(collection(db, 'questions'), questionData);
+        }
         importedCount++;
       }
 
@@ -492,9 +549,13 @@ export const ExamsManager: React.FC = () => {
             <button
               onClick={() => {
                 setEditingQuestion(null);
+                setFormLang('en');
                 setQTextEn(''); setQTextRw(''); setQTextFr('');
-                setOpt1(''); setOpt2(''); setOpt3(''); setOpt4('');
-                setCorrectIdx(0); setExplanation(''); setImageUrl(''); setQPublished(true);
+                setOpt1En(''); setOpt2En(''); setOpt3En(''); setOpt4En('');
+                setOpt1Rw(''); setOpt2Rw(''); setOpt3Rw(''); setOpt4Rw('');
+                setOpt1Fr(''); setOpt2Fr(''); setOpt3Fr(''); setOpt4Fr('');
+                setExplanationEn(''); setExplanationRw(''); setExplanationFr('');
+                setCorrectIdx(0); setImageUrl(''); setQPublished(true);
                 setIsModalOpen(true);
               }}
               className="min-h-[44px] flex items-center justify-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-[10px] text-sm shadow-sm transition-colors whitespace-nowrap"
@@ -558,7 +619,20 @@ export const ExamsManager: React.FC = () => {
                         </td>
                         <td className="py-4 px-6 max-w-md">
                           <div className="font-semibold text-slate-900 line-clamp-1">{q.text.en}</div>
-                          <div className="text-xs text-slate-500 line-clamp-1">{q.text.rw}</div>
+                          <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${q.text.rw ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-slate-100 text-slate-500'}`}>
+                              RW text: {q.text.rw ? '✓' : '–'}
+                            </span>
+                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${q.text.fr ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-slate-100 text-slate-500'}`}>
+                              FR text: {q.text.fr ? '✓' : '–'}
+                            </span>
+                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${Array.isArray(q.options?.rw) && q.options.rw.length > 0 ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-amber-50 text-amber-700 border border-amber-200'}`}>
+                              RW opts: {Array.isArray(q.options?.rw) && q.options.rw.length > 0 ? `${q.options.rw.length}✓` : '–'}
+                            </span>
+                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${Array.isArray(q.options?.fr) && q.options.fr.length > 0 ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-amber-50 text-amber-700 border border-amber-200'}`}>
+                              FR opts: {Array.isArray(q.options?.fr) && q.options.fr.length > 0 ? `${q.options.fr.length}✓` : '–'}
+                            </span>
+                          </div>
                         </td>
                         <td className="py-4 px-6 text-slate-600 whitespace-nowrap">{q.category}</td>
                         <td className="py-4 px-6 whitespace-nowrap">
@@ -576,11 +650,31 @@ export const ExamsManager: React.FC = () => {
                           <button
                             onClick={() => {
                               setEditingQuestion(q);
-                              setQTextEn(q.text.en); setQTextRw(q.text.rw); setQTextFr(q.text.fr || '');
-                              setOpt1(q.options[0] || ''); setOpt2(q.options[1] || '');
-                              setOpt3(q.options[2] || ''); setOpt4(q.options[3] || '');
-                              setCorrectIdx(q.correctIndex); setExplanation(q.explanation || '');
-                              setQCategory(q.category); setImageUrl(q.imageUrl || ''); setQPublished(q.isPublished);
+                              setFormLang('en');
+                              setQTextEn(q.text?.en || '');
+                              setQTextRw(q.text?.rw || '');
+                              setQTextFr(q.text?.fr || '');
+
+                              const enOpts = Array.isArray(q.options?.en) ? q.options.en : (Array.isArray(q.options) ? q.options : []);
+                              const rwOpts = Array.isArray(q.options?.rw) ? q.options.rw : [];
+                              const frOpts = Array.isArray(q.options?.fr) ? q.options.fr : [];
+
+                              setOpt1En(enOpts[0] || ''); setOpt2En(enOpts[1] || ''); setOpt3En(enOpts[2] || ''); setOpt4En(enOpts[3] || '');
+                              setOpt1Rw(rwOpts[0] || ''); setOpt2Rw(rwOpts[1] || ''); setOpt3Rw(rwOpts[2] || ''); setOpt4Rw(rwOpts[3] || '');
+                              setOpt1Fr(frOpts[0] || ''); setOpt2Fr(frOpts[1] || ''); setOpt3Fr(frOpts[2] || ''); setOpt4Fr(frOpts[3] || '');
+
+                              const expEn = typeof q.explanation === 'object' && q.explanation !== null ? (q.explanation.en || '') : (typeof q.explanation === 'string' ? q.explanation : '');
+                              const expRw = typeof q.explanation === 'object' && q.explanation !== null ? (q.explanation.rw || '') : '';
+                              const expFr = typeof q.explanation === 'object' && q.explanation !== null ? (q.explanation.fr || '') : '';
+
+                              setExplanationEn(expEn);
+                              setExplanationRw(expRw);
+                              setExplanationFr(expFr);
+
+                              setCorrectIdx(q.correctIndex ?? 0);
+                              setQCategory(q.category || 'General');
+                              setImageUrl(q.imageUrl || '');
+                              setQPublished(q.isPublished ?? true);
                               setIsModalOpen(true);
                             }}
                             className="min-h-[44px] min-w-[44px] p-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-[10px] transition-colors inline-flex items-center justify-center"
@@ -646,17 +740,24 @@ export const ExamsManager: React.FC = () => {
           </div>
 
           {validationReport && (
-            <div className="p-6 bg-slate-50 rounded-xl border border-slate-200 space-y-4">
+            <div className="p-6 bg-white rounded-xl border border-slate-200 shadow-sm space-y-4">
               <h4 className="font-bold text-slate-900 text-sm">Validation Preview Report</h4>
-              <div className="grid grid-cols-2 gap-4 text-xs font-medium">
-                <div className="p-3 bg-white rounded-[10px] border">
-                  <span className="text-slate-500 block">Valid Questions Ready:</span>
+              
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-xs font-medium">
+                <div className="p-3 bg-slate-50 rounded-[10px] border">
+                  <span className="text-slate-500 block">Valid Rows:</span>
                   <span className="text-lg font-bold text-emerald-600">{validationReport.validCount}</span>
                 </div>
-                <div className="p-3 bg-white rounded-[10px] border">
-                  <span className="text-slate-500 block">Errors Found:</span>
+                <div className="p-3 bg-slate-50 rounded-[10px] border">
+                  <span className="text-slate-500 block">Errors:</span>
                   <span className={`text-lg font-bold ${validationReport.errors.length > 0 ? 'text-red-600' : 'text-emerald-600'}`}>
                     {validationReport.errors.length}
+                  </span>
+                </div>
+                <div className="p-3 bg-slate-50 rounded-[10px] border">
+                  <span className="text-slate-500 block">Conflicts:</span>
+                  <span className={`text-lg font-bold ${validationReport.existingIds.length > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>
+                    {validationReport.existingIds.length}
                   </span>
                 </div>
               </div>
@@ -664,7 +765,7 @@ export const ExamsManager: React.FC = () => {
               {validationReport.errors.length > 0 && (
                 <div className="space-y-1">
                   <span className="text-xs font-bold text-red-700">Row Errors:</span>
-                  <ul className="text-xs text-red-600 space-y-1 max-h-32 overflow-y-auto bg-white p-3 rounded-[10px] border">
+                  <ul className="text-xs text-red-600 space-y-1 max-h-32 overflow-y-auto bg-slate-50 p-3 rounded-[10px] border">
                     {validationReport.errors.map((err, idx) => (
                       <li key={idx}>Row {err.row}: {err.message}</li>
                     ))}
@@ -672,12 +773,45 @@ export const ExamsManager: React.FC = () => {
                 </div>
               )}
 
+              {validationReport.duplicateImages.length > 0 && (
+                <div className="space-y-1">
+                  <span className="text-xs font-bold text-red-700">Duplicate Image References:</span>
+                  <p className="text-xs text-red-600 bg-slate-50 p-3 rounded-[10px] border">
+                    {validationReport.duplicateImages.join(', ')}
+                  </p>
+                </div>
+              )}
+
               {validationReport.missingImages.length > 0 && (
                 <div className="space-y-1">
-                  <span className="text-xs font-bold text-amber-700">Missing Uploaded Images for image_name references:</span>
-                  <p className="text-xs text-amber-800 bg-white p-3 rounded-[10px] border">
+                  <span className="text-xs font-bold text-amber-700">Missing Uploaded Images:</span>
+                  <p className="text-xs text-amber-800 bg-slate-50 p-3 rounded-[10px] border">
                     {validationReport.missingImages.join(', ')}
                   </p>
+                </div>
+              )}
+
+              {validationReport.unusedImages.length > 0 && (
+                <div className="space-y-1">
+                  <span className="text-xs font-bold text-slate-700">Unused Uploaded Images:</span>
+                  <p className="text-xs text-slate-600 bg-slate-50 p-3 rounded-[10px] border">
+                    {validationReport.unusedImages.join(', ')}
+                  </p>
+                </div>
+              )}
+
+              {validationReport.existingIds.length > 0 && (
+                <div className="flex items-center gap-2 pt-2">
+                  <input
+                    type="checkbox"
+                    id="updateExisting"
+                    checked={updateExisting}
+                    onChange={(e) => setUpdateExisting(e.target.checked)}
+                    className="w-4 h-4 text-blue-600 rounded border-slate-300"
+                  />
+                  <label htmlFor="updateExisting" className="text-xs font-bold text-slate-700">
+                    Update existing question IDs (Skip if unchecked)
+                  </label>
                 </div>
               )}
 
@@ -686,7 +820,7 @@ export const ExamsManager: React.FC = () => {
                 disabled={importing || validationReport.validCount === 0}
                 className="w-full min-h-[44px] py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-[10px] text-sm shadow-sm transition-colors disabled:opacity-50"
               >
-                {importing ? "Importing to Firestore & Storage..." : `Confirm Import (${validationReport.validCount} Questions)`}
+                {importing ? "Importing..." : `Confirm Import (${validationReport.validCount} Valid Rows)`}
               </button>
             </div>
           )}
@@ -701,67 +835,7 @@ export const ExamsManager: React.FC = () => {
               {editingQuestion ? 'Edit Exam Question' : 'Create Exam Question'}
             </h3>
             <form onSubmit={handleSaveQuestion} className="space-y-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Category</label>
-                <input
-                  type="text"
-                  required
-                  value={qCategory}
-                  onChange={(e) => setQCategory(e.target.value)}
-                  className="w-full min-h-[44px] px-4 py-2.5 rounded-[10px] border border-slate-200 text-base sm:text-sm"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Question Text (English)</label>
-                <input
-                  type="text"
-                  required
-                  value={qTextEn}
-                  onChange={(e) => setQTextEn(e.target.value)}
-                  className="w-full min-h-[44px] px-4 py-2.5 rounded-[10px] border border-slate-200 text-base sm:text-sm"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Question Text (Kinyarwanda - UTF-8)</label>
-                <input
-                  type="text"
-                  required
-                  value={qTextRw}
-                  onChange={(e) => setQTextRw(e.target.value)}
-                  className="w-full min-h-[44px] px-4 py-2.5 rounded-[10px] border border-slate-200 text-base sm:text-sm"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Question Text (French)</label>
-                <input
-                  type="text"
-                  value={qTextFr}
-                  onChange={(e) => setQTextFr(e.target.value)}
-                  className="w-full min-h-[44px] px-4 py-2.5 rounded-[10px] border border-slate-200 text-base sm:text-sm"
-                />
-              </div>
-
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Option A</label>
-                  <input type="text" required value={opt1} onChange={(e) => setOpt1(e.target.value)} className="w-full min-h-[44px] px-4 py-2 rounded-[10px] border border-slate-200 text-base sm:text-sm" />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Option B</label>
-                  <input type="text" required value={opt2} onChange={(e) => setOpt2(e.target.value)} className="w-full min-h-[44px] px-4 py-2 rounded-[10px] border border-slate-200 text-base sm:text-sm" />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Option C</label>
-                  <input type="text" required value={opt3} onChange={(e) => setOpt3(e.target.value)} className="w-full min-h-[44px] px-4 py-2 rounded-[10px] border border-slate-200 text-base sm:text-sm" />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Option D</label>
-                  <input type="text" required value={opt4} onChange={(e) => setOpt4(e.target.value)} className="w-full min-h-[44px] px-4 py-2 rounded-[10px] border border-slate-200 text-base sm:text-sm" />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Category *</label>
                   <select
@@ -775,11 +849,11 @@ export const ExamsManager: React.FC = () => {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Correct Option</label>
+                  <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Correct Option *</label>
                   <select
                     value={correctIdx}
                     onChange={(e) => setCorrectIdx(Number(e.target.value))}
-                    className="w-full min-h-[44px] px-3 py-2.5 rounded-[10px] border border-slate-200 text-base sm:text-sm bg-white"
+                    className="w-full min-h-[44px] px-3 py-2.5 rounded-[10px] border border-slate-200 text-base sm:text-sm bg-white font-semibold text-emerald-800"
                   >
                     <option value={0}>Option A</option>
                     <option value={1}>Option B</option>
@@ -787,15 +861,210 @@ export const ExamsManager: React.FC = () => {
                     <option value={3}>Option D</option>
                   </select>
                 </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Question Image</label>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={handleImageUpload}
-                    className="w-full min-h-[44px] text-base sm:text-sm text-slate-500 file:mr-2 file:py-2 file:px-3 file:rounded-[8px] file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700"
-                  />
+              </div>
+
+              {/* Language Tabs */}
+              <div className="pt-2">
+                <div className="flex items-center gap-2 border-b border-slate-200 pb-2">
+                  <button
+                    type="button"
+                    onClick={() => setFormLang('en')}
+                    className={`min-h-[38px] px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
+                      formLang === 'en'
+                        ? 'bg-blue-600 text-white shadow-xs'
+                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                    }`}
+                  >
+                    <span>English (EN) *</span>
+                    {qTextEn && opt1En && <span className="w-2 h-2 rounded-full bg-emerald-400"></span>}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFormLang('rw')}
+                    className={`min-h-[38px] px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
+                      formLang === 'rw'
+                        ? 'bg-blue-600 text-white shadow-xs'
+                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                    }`}
+                  >
+                    <span>Kinyarwanda (RW)</span>
+                    {qTextRw && opt1Rw ? (
+                      <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                    ) : (
+                      <span className="text-[10px] font-normal opacity-70">(pending)</span>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFormLang('fr')}
+                    className={`min-h-[38px] px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
+                      formLang === 'fr'
+                        ? 'bg-blue-600 text-white shadow-xs'
+                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                    }`}
+                  >
+                    <span>Français (FR)</span>
+                    {qTextFr && opt1Fr ? (
+                      <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                    ) : (
+                      <span className="text-[10px] font-normal opacity-70">(pending)</span>
+                    )}
+                  </button>
                 </div>
+              </div>
+
+              {/* Language Specific Fields */}
+              {formLang === 'en' && (
+                <div className="space-y-4 p-4 rounded-xl bg-slate-50 border border-slate-200/80">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold uppercase text-slate-700 tracking-wider">English Content (Required)</span>
+                    <span className="text-[11px] text-slate-500">Base language</span>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Question Prompt (EN) *</label>
+                    <textarea
+                      rows={2}
+                      required
+                      value={qTextEn}
+                      onChange={(e) => setQTextEn(e.target.value)}
+                      className="w-full min-h-[44px] px-4 py-2.5 rounded-[10px] border border-slate-300 text-base sm:text-sm bg-white"
+                      placeholder="Enter question text in English..."
+                    />
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Option A (EN) *</label>
+                      <input type="text" required value={opt1En} onChange={(e) => setOpt1En(e.target.value)} className="w-full min-h-[44px] px-3.5 py-2 rounded-[10px] border border-slate-300 text-base sm:text-sm bg-white" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Option B (EN) *</label>
+                      <input type="text" required value={opt2En} onChange={(e) => setOpt2En(e.target.value)} className="w-full min-h-[44px] px-3.5 py-2 rounded-[10px] border border-slate-300 text-base sm:text-sm bg-white" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Option C (EN) *</label>
+                      <input type="text" required value={opt3En} onChange={(e) => setOpt3En(e.target.value)} className="w-full min-h-[44px] px-3.5 py-2 rounded-[10px] border border-slate-300 text-base sm:text-sm bg-white" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Option D (EN) *</label>
+                      <input type="text" required value={opt4En} onChange={(e) => setOpt4En(e.target.value)} className="w-full min-h-[44px] px-3.5 py-2 rounded-[10px] border border-slate-300 text-base sm:text-sm bg-white" />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Explanation (EN)</label>
+                    <textarea
+                      rows={2}
+                      value={explanationEn}
+                      onChange={(e) => setExplanationEn(e.target.value)}
+                      className="w-full min-h-[44px] px-4 py-2.5 rounded-[10px] border border-slate-300 text-base sm:text-sm bg-white"
+                      placeholder="Rwanda Gazette explanation in English..."
+                    />
+                  </div>
+                </div>
+              )}
+
+              {formLang === 'rw' && (
+                <div className="space-y-4 p-4 rounded-xl bg-slate-50 border border-slate-200/80">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold uppercase text-slate-700 tracking-wider">Kinyarwanda Content</span>
+                    <span className="text-[11px] text-slate-500">Falls back to English if empty</span>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Question Prompt (RW - Kinyarwanda)</label>
+                    <textarea
+                      rows={2}
+                      value={qTextRw}
+                      onChange={(e) => setQTextRw(e.target.value)}
+                      className="w-full min-h-[44px] px-4 py-2.5 rounded-[10px] border border-slate-300 text-base sm:text-sm bg-white"
+                      placeholder="Andika ikibazo mu Kinyarwanda..."
+                    />
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Option A (RW)</label>
+                      <input type="text" value={opt1Rw} onChange={(e) => setOpt1Rw(e.target.value)} className="w-full min-h-[44px] px-3.5 py-2 rounded-[10px] border border-slate-300 text-base sm:text-sm bg-white" placeholder="Igisubizo A mu Kinyarwanda..." />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Option B (RW)</label>
+                      <input type="text" value={opt2Rw} onChange={(e) => setOpt2Rw(e.target.value)} className="w-full min-h-[44px] px-3.5 py-2 rounded-[10px] border border-slate-300 text-base sm:text-sm bg-white" placeholder="Igisubizo B mu Kinyarwanda..." />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Option C (RW)</label>
+                      <input type="text" value={opt3Rw} onChange={(e) => setOpt3Rw(e.target.value)} className="w-full min-h-[44px] px-3.5 py-2 rounded-[10px] border border-slate-300 text-base sm:text-sm bg-white" placeholder="Igisubizo C mu Kinyarwanda..." />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Option D (RW)</label>
+                      <input type="text" value={opt4Rw} onChange={(e) => setOpt4Rw(e.target.value)} className="w-full min-h-[44px] px-3.5 py-2 rounded-[10px] border border-slate-300 text-base sm:text-sm bg-white" placeholder="Igisubizo D mu Kinyarwanda..." />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Explanation (RW)</label>
+                    <textarea
+                      rows={2}
+                      value={explanationRw}
+                      onChange={(e) => setExplanationRw(e.target.value)}
+                      className="w-full min-h-[44px] px-4 py-2.5 rounded-[10px] border border-slate-300 text-base sm:text-sm bg-white"
+                      placeholder="Ibisobanuro by'amategeko mu Kinyarwanda..."
+                    />
+                  </div>
+                </div>
+              )}
+
+              {formLang === 'fr' && (
+                <div className="space-y-4 p-4 rounded-xl bg-slate-50 border border-slate-200/80">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold uppercase text-slate-700 tracking-wider">French Content</span>
+                    <span className="text-[11px] text-slate-500">Falls back to English if empty</span>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Question Prompt (FR - Français)</label>
+                    <textarea
+                      rows={2}
+                      value={qTextFr}
+                      onChange={(e) => setQTextFr(e.target.value)}
+                      className="w-full min-h-[44px] px-4 py-2.5 rounded-[10px] border border-slate-300 text-base sm:text-sm bg-white"
+                      placeholder="Texte de la question en français..."
+                    />
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Option A (FR)</label>
+                      <input type="text" value={opt1Fr} onChange={(e) => setOpt1Fr(e.target.value)} className="w-full min-h-[44px] px-3.5 py-2 rounded-[10px] border border-slate-300 text-base sm:text-sm bg-white" placeholder="Option A en français..." />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Option B (FR)</label>
+                      <input type="text" value={opt2Fr} onChange={(e) => setOpt2Fr(e.target.value)} className="w-full min-h-[44px] px-3.5 py-2 rounded-[10px] border border-slate-300 text-base sm:text-sm bg-white" placeholder="Option B en français..." />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Option C (FR)</label>
+                      <input type="text" value={opt3Fr} onChange={(e) => setOpt3Fr(e.target.value)} className="w-full min-h-[44px] px-3.5 py-2 rounded-[10px] border border-slate-300 text-base sm:text-sm bg-white" placeholder="Option C en français..." />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Option D (FR)</label>
+                      <input type="text" value={opt4Fr} onChange={(e) => setOpt4Fr(e.target.value)} className="w-full min-h-[44px] px-3.5 py-2 rounded-[10px] border border-slate-300 text-base sm:text-sm bg-white" placeholder="Option D en français..." />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Explanation (FR)</label>
+                    <textarea
+                      rows={2}
+                      value={explanationFr}
+                      onChange={(e) => setExplanationFr(e.target.value)}
+                      className="w-full min-h-[44px] px-4 py-2.5 rounded-[10px] border border-slate-300 text-base sm:text-sm bg-white"
+                      placeholder="Explication du code de la route en français..."
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Media & Publication Settings */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Question Image (Optional)</label>
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={handleImageUpload}
+                  className="w-full min-h-[44px] text-base sm:text-sm text-slate-500 file:mr-2 file:py-2 file:px-3 file:rounded-[8px] file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700"
+                />
               </div>
 
               {imageUrl && (
@@ -804,17 +1073,6 @@ export const ExamsManager: React.FC = () => {
                   <span className="text-xs text-slate-500 font-medium">Image attached successfully</span>
                 </div>
               )}
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Explanation</label>
-                <textarea
-                  rows={2}
-                  value={explanation}
-                  onChange={(e) => setExplanation(e.target.value)}
-                  className="w-full min-h-[44px] px-4 py-2.5 rounded-[10px] border border-slate-200 text-base sm:text-sm"
-                  placeholder="Explanation based on Rwanda National Gazette..."
-                />
-              </div>
 
               <div className="flex items-center gap-2 pt-1">
                 <input

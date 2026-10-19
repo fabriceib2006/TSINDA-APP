@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { t } from '../i18n/translations';
+import { useLanguage } from '../context/LanguageContext';
+import { t, learnerDashboardT } from '../i18n/translations';
+import { getText } from '../lib/i18n';
 import { Navbar } from './Navbar';
 import { LessonsView } from './learner/LessonsView';
 import { PracticeQuizView } from './learner/PracticeQuizView';
@@ -18,7 +20,8 @@ import { BookOpen, Award, History, ShieldCheck, Play, Lock, Clock } from 'lucide
 type LearnerTab = 'overview' | 'lessons' | 'quiz' | 'exam' | 'history' | 'profile';
 
 export const LearnerDashboard: React.FC = () => {
-  const { userProfile, language } = useAuth();
+  const { userProfile } = useAuth();
+  const { language } = useLanguage();
   const dict = t[language];
   const [activeTab, setActiveTab] = useState<LearnerTab>('overview');
   const [access, setAccess] = useState<CombinedAccess | null>(null);
@@ -45,7 +48,6 @@ export const LearnerDashboard: React.FC = () => {
 
   useEffect(() => {
     async function init() {
-      await seedInitialData();
       await fetchAccess();
     }
     init();
@@ -69,7 +71,7 @@ export const LearnerDashboard: React.FC = () => {
                   {dict.welcomeBack}, <span className="text-blue-600">{userProfile?.name}</span>
                 </h1>
                 <p className="text-xs sm:text-sm text-slate-500 mt-1">
-                  Rwanda National Gazette driving theory exam preparation.
+                  {getText(learnerDashboardT.learnerDashboardDesc, language)}
                 </p>
               </div>
 
@@ -78,14 +80,14 @@ export const LearnerDashboard: React.FC = () => {
                   <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2">
                     <span className="min-h-[44px] text-xs font-semibold text-emerald-800 bg-emerald-50 px-4 py-2 rounded-xl flex items-center gap-2 border border-emerald-200">
                       <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" /> 
-                      <span>Pass Active • Valid to {expiryFormatted}</span>
+                      <span>{getText(learnerDashboardT.passActive, language)} • {getText(learnerDashboardT.validTo, language)} {expiryFormatted}</span>
                     </span>
 
                     {access.exams && (
                       <span className="min-h-[44px] text-xs font-bold text-blue-800 bg-blue-50 px-3.5 py-2 rounded-xl flex items-center gap-1.5 border border-blue-200">
                         <Award className="w-4 h-4 text-blue-600 shrink-0" />
                         <span>
-                          Exams used: {access.examsUsed} of {access.isUnlimitedExams ? 'Unlimited' : access.totalExamsAllowed}
+                          {getText(learnerDashboardT.examsUsed, language)}: {access.examsUsed} {getText(learnerDashboardT.of, language)} {access.isUnlimitedExams ? getText(learnerDashboardT.unlimited, language) : access.totalExamsAllowed}
                         </span>
                       </span>
                     )}
@@ -95,7 +97,7 @@ export const LearnerDashboard: React.FC = () => {
                     onClick={() => setIsSubModalOpen(true)}
                     className="min-h-[44px] px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-[10px] text-xs sm:text-sm shadow-sm transition-colors flex items-center gap-2"
                   >
-                    <span>Upgrade to Pro Plan</span>
+                    <span>{getText(learnerDashboardT.upgradeToPro, language)}</span>
                   </button>
                 )}
               </div>
@@ -114,12 +116,12 @@ export const LearnerDashboard: React.FC = () => {
                   </div>
                   {access && !access.trafficRules && (
                     <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded flex items-center gap-1">
-                      <Lock className="w-3 h-3" /> Locked
+                      <Lock className="w-3 h-3" /> {getText(learnerDashboardT.locked, language)}
                     </span>
                   )}
                 </div>
-                <h3 className="font-bold text-slate-900 text-base">Traffic Lessons</h3>
-                <p className="text-xs text-slate-500 leading-relaxed">Official Rwanda Gazette traffic rules & video lessons.</p>
+                <h3 className="font-bold text-slate-900 text-base">{getText(learnerDashboardT.trafficLessons, language)}</h3>
+                <p className="text-xs text-slate-500 leading-relaxed">{getText(learnerDashboardT.trafficLessonsDesc, language)}</p>
               </div>
 
               {/* Practice Quiz Card */}
@@ -130,8 +132,8 @@ export const LearnerDashboard: React.FC = () => {
                 <div className="w-12 h-12 bg-emerald-50 text-emerald-600 rounded-[10px] flex items-center justify-center group-hover:scale-105 transition-transform">
                   <Award className="w-6 h-6" />
                 </div>
-                <h3 className="font-bold text-slate-900 text-base">Practice Quiz</h3>
-                <p className="text-xs text-slate-500 leading-relaxed">Category quizzes with instant feedback & explanations.</p>
+                <h3 className="font-bold text-slate-900 text-base">{getText(learnerDashboardT.practiceQuiz, language)}</h3>
+                <p className="text-xs text-slate-500 leading-relaxed">{getText(learnerDashboardT.practiceQuizDesc, language)}</p>
               </div>
 
               {/* Mock Exam Card */}
@@ -145,12 +147,12 @@ export const LearnerDashboard: React.FC = () => {
                   </div>
                   {access?.exams && (
                     <span className="text-[10px] font-bold text-purple-700 bg-purple-50 px-2 py-0.5 rounded">
-                      {access.isUnlimitedExams ? 'Unlimited' : `${access.examsRemaining} left`}
+                      {access.isUnlimitedExams ? getText(learnerDashboardT.unlimited, language) : `${access.examsRemaining} ${getText(learnerDashboardT.left, language)}`}
                     </span>
                   )}
                 </div>
-                <h3 className="font-bold text-slate-900 text-base">National Mock Exam</h3>
-                <p className="text-xs text-slate-500 leading-relaxed">Timed 20-question exam simulation with pass/fail scoring.</p>
+                <h3 className="font-bold text-slate-900 text-base">{getText(learnerDashboardT.nationalMockExam, language)}</h3>
+                <p className="text-xs text-slate-500 leading-relaxed">{getText(learnerDashboardT.mockExamDesc, language)}</p>
               </div>
 
               {/* Results History Card */}
@@ -161,8 +163,8 @@ export const LearnerDashboard: React.FC = () => {
                 <div className="w-12 h-12 bg-amber-50 text-amber-600 rounded-[10px] flex items-center justify-center group-hover:scale-105 transition-transform">
                   <History className="w-6 h-6" />
                 </div>
-                <h3 className="font-bold text-slate-900 text-base">Results History</h3>
-                <p className="text-xs text-slate-500 leading-relaxed">Review past mock exam scores and track your performance.</p>
+                <h3 className="font-bold text-slate-900 text-base">{getText(learnerDashboardT.resultsHistory, language)}</h3>
+                <p className="text-xs text-slate-500 leading-relaxed">{getText(learnerDashboardT.resultsHistoryDesc, language)}</p>
               </div>
             </div>
           </div>

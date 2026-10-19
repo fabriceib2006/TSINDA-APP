@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { useLanguage } from '../context/LanguageContext';
 import { t } from '../i18n/translations';
 import { Globe, LogOut, ShieldCheck, User as UserIcon, Menu, ChevronDown, Check } from 'lucide-react';
 import { Language } from '../types';
@@ -15,7 +16,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   onToggleSidebar,
   isSidebarOpen 
 }) => {
-  const { userProfile, language, setLanguage, signOut } = useAuth();
+  const { userProfile, signOut } = useAuth();
+  const { language, setLanguage } = useLanguage();
   const dict = t[language];
   const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
   const [langDropdownOpen, setLangDropdownOpen] = useState(false);

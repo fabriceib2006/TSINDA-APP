@@ -270,12 +270,23 @@ export async function seedSystemSettingsIfNeeded() {
       await addDoc(collection(db, 'footerLinks'), { groupId: g2.id, label: { rw: 'Abo Turi Bo', en: 'About Us', fr: 'À propos' }, url: '/about', order: 1, isVisible: true });
     }
 
-    // Check socialLinks
-    const socialSnap = await getDocs(collection(db, 'socialLinks'));
-    if (socialSnap.empty) {
-      await addDoc(collection(db, 'socialLinks'), { platform: 'WhatsApp', url: 'https://whatsapp.com', order: 1, isVisible: true });
-      await addDoc(collection(db, 'socialLinks'), { platform: 'YouTube', url: 'https://youtube.com', order: 2, isVisible: true });
-      await addDoc(collection(db, 'socialLinks'), { platform: 'Twitter', url: 'https://twitter.com', order: 3, isVisible: true });
+    // Check imageSlots
+    const slotsSnap = await getDocs(collection(db, 'imageSlots'));
+    if (slotsSnap.empty) {
+      const defaultSlots = [
+        { slotKey: 'hero', label: 'Hero Section Image', imageUrl: '', updatedAt: new Date().toISOString() },
+        { slotKey: 'feature-exams', label: 'Feature: Timed Mock Exams', imageUrl: '', updatedAt: new Date().toISOString() },
+        { slotKey: 'feature-lessons', label: 'Feature: Official Traffic Rules', imageUrl: '', updatedAt: new Date().toISOString() },
+        { slotKey: 'feature-videos', label: 'Feature: Video Lessons', imageUrl: '', updatedAt: new Date().toISOString() },
+        { slotKey: 'feature-languages', label: 'Feature: 3 Languages', imageUrl: '', updatedAt: new Date().toISOString() },
+        { slotKey: 'feature-progress', label: 'Feature: Exam Progress', imageUrl: '', updatedAt: new Date().toISOString() },
+        { slotKey: 'announcement', label: 'Announcements Default Image', imageUrl: '', updatedAt: new Date().toISOString() },
+        { slotKey: 'logo', label: 'Site Logo', imageUrl: '', updatedAt: new Date().toISOString() },
+        { slotKey: 'favicon', label: 'Site Favicon', imageUrl: '', updatedAt: new Date().toISOString() }
+      ];
+      for (const slot of defaultSlots) {
+        await addDoc(collection(db, 'imageSlots'), slot);
+      }
     }
 
   } catch (err) {
