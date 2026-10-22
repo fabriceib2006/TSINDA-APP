@@ -102,16 +102,157 @@ function parseRwandanPhone(phone: string): { normalizedPhone: string; network: '
   }
 
   return {
-    normalizedPhone: `0${clean}`,
+    normalizedPhone: `250${clean}`,
     network,
   };
 }
 
+// Helper to query Paypack directly for transaction status
+async function fetchPaypackTransaction(ref: string): Promise<{
+  found: boolean;
+  status: 'pending' | 'successful' | 'failed' | 'unknown';
+  amount?: number;
+  client?: string;
+  failureReason?: string;
+  rawData?: any;
+}> {
+  if (!ref || ref.startsWith('TEST_MOMO_')) {
+    return { found: false, status: 'unknown' };
+  }
+
+  let token = '';
+  try {
+    token = await getPaypackToken();
+  } catch (err: any) {
+    console.warn('Cannot query Paypack: token acquisition failed:', err.message);
+    return { found: false, status: 'unknown' };
+  }
+
+  // 1. Try GET /transactions/find/:ref
+  try {
+    const res = await axios.get(`${PAYPACK_BASE_URL}/transactions/find/${encodeURIComponent(ref)}`, {
+      headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
+      timeout: 10000,
+    });
+    const tx = res.data?.data || res.data;
+    if (tx) {
+      const rawStatus = String(tx.status || '').toLowerCase();
+      let status: 'pending' | 'successful' | 'failed' | 'unknown' = 'unknown';
+      if (rawStatus === 'successful' || rawStatus === 'success') status = 'successful';
+      else if (rawStatus === 'failed' || rawStatus === 'cancelled' || rawStatus === 'declined' || rawStatus === 'rejected') status = 'failed';
+      else if (rawStatus === 'pending' || rawStatus === 'processing' || rawStatus === 'queued') status = 'pending';
+
+      return {
+        found: true,
+        status,
+        amount: Number(tx.amount) || undefined,
+        client: tx.client || tx.number,
+        failureReason: tx.failure_reason || tx.message || undefined,
+        rawData: tx,
+      };
+    }
+  } catch (err: any) {
+    // Fallback to transaction list
+  }
+
+  // 2. Try GET /transactions/list?offset=0&limit=50
+  try {
+    const listRes = await axios.get(`${PAYPACK_BASE_URL}/transactions/list?offset=0&limit=50`, {
+      headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
+      timeout: 12000,
+    });
+    const transactions = listRes.data?.transactions || [];
+    const match = transactions.find((t: any) => (t.ref === ref || t.data?.ref === ref));
+    if (match) {
+      const tx = match.data || match;
+      const rawStatus = String(tx.status || '').toLowerCase();
+      let status: 'pending' | 'successful' | 'failed' | 'unknown' = 'unknown';
+      if (rawStatus === 'successful' || rawStatus === 'success') status = 'successful';
+      else if (rawStatus === 'failed' || rawStatus === 'cancelled' || rawStatus === 'declined' || rawStatus === 'rejected') status = 'failed';
+      else if (rawStatus === 'pending' || rawStatus === 'processing') status = 'pending';
+
+      return {
+        found: true,
+        status,
+        amount: Number(tx.amount) || undefined,
+        client: tx.client,
+        failureReason: tx.failure_reason,
+        rawData: tx,
+      };
+    }
+  } catch (err: any) {
+    // Fallback to firestore paypackEvents
+  }
+
+  // 3. Check paypackEvents collection in Firestore
+  try {
+    const eventSnap = await db.collection('paypackEvents')
+      .where('payload.data.ref', '==', ref)
+      .limit(1)
+      .get();
+    if (!eventSnap.empty) {
+      const evData = eventSnap.docs[0].data()?.payload?.data || {};
+      const rawStatus = String(evData.status || '').toLowerCase();
+      let status: 'pending' | 'successful' | 'failed' | 'unknown' = 'unknown';
+      if (rawStatus === 'successful' || rawStatus === 'success') status = 'successful';
+      else if (rawStatus === 'failed' || rawStatus === 'cancelled' || rawStatus === 'declined') status = 'failed';
+      else if (rawStatus === 'pending') status = 'pending';
+
+      return {
+        found: true,
+        status,
+        amount: Number(evData.amount) || undefined,
+        client: evData.client,
+        failureReason: evData.failure_reason,
+        rawData: evData,
+      };
+    }
+  } catch (err: any) {
+    // ignore
+  }
+
+  return { found: false, status: 'unknown' };
+}
+
 // Helper to complete successful payment and create subscription in one transaction
+async function processReferralReward(transaction: FirebaseFirestore.Transaction, userId: string, paymentId: string, amount: number) {
+  const referralSettings = await transaction.get(db.collection('siteSettings').doc('referral'));
+  if (!referralSettings.exists || !referralSettings.data()?.active) return;
+  const { pointsPercent, pointValueRwf } = referralSettings.data()!;
+
+  const userDoc = await transaction.get(db.collection('users').doc(userId));
+  const referredBy = userDoc.data()?.referredBy;
+  if (!referredBy) return;
+
+  // Idempotency: check if already rewarded for this payment
+  const rewardRef = db.collection('referralRewards').doc(paymentId);
+  const rewardDoc = await transaction.get(rewardRef);
+  if (rewardDoc.exists) return;
+
+  const points = Math.floor((amount * (pointsPercent / 100)) / pointValueRwf);
+  if (points <= 0) return;
+
+  transaction.set(rewardRef, {
+    paymentId,
+    referrerId: referredBy,
+    referredUserId: userId,
+    points,
+    timestamp: FieldValue.serverTimestamp()
+  });
+
+  transaction.set(db.collection('users').doc(referredBy).collection('pointsLedger').doc(), {
+    type: 'earn',
+    points,
+    paymentId,
+    timestamp: FieldValue.serverTimestamp()
+  });
+}
+
 async function processSuccessfulPayment(paymentDocSnapshot: FirebaseFirestore.DocumentSnapshot, reportedAmount?: number) {
   const paymentRef = paymentDocSnapshot.ref;
 
   await db.runTransaction(async (transaction) => {
+    // 1. ALL READS FIRST
     const curDoc = await transaction.get(paymentRef);
     const paymentData = curDoc.data();
     if (!paymentData) return;
@@ -122,7 +263,13 @@ async function processSuccessfulPayment(paymentDocSnapshot: FirebaseFirestore.Do
       return;
     }
 
-    // Blocking amount check: compare Paypack's reported amount with amount recorded in payment record
+    const planRef = paymentData.planId ? db.collection('plans').doc(paymentData.planId) : null;
+    const planDoc = planRef ? await transaction.get(planRef) : null;
+    const existingSubsSnap = paymentData.userId 
+      ? await transaction.get(db.collection('subscriptions').where('userId', '==', paymentData.userId)) 
+      : null;
+
+    // 2. IN-MEMORY CHECKS & COMPUTATIONS
     const recordedAmount = Number(paymentData.amount);
     if (reportedAmount !== undefined && reportedAmount !== null && Number(reportedAmount) !== recordedAmount) {
       console.warn(`Amount mismatch for payment ${curDoc.id}: reported ${reportedAmount}, expected ${recordedAmount}`);
@@ -136,8 +283,7 @@ async function processSuccessfulPayment(paymentDocSnapshot: FirebaseFirestore.Do
       return;
     }
 
-    const planDoc = await transaction.get(db.collection('plans').doc(paymentData.planId));
-    if (!planDoc.exists) {
+    if (!planDoc || !planDoc.exists) {
       console.error(`Plan ${paymentData.planId} not found when activating payment ${curDoc.id}`);
       transaction.update(paymentRef, {
         status: 'needsReview',
@@ -149,43 +295,45 @@ async function processSuccessfulPayment(paymentDocSnapshot: FirebaseFirestore.Do
     }
     const plan = planDoc.data()!;
 
-    const durationDays = Number(plan.durationDays) || 30;
+    const isStudyPlan = Boolean(plan.access?.trafficRules || plan.access?.lessonVideos);
+    const durationDays = isStudyPlan ? (Number(plan.durationDays) || 30) : 0;
     const serverNow = new Date();
 
-    // Check if user has an active unexpired subscription
-    const existingSubsSnap = await transaction.get(
-      db.collection('subscriptions')
-        .where('userId', '==', paymentData.userId)
-        .where('status', '==', 'active')
-    );
-
-    let latestEndDate = serverNow;
-    let hasActivePlan = false;
-    existingSubsSnap.docs.forEach(d => {
-      const sub = d.data();
-      const end = new Date(sub.endDate);
-      if (end > serverNow) {
-        hasActivePlan = true;
-        if (end > latestEndDate) {
-          latestEndDate = end;
-        }
-      }
-    });
-
-    let startDate: Date;
-    let endDate: Date;
+    let startDate: Date = serverNow;
+    let endDate: Date | null = null;
     let needsReview = false;
     let reviewReason: string | null = null;
 
-    if (hasActivePlan) {
-      // Chaining after an active plan is only a safety net and must set needsReview true
-      startDate = latestEndDate;
-      endDate = new Date(startDate.getTime() + durationDays * 24 * 60 * 60 * 1000);
-      needsReview = true;
-      reviewReason = `Chained after active subscription ending at ${latestEndDate.toISOString()}`;
+    if (isStudyPlan) {
+      let latestEndDate = serverNow;
+      let hasActivePlan = false;
+      if (existingSubsSnap) {
+        existingSubsSnap.docs.forEach(d => {
+          const sub = d.data();
+          if (sub.status !== 'active') return;
+          const isExistingStudy = Boolean(sub.access?.trafficRules || sub.access?.lessonVideos);
+          if (!isExistingStudy) return; // ignore exam packs when chaining study plans
+          const end = sub.endDate ? new Date(sub.endDate) : null;
+          if (end && end > serverNow) {
+            hasActivePlan = true;
+            if (end > latestEndDate) {
+              latestEndDate = end;
+            }
+          }
+        });
+      }
+
+      if (hasActivePlan) {
+        startDate = latestEndDate;
+        endDate = new Date(startDate.getTime() + durationDays * 24 * 60 * 60 * 1000);
+        needsReview = true;
+        reviewReason = `Chained after active subscription ending at ${latestEndDate.toISOString()}`;
+      } else {
+        endDate = new Date(startDate.getTime() + durationDays * 24 * 60 * 60 * 1000);
+      }
     } else {
-      startDate = serverNow;
-      endDate = new Date(startDate.getTime() + durationDays * 24 * 60 * 60 * 1000);
+      // Exam-only plans have no expiry date (null endDate)
+      endDate = null;
     }
 
     const subRef = db.collection('subscriptions').doc();
@@ -197,13 +345,13 @@ async function processSuccessfulPayment(paymentDocSnapshot: FirebaseFirestore.Do
       price: recordedAmount,
       durationDays,
       startDate: startDate.toISOString(),
-      endDate: endDate.toISOString(),
+      endDate: endDate ? endDate.toISOString() : null,
       access: {
         trafficRules: Boolean(plan.access?.trafficRules),
         lessonVideos: Boolean(plan.access?.lessonVideos),
         exams: Boolean(plan.access?.exams),
       },
-      examLimit: plan.examLimit ?? null,
+      examLimit: isStudyPlan ? null : (plan.examLimit ?? 5),
       examsUsed: 0,
       status: 'active',
       source: 'payment',
@@ -215,8 +363,40 @@ async function processSuccessfulPayment(paymentDocSnapshot: FirebaseFirestore.Do
     };
 
     transaction.set(subRef, subData);
+
+    // Sync to users/{userId}/purchases/{subId} for exam and learner access consistency
+    const userPurchaseRef = db.collection('users').doc(paymentData.userId).collection('purchases').doc(subRef.id);
+    const purchaseData = {
+      id: subRef.id,
+      type: 'plan',
+      planId: paymentData.planId,
+      planName: paymentData.planName,
+      amount: recordedAmount,
+      status: 'active',
+      access: subData.access,
+      examLimit: subData.examLimit,
+      examsUsed: 0,
+      startDate: subData.startDate,
+      expiresAt: subData.endDate,
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    };
+    transaction.set(userPurchaseRef, purchaseData);
+
+    // Sync to users/{userId}/access/current
+    const userAccessRef = db.collection('users').doc(paymentData.userId).collection('access').doc('current');
+    transaction.set(userAccessRef, {
+      planName: paymentData.planName,
+      lessonsUntil: (subData.access.trafficRules && endDate) ? Timestamp.fromDate(endDate) : null,
+      videosUntil: (subData.access.lessonVideos && endDate) ? Timestamp.fromDate(endDate) : null,
+      examsUntil: (subData.access.exams && endDate) ? Timestamp.fromDate(endDate) : null,
+      examCredits: isStudyPlan ? null : subData.examLimit,
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+
     transaction.update(paymentRef, {
       status: needsReview ? 'needsReview' : 'successful',
+      paypackStatus: 'successful',
       subscriptionId: subRef.id,
       needsReview,
       reviewReason,
@@ -480,38 +660,720 @@ async function startServer() {
   app.all('/api/paypack/webhook', handleWebhook);
 
   // ==========================================
+  // API: GET PLANS
+  // ==========================================
+  app.get('/api/plans', async (_req: Request, res: Response) => {
+    try {
+      const snap = await db.collection('plans').get();
+      if (!snap.empty) {
+        const plans = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        return res.json({ plans });
+      }
+    } catch (err) {
+      console.warn('Error fetching plans from firestore in /api/plans:', err);
+    }
+
+    const fallbackPlans = [
+      {
+        id: 'plan_30_days_pro',
+        name: { rw: "Pro Ukwezi Kose", en: "30-Day Pro Pass", fr: "Pass Pro 30 Jours" },
+        description: { rw: "Amategeko y'umuhanda yose, amashusho na simulations z'ibizamini.", en: "Full rules, lesson videos, and unlimited mock exams.", fr: "Règles, vidéos et examens blancs illimités." },
+        price: 2000,
+        durationDays: 30,
+        access: { lessonVideos: true, trafficRules: true, exams: true },
+        examLimit: null,
+        isActive: true,
+        sortOrder: 1
+      },
+      {
+        id: 'plan_14_days_standard',
+        name: { rw: "Ibyumweru 2 Standard", en: "14-Day Standard Pass", fr: "Pass Standard 14 Jours" },
+        description: { rw: "Amategeko y'umuhanda n'ibizamini 15 byo kwitoza.", en: "Traffic rules and 15 complete mock exam attempts.", fr: "Règles et 15 examens blancs complets." },
+        price: 1500,
+        durationDays: 14,
+        access: { lessonVideos: false, trafficRules: true, exams: true },
+        examLimit: 15,
+        isActive: true,
+        sortOrder: 2
+      },
+      {
+        id: 'plan_7_days_theory',
+        name: { rw: "Amategeko n'Amashusho", en: "7-Day Video Theory Pass", fr: "Pass Théorie 7 Jours" },
+        description: { rw: "Amategeko yose y'umuhanda n'amashusho yose asobanura.", en: "Access all traffic rules and interactive video explanations.", fr: "Accès à toutes les règles du code." },
+        price: 1000,
+        durationDays: 7,
+        access: { lessonVideos: true, trafficRules: true, exams: false },
+        examLimit: null,
+        isActive: true,
+        sortOrder: 3
+      }
+    ];
+
+    return res.json({ plans: fallbackPlans });
+  });
+
+  // ==========================================
+  // API: INITIATE PAYMENT (Express route: /api/payments/create & /api/payments/start)
+  // ==========================================
+  const handlePaymentCreate = async (req: Request, res: Response) => {
+    const auth = await verifyAuth(req);
+    if (!auth) return res.status(401).json({ error: 'Unauthorized: Please sign in to initiate payment.' });
+    const { uid, email } = auth;
+
+    try {
+      const { planId, phone } = req.body || {};
+      if (!planId || typeof planId !== 'string') {
+        return res.status(400).json({ error: 'Missing or invalid planId' });
+      }
+      if (!phone || typeof phone !== 'string') {
+        return res.status(400).json({ error: 'Missing or invalid phone number' });
+      }
+
+      const { normalizedPhone, network } = parseRwandanPhone(phone);
+
+      const planDoc = await db.collection('plans').doc(planId).get();
+      if (!planDoc.exists) {
+        return res.status(404).json({ error: 'Selected subscription plan does not exist.' });
+      }
+      const planData = planDoc.data()!;
+      if (!planData.isActive) {
+        return res.status(400).json({ error: 'Selected plan is currently inactive.' });
+      }
+      const planPrice = Number(planData.price);
+      if (!planPrice || planPrice <= 0) {
+        return res.status(400).json({ error: 'Invalid plan price configured.' });
+      }
+
+      // Check active unexpired study plan
+      // Only A student with an ACTIVE study plan cannot buy another study plan (409 STUDY_PLAN_ACTIVE) until it expires.
+      // They may buy Exam Packs anytime!
+      const wantsStudyPlan = Boolean(planData.access?.trafficRules || planData.access?.lessonVideos);
+      const serverNow = new Date();
+      const userSubsSnap = await db.collection('subscriptions')
+        .where('userId', '==', uid)
+        .get();
+
+      if (wantsStudyPlan) {
+        const activeSubDoc = userSubsSnap.docs.find(d => {
+          const sub = d.data();
+          if (sub.status !== 'active') return false;
+          const isStudy = Boolean(sub.access?.trafficRules || sub.access?.lessonVideos);
+          if (!isStudy) return false;
+          const end = sub.endDate ? new Date(sub.endDate) : null;
+          return end && end > serverNow;
+        });
+
+        if (activeSubDoc) {
+          const activeSub = activeSubDoc.data();
+          return res.status(409).json({
+            error: 'STUDY_PLAN_ACTIVE',
+            code: 'STUDY_PLAN_ACTIVE',
+            message: `You already have an active study plan expiring on ${activeSub.endDate}. New study plans cannot be purchased until the active one expires.`,
+            expiresAt: activeSub.endDate,
+            planName: activeSub.planName || 'Active Study Plan'
+          });
+        }
+      }
+
+      // Check pending payments (last 3 minutes)
+      // Query by userId only and filter in memory so Firestore NEVER requires a composite index
+      const userPaymentsSnap = await db.collection('payments')
+        .where('userId', '==', uid)
+        .get();
+
+      const threeMinAgoMs = Date.now() - 3 * 60 * 1000;
+      const recentPendingPayment = userPaymentsSnap.docs.find(doc => {
+        const d = doc.data();
+        if (d.status !== 'pending') return false;
+        const createdDate = d.createdAt
+          ? (typeof d.createdAt.toDate === 'function' ? d.createdAt.toDate() : new Date(d.createdAt))
+          : null;
+        return createdDate && createdDate.getTime() >= threeMinAgoMs;
+      });
+
+      if (recentPendingPayment) {
+        return res.status(409).json({
+          code: 'PENDING_PAYMENT_EXISTS',
+          error: 'A pending payment is already in progress. Please approve on your phone.'
+        });
+      }
+
+      const clientId = getSecret('PAYPACK_CLIENT_ID');
+      const clientSecret = getSecret('PAYPACK_CLIENT_SECRET');
+      const isConfigured = isSecretConfigured(clientId) && isSecretConfigured(clientSecret);
+
+      let paypackRef: string;
+      let isSandbox = !isConfigured;
+
+      if (isConfigured) {
+        try {
+          const token = await getPaypackToken();
+          const cashinRes = await axios.post(
+            `${PAYPACK_BASE_URL}/transactions/cashin`,
+            { amount: planPrice, number: normalizedPhone },
+            {
+              headers: {
+                'Content-Type': 'application/json',
+                Accept: 'application/json',
+                Authorization: `Bearer ${token}`
+              },
+              timeout: 20000
+            }
+          );
+          paypackRef = cashinRes.data?.ref || cashinRes.data?.data?.ref;
+          if (!paypackRef) {
+            throw new Error('Paypack response did not include a valid transaction reference');
+          }
+        } catch (apiErr: any) {
+          console.error('Paypack API call failed:', apiErr?.response?.data || apiErr?.message);
+          const errMsg = apiErr?.response?.data?.message || apiErr?.message || '';
+          if (errMsg.toLowerCase().includes('testing mode') || errMsg.toLowerCase().includes('sandbox') || errMsg.toLowerCase().includes('not found for testing')) {
+            paypackRef = 'TEST_MOMO_' + Math.random().toString(36).substring(2, 12).toUpperCase();
+            isSandbox = true;
+          } else {
+            throw new Error('Payment initiation failed: ' + (errMsg || 'Paypack API error'));
+          }
+        }
+      } else {
+        // Merchant credentials not present (no hard bank account): use sandbox simulation
+        paypackRef = 'TEST_MOMO_' + Math.random().toString(36).substring(2, 12).toUpperCase();
+      }
+
+      let planNameString = 'Subscription Pass';
+      if (typeof planData.name === 'object' && planData.name !== null) {
+        planNameString = planData.name.en || planData.name.rw || planData.name.fr || 'Subscription Pass';
+      } else if (typeof planData.name === 'string') {
+        planNameString = planData.name;
+      }
+
+      const paymentRef = db.collection('payments').doc();
+      const paymentRecord = {
+        id: paymentRef.id,
+        paypackRef,
+        userId: uid,
+        userEmail: email || '',
+        planId,
+        planName: planNameString,
+        amount: planPrice,
+        phone: normalizedPhone,
+        network,
+        kind: 'cashin',
+        status: 'pending',
+        paypackStatus: isSandbox ? 'sandbox' : 'pending',
+        isSandbox,
+        subscriptionId: null,
+        failureReason: null,
+        createdAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      };
+
+      await paymentRef.set(paymentRecord);
+
+      return res.json({
+        success: true,
+        paymentId: paymentRef.id,
+        paypackRef,
+        amount: planPrice,
+        phone: normalizedPhone,
+        network,
+        isSandbox,
+      });
+    } catch (err: any) {
+      console.error('Payment start failed:', err);
+      return res.status(500).json({ error: err.message || 'Payment initiation failed' });
+    }
+  };
+
+  app.post('/api/payments/create', handlePaymentCreate);
+  app.post('/api/payments/start', handlePaymentCreate);
+
+  // Admin manual approval endpoint (for verifying offline/direct MoMo transfers or admin grants)
+  app.post('/api/payments/admin-approve', async (req: Request, res: Response) => {
+    const auth = await verifyAuth(req);
+    if (!auth) return res.status(401).json({ error: 'Unauthorized: Sign in required.' });
+
+    // Verify admin role
+    const userDoc = await db.collection('users').doc(auth.uid).get();
+    const isAdmin = auth.email === 'fabriceib2006@gmail.com' || userDoc.data()?.role === 'admin';
+    if (!isAdmin) {
+      return res.status(403).json({ error: 'Forbidden: Only administrators can approve payments manually.' });
+    }
+
+    const { paymentId } = req.body || {};
+    if (!paymentId) return res.status(400).json({ error: 'Missing paymentId' });
+
+    try {
+      const pDoc = await db.collection('payments').doc(paymentId).get();
+      if (!pDoc.exists) return res.status(404).json({ error: 'Payment not found' });
+      const pData = pDoc.data()!;
+      if (pData.status === 'successful') {
+        return res.status(400).json({ error: 'Payment has already been approved.' });
+      }
+
+      await processSuccessfulPayment(pDoc, pData.amount);
+
+      // Check live Paypack status in background so admin sees what Paypack reported
+      if (pData.paypackRef && !pData.paypackRef.startsWith('TEST_MOMO_')) {
+        fetchPaypackTransaction(pData.paypackRef).then(txInfo => {
+          if (txInfo.found) {
+            pDoc.ref.update({
+              paypackStatus: txInfo.status,
+              lastPaypackCheckAt: FieldValue.serverTimestamp(),
+            }).catch(() => {});
+          }
+        }).catch(() => {});
+      }
+
+      return res.json({ success: true, message: 'Payment approved and subscription activated!' });
+    } catch (err: any) {
+      console.error('Admin approve failed:', err);
+      return res.status(500).json({ error: err.message || 'Failed to approve payment' });
+    }
+  });
+
+  // Check payment status with Paypack in real time
+  app.post('/api/payments/:id/check-status', async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      if (!id) return res.status(400).json({ error: 'Missing payment ID' });
+
+      // Look up payment by doc ID or paypackRef
+      let paymentDoc = await db.collection('payments').doc(id).get();
+      if (!paymentDoc.exists) {
+        const queryByRef = await db.collection('payments').where('paypackRef', '==', id).limit(1).get();
+        if (!queryByRef.empty) {
+          paymentDoc = queryByRef.docs[0];
+        } else {
+          return res.status(404).json({ error: 'Payment not found' });
+        }
+      }
+
+      const pData = paymentDoc.data()!;
+      const paypackRef = pData.paypackRef;
+
+      // Sandbox or test reference
+      if (pData.isSandbox || !paypackRef || paypackRef.startsWith('TEST_MOMO_')) {
+        return res.json({
+          success: true,
+          status: pData.status,
+          paypackStatus: pData.isSandbox ? 'sandbox' : (pData.paypackStatus || 'test'),
+          payment: { id: paymentDoc.id, ...pData }
+        });
+      }
+
+      // Query live Paypack API
+      const txInfo = await fetchPaypackTransaction(paypackRef);
+      const updates: any = {
+        lastPaypackCheckAt: FieldValue.serverTimestamp(),
+      };
+
+      if (txInfo.found) {
+        updates.paypackStatus = txInfo.status;
+        if (txInfo.failureReason) {
+          updates.failureReason = txInfo.failureReason;
+        }
+
+        if (txInfo.status === 'successful') {
+          if (pData.status !== 'successful') {
+            await processSuccessfulPayment(paymentDoc, txInfo.amount || pData.amount);
+          } else {
+            await paymentDoc.ref.update(updates);
+          }
+        } else if (txInfo.status === 'failed') {
+          if (pData.status === 'pending') {
+            updates.status = 'failed';
+          }
+          await paymentDoc.ref.update(updates);
+        } else if (txInfo.status === 'pending') {
+          await paymentDoc.ref.update(updates);
+        }
+      }
+
+      const freshDoc = await paymentDoc.ref.get();
+      const freshData = freshDoc.data()!;
+
+      return res.json({
+        success: true,
+        status: freshData.status,
+        paypackStatus: freshData.paypackStatus || txInfo.status,
+        failureReason: freshData.failureReason,
+        payment: { id: freshDoc.id, ...freshData }
+      });
+    } catch (err: any) {
+      console.error('Check payment status error:', err);
+      return res.status(500).json({ error: err.message || 'Failed to check status' });
+    }
+  });
+
+  // ==========================================
+  // API: ADMIN GRANT SUBSCRIPTION (/api/admin/grants & /api/admin/grant-subscription)
+  // ==========================================
+  const handleAdminGrant = async (req: Request, res: Response) => {
+    const auth = await verifyAuth(req);
+    if (!auth) return res.status(401).json({ error: 'Unauthorized: Sign in required.' });
+
+    // Verify admin role
+    const userDoc = await db.collection('users').doc(auth.uid).get();
+    const isAdmin = auth.email === 'fabriceib2006@gmail.com' || userDoc.data()?.role === 'admin';
+    if (!isAdmin) {
+      return res.status(403).json({ error: 'Forbidden: Only administrators can grant subscriptions.' });
+    }
+
+    const { targetUserId, userId: bodyUserId, planId, durationDays, customNotes } = req.body || {};
+    const effectiveUserId = targetUserId || bodyUserId;
+    if (!effectiveUserId || typeof effectiveUserId !== 'string') {
+      return res.status(400).json({ error: 'targetUserId is required' });
+    }
+    if (!planId || typeof planId !== 'string') {
+      return res.status(400).json({ error: 'planId is required' });
+    }
+
+    try {
+      const planDoc = await db.collection('plans').doc(planId).get();
+      if (!planDoc.exists) {
+        return res.status(404).json({ error: 'Subscription plan not found.' });
+      }
+      const plan = planDoc.data()!;
+      const isStudyPlan = Boolean(plan.access?.trafficRules || plan.access?.lessonVideos);
+      const now = new Date();
+
+      // Conflict Check: Only A student with an ACTIVE study plan cannot buy or be granted another study plan
+      if (isStudyPlan) {
+        const userSubsSnap = await db.collection('subscriptions')
+          .where('userId', '==', effectiveUserId)
+          .get();
+
+        const activeStudySub = userSubsSnap.docs.find(d => {
+          const s = d.data();
+          if (s.status !== 'active') return false;
+          const isExistingStudy = Boolean(s.access?.trafficRules || s.access?.lessonVideos);
+          if (!isExistingStudy) return false;
+          const end = s.endDate ? new Date(s.endDate) : null;
+          return end && end > now;
+        });
+
+        if (activeStudySub) {
+          const activeSubData = activeStudySub.data();
+          return res.status(409).json({
+            error: 'STUDY_PLAN_ACTIVE',
+            code: 'STUDY_PLAN_ACTIVE',
+            message: `User already has an active study plan expiring on ${activeSubData.endDate}. Another study plan cannot be granted until the active one expires.`,
+            expiresAt: activeSubData.endDate,
+            planName: activeSubData.planName || 'Active Study Plan'
+          });
+        }
+      }
+
+      const days = isStudyPlan ? (Number(durationDays) || Number(plan.durationDays) || 30) : 0;
+      const validityDays = isStudyPlan ? days : null;
+      const startDate = now.toISOString();
+      const endDate = isStudyPlan 
+        ? new Date(now.getTime() + days * 24 * 60 * 60 * 1000).toISOString()
+        : null; // Exams-only plans have NO validity (null = none)
+
+      let planNameStr = 'Standard Pass';
+      if (typeof plan.name === 'string') {
+        planNameStr = plan.name;
+      } else if (plan.name && typeof plan.name === 'object') {
+        planNameStr = plan.name.en || plan.name.rw || plan.name.fr || 'Standard Pass';
+      }
+
+      const subRef = db.collection('subscriptions').doc();
+      const subData = {
+        id: subRef.id,
+        userId: effectiveUserId,
+        planId: planId,
+        planName: planNameStr,
+        price: Number(plan.price) || 0,
+        durationDays: days,
+        validityDays,
+        startDate,
+        endDate,
+        access: {
+          trafficRules: Boolean(plan.access?.trafficRules),
+          lessonVideos: Boolean(plan.access?.lessonVideos),
+          exams: Boolean(plan.access?.exams),
+        },
+        examLimit: isStudyPlan ? null : (plan.examLimit !== undefined && plan.examLimit !== null ? Number(plan.examLimit) : 5),
+        examsUsed: 0,
+        status: 'active',
+        source: 'admin_grant',
+        grantedBy: auth.email || auth.uid,
+        createdAt: startDate,
+        notes: customNotes || 'Granted manually by admin',
+      };
+
+      await subRef.set(subData);
+
+      // Sync to users/{effectiveUserId}/purchases/{subId}
+      const userPurchaseRef = db.collection('users').doc(effectiveUserId).collection('purchases').doc(subRef.id);
+      await userPurchaseRef.set({
+        id: subRef.id,
+        type: 'plan',
+        planId: planId,
+        planName: planNameStr,
+        amount: Number(plan.price) || 0,
+        status: 'active',
+        access: subData.access,
+        examLimit: subData.examLimit,
+        examsUsed: 0,
+        validityDays,
+        startDate: subData.startDate,
+        expiresAt: subData.endDate,
+        createdAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+
+      // Sync to users/{effectiveUserId}/access/current
+      const userAccessRef = db.collection('users').doc(effectiveUserId).collection('access').doc('current');
+      await userAccessRef.set({
+        planName: planNameStr,
+        lessonsUntil: (subData.access.trafficRules && endDate) ? Timestamp.fromDate(new Date(endDate)) : null,
+        videosUntil: (subData.access.lessonVideos && endDate) ? Timestamp.fromDate(new Date(endDate)) : null,
+        examsUntil: (subData.access.exams && endDate) ? Timestamp.fromDate(new Date(endDate)) : null,
+        examCredits: subData.examLimit,
+        updatedAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
+
+      // Log in adminLogs
+      await db.collection('adminLogs').add({
+        adminId: auth.uid,
+        adminEmail: auth.email || '',
+        targetUserId: effectiveUserId,
+        action: 'grant_subscription',
+        planId,
+        planName: planNameStr,
+        durationDays: days,
+        timestamp: startDate,
+      }).catch(logErr => console.warn('Failed to record admin log:', logErr));
+
+      return res.json({
+        success: true,
+        message: `Successfully granted "${planNameStr}" (${isStudyPlan ? `${days} days` : 'Exam Pack - No Expiration'}) to learner.`,
+        subscription: subData,
+      });
+    } catch (err: any) {
+      console.error('Admin grant subscription error:', err);
+      return res.status(500).json({ error: err.message || 'Failed to grant subscription' });
+    }
+  };
+
+  app.post('/api/admin/grants', handleAdminGrant);
+  app.post('/api/admin/grant-subscription', handleAdminGrant);
+
+  // ==========================================
+  // API: ADMIN CANCEL SUBSCRIPTION & RESET EXAMS
+  // ==========================================
+  app.post('/api/admin/subscriptions/:subId/cancel', async (req: Request, res: Response) => {
+    const auth = await verifyAuth(req);
+    if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+    const userDoc = await db.collection('users').doc(auth.uid).get();
+    const isAdmin = auth.email === 'fabriceib2006@gmail.com' || userDoc.data()?.role === 'admin';
+    if (!isAdmin) return res.status(403).json({ error: 'Forbidden' });
+
+    const { subId } = req.params;
+    try {
+      const subRef = db.collection('subscriptions').doc(subId);
+      const subDoc = await subRef.get();
+      if (!subDoc.exists) return res.status(404).json({ error: 'Subscription not found' });
+      const subData = subDoc.data()!;
+      const userId = subData.userId;
+
+      await subRef.update({
+        status: 'cancelled',
+        updatedAt: FieldValue.serverTimestamp()
+      });
+
+      if (userId) {
+        const userPurchaseRef = db.collection('users').doc(userId).collection('purchases').doc(subId);
+        await userPurchaseRef.set({ status: 'cancelled', updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+
+        // Recompute user access
+        const purchasesSnap = await db.collection('users').doc(userId).collection('purchases').get();
+        const subsSnap = await db.collection('subscriptions').where('userId', '==', userId).get();
+        const allPurchases = [...purchasesSnap.docs.map(d => ({ id: d.id, ...d.data() }))];
+        for (const sD of subsSnap.docs) {
+          const s = sD.data();
+          if (sD.id === subId) s.status = 'cancelled';
+          if (!allPurchases.some(p => p.id === sD.id || p.planId === s.planId)) {
+            allPurchases.push({ id: sD.id, ...s });
+          }
+        }
+        const newAccess = computeAccess(allPurchases);
+        await db.collection('users').doc(userId).collection('access').doc('current').set({
+          planName: newAccess.planName,
+          lessonsUntil: newAccess.lessonsUntil,
+          videosUntil: newAccess.videosUntil,
+          examsUntil: newAccess.examsUntil,
+          examCredits: newAccess.examCredits,
+          examsUsed: newAccess.examsUsed,
+          totalExamsAllowed: newAccess.totalExamsAllowed,
+          updatedAt: FieldValue.serverTimestamp()
+        }, { merge: true });
+      }
+
+      await db.collection('adminLogs').add({
+        adminId: auth.uid,
+        adminEmail: auth.email || '',
+        targetUserId: userId,
+        action: 'cancel_subscription',
+        subId,
+        timestamp: new Date().toISOString()
+      }).catch(() => {});
+
+      return res.json({ success: true, message: 'Subscription cancelled successfully.' });
+    } catch (err: any) {
+      console.error('Cancel subscription error:', err);
+      return res.status(500).json({ error: err.message || 'Failed to cancel subscription' });
+    }
+  });
+
+  app.post('/api/admin/subscriptions/:subId/reset-exams', async (req: Request, res: Response) => {
+    const auth = await verifyAuth(req);
+    if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+    const userDoc = await db.collection('users').doc(auth.uid).get();
+    const isAdmin = auth.email === 'fabriceib2006@gmail.com' || userDoc.data()?.role === 'admin';
+    if (!isAdmin) return res.status(403).json({ error: 'Forbidden' });
+
+    const { subId } = req.params;
+    try {
+      const subRef = db.collection('subscriptions').doc(subId);
+      const subDoc = await subRef.get();
+      if (!subDoc.exists) return res.status(404).json({ error: 'Subscription not found' });
+      const subData = subDoc.data()!;
+      const userId = subData.userId;
+
+      await subRef.update({
+        examsUsed: 0,
+        updatedAt: FieldValue.serverTimestamp()
+      });
+
+      if (userId) {
+        const userPurchaseRef = db.collection('users').doc(userId).collection('purchases').doc(subId);
+        await userPurchaseRef.set({ examsUsed: 0, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+
+        // Recompute user access
+        const purchasesSnap = await db.collection('users').doc(userId).collection('purchases').get();
+        const subsSnap = await db.collection('subscriptions').where('userId', '==', userId).get();
+        const allPurchases = [...purchasesSnap.docs.map(d => ({ id: d.id, ...d.data() }))];
+        for (const sD of subsSnap.docs) {
+          const s = sD.data();
+          if (sD.id === subId) s.examsUsed = 0;
+          if (!allPurchases.some(p => p.id === sD.id || p.planId === s.planId)) {
+            allPurchases.push({ id: sD.id, ...s });
+          }
+        }
+        const newAccess = computeAccess(allPurchases);
+        await db.collection('users').doc(userId).collection('access').doc('current').set({
+          planName: newAccess.planName,
+          lessonsUntil: newAccess.lessonsUntil,
+          videosUntil: newAccess.videosUntil,
+          examsUntil: newAccess.examsUntil,
+          examCredits: newAccess.examCredits,
+          examsUsed: newAccess.examsUsed,
+          totalExamsAllowed: newAccess.totalExamsAllowed,
+          updatedAt: FieldValue.serverTimestamp()
+        }, { merge: true });
+      }
+
+      await db.collection('adminLogs').add({
+        adminId: auth.uid,
+        adminEmail: auth.email || '',
+        targetUserId: userId,
+        action: 'reset_exams',
+        subId,
+        timestamp: new Date().toISOString()
+      }).catch(() => {});
+
+      return res.json({ success: true, message: 'Exam counts reset successfully.' });
+    } catch (err: any) {
+      console.error('Reset exams error:', err);
+      return res.status(500).json({ error: err.message || 'Failed to reset exam counts' });
+    }
+  });
+
+  // ==========================================
   // API: SYNC WITH PAYPACK
   // ==========================================
   app.post('/api/paypack/sync', async (_req: Request, res: Response) => {
     try {
-      const token = await getPaypackToken();
-      const response = await axios.get(`${PAYPACK_BASE_URL}/transactions/list?offset=0&limit=50`, {
-        headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
-        timeout: 15000,
-      });
+      let transactions: any[] = [];
+      try {
+        const token = await getPaypackToken();
+        const response = await axios.get(`${PAYPACK_BASE_URL}/transactions/list?offset=0&limit=50`, {
+          headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
+          timeout: 15000,
+        });
+        transactions = response.data?.transactions || [];
+      } catch (tokenErr: any) {
+        console.warn('Sync transactions list warning:', tokenErr.message);
+      }
 
-      const transactions = response.data?.transactions || [];
       let updatedCount = 0;
 
+      // 1. Process latest transactions from Paypack
       for (const item of transactions) {
         const ref = item.ref || item.data?.ref;
-        const status = String(item.status || item.data?.status || '').toLowerCase();
+        const rawStatus = String(item.status || item.data?.status || '').toLowerCase();
         if (!ref) continue;
+
+        let status = 'unknown';
+        if (rawStatus === 'successful' || rawStatus === 'success') status = 'successful';
+        else if (rawStatus === 'failed' || rawStatus === 'cancelled' || rawStatus === 'declined' || rawStatus === 'rejected') status = 'failed';
+        else if (rawStatus === 'pending' || rawStatus === 'processing') status = 'pending';
 
         const query = await db.collection('payments').where('paypackRef', '==', ref).limit(1).get();
         if (!query.empty) {
           const pDoc = query.docs[0];
           const pData = pDoc.data();
-          if (pData.status !== 'successful' && (status === 'successful' || status === 'success')) {
+          if (pData.status !== 'successful' && status === 'successful') {
             await processSuccessfulPayment(pDoc, item.amount);
             updatedCount++;
           } else if (pData.status === 'pending' && status === 'failed') {
             await pDoc.ref.update({
               status: 'failed',
+              paypackStatus: 'failed',
               failureReason: item.failure_reason || 'Failed in Paypack',
               updatedAt: FieldValue.serverTimestamp(),
             });
             updatedCount++;
+          } else if (pData.paypackStatus !== status) {
+            await pDoc.ref.update({
+              paypackStatus: status,
+              lastPaypackCheckAt: FieldValue.serverTimestamp(),
+            });
+          }
+        }
+      }
+
+      // 2. Also check any pending payments in Firestore with paypackRef
+      const pendingSnap = await db.collection('payments')
+        .where('status', '==', 'pending')
+        .limit(25)
+        .get();
+
+      for (const pDoc of pendingSnap.docs) {
+        const pData = pDoc.data();
+        if (pData.paypackRef && !pData.paypackRef.startsWith('TEST_MOMO_')) {
+          const txInfo = await fetchPaypackTransaction(pData.paypackRef);
+          if (txInfo.found) {
+            if (txInfo.status === 'successful') {
+              await processSuccessfulPayment(pDoc, txInfo.amount || pData.amount);
+              updatedCount++;
+            } else if (txInfo.status === 'failed') {
+              await pDoc.ref.update({
+                status: 'failed',
+                paypackStatus: 'failed',
+                failureReason: txInfo.failureReason || 'Declined or timed out in Paypack',
+                updatedAt: FieldValue.serverTimestamp(),
+              });
+              updatedCount++;
+            } else if (txInfo.status === 'pending') {
+              await pDoc.ref.update({
+                paypackStatus: 'pending',
+                lastPaypackCheckAt: FieldValue.serverTimestamp(),
+              });
+            }
           }
         }
       }
@@ -520,6 +1382,790 @@ async function startServer() {
     } catch (err: any) {
       console.error('Sync failed:', err);
       res.status(500).json({ error: err.message || 'Sync failed' });
+    }
+  });
+
+  // ==========================================
+  // API: EXAM ENDPOINTS
+  // ==========================================
+  app.get('/api/exams/settings', async (req: Request, res: Response) => {
+    try {
+      const settingsDoc = await db.collection('examSettings').doc('global-settings').get();
+      if (!settingsDoc.exists) return res.status(500).json({ error: 'Settings missing' });
+      res.json(settingsDoc.data());
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  function computeAccess(rawPurchases: any[]) {
+    const now = new Date();
+    let latestLessonsUntil: Date | null = null;
+    let latestVideosUntil: Date | null = null;
+    let latestExamsUntil: Date | null = null;
+    let totalExamCredits: number | null = 0;
+    let totalExamsAllowed: number | null = 0;
+    let totalExamsUsed: number = 0;
+    let hasUnlimitedExams = false;
+    let hasStudyPass = false;
+    let activePlanName: any = null;
+
+    for (const p of rawPurchases) {
+      if (p.status !== 'active' && p.status !== undefined) continue;
+      const isStudy = Boolean(
+        p.access?.trafficRules ||
+        p.access?.lessonVideos ||
+        p.features?.lessons ||
+        p.features?.videos
+      );
+
+      let expiresAt: Date | null = null;
+      if (p.expiresAt) {
+        expiresAt = typeof p.expiresAt.toDate === 'function' ? p.expiresAt.toDate() : new Date(p.expiresAt);
+      } else if (p.endDate) {
+        expiresAt = typeof p.endDate.toDate === 'function' ? p.endDate.toDate() : new Date(p.endDate);
+      } else if (p.validityDays && p.startDate) {
+        const start = typeof p.startDate.toDate === 'function' ? p.startDate.toDate() : new Date(p.startDate);
+        expiresAt = new Date(start.getTime() + Number(p.validityDays) * 24 * 3600 * 1000);
+      }
+
+      if (isStudy) {
+        if (!expiresAt || expiresAt > now) {
+          hasStudyPass = true;
+          hasUnlimitedExams = true;
+          if (p.access?.trafficRules || p.features?.lessons) {
+            if (!latestLessonsUntil || (expiresAt && expiresAt > latestLessonsUntil)) {
+              latestLessonsUntil = expiresAt;
+            }
+          }
+          if (p.access?.lessonVideos || p.features?.videos) {
+            if (!latestVideosUntil || (expiresAt && expiresAt > latestVideosUntil)) {
+              latestVideosUntil = expiresAt;
+            }
+          }
+          if (p.access?.exams || p.features?.exams) {
+            if (!latestExamsUntil || (expiresAt && expiresAt > latestExamsUntil)) {
+              latestExamsUntil = expiresAt;
+            }
+          }
+          activePlanName = p.planName || activePlanName;
+        }
+      } else {
+        const allowed = typeof p.examLimit === 'number' 
+          ? p.examLimit 
+          : (typeof p.examsAllowed === 'number' ? p.examsAllowed : (typeof p.examCredits === 'number' ? p.examCredits : 5));
+        const used = Number(p.examsUsed) || 0;
+        const remaining = Math.max(0, allowed - used);
+        
+        totalExamsAllowed = (totalExamsAllowed || 0) + allowed;
+        totalExamsUsed = totalExamsUsed + used;
+
+        if (remaining > 0) {
+          totalExamCredits = (totalExamCredits || 0) + remaining;
+          if (!activePlanName) activePlanName = p.planName;
+        }
+      }
+    }
+
+    if (hasUnlimitedExams) {
+      totalExamCredits = null;
+      totalExamsAllowed = null;
+    }
+
+    return {
+      planName: activePlanName,
+      hasStudyPass,
+      hasUnlimitedExams,
+      lessonsUntil: latestLessonsUntil ? Timestamp.fromDate(latestLessonsUntil) : null,
+      videosUntil: latestVideosUntil ? Timestamp.fromDate(latestVideosUntil) : null,
+      examsUntil: latestExamsUntil ? Timestamp.fromDate(latestExamsUntil) : null,
+      examCredits: totalExamCredits,
+      examsUsed: totalExamsUsed,
+      totalExamsAllowed: totalExamsAllowed,
+      updatedAt: Timestamp.now()
+    };
+  }
+
+  app.get('/api/access/current', async (req: Request, res: Response) => {
+    const auth = await verifyAuth(req);
+    if (!auth) return res.status(401).json({ error: 'Unauthorized: Sign in required.' });
+    try {
+      const purchasesSnap = await db.collection('users').doc(auth.uid).collection('purchases').get();
+      const subsSnap = await db.collection('subscriptions').where('userId', '==', auth.uid).get();
+      const allPurchases = [...purchasesSnap.docs.map(d => ({ id: d.id, ...d.data() }))];
+      for (const sDoc of subsSnap.docs) {
+        const s = sDoc.data();
+        if (!allPurchases.some(p => p.id === sDoc.id || p.planId === s.planId)) {
+          allPurchases.push({ id: sDoc.id, ...s });
+        }
+      }
+      const access = computeAccess(allPurchases);
+      res.json({
+        success: true,
+        access: {
+          planName: access.planName,
+          hasStudyPass: access.hasStudyPass,
+          hasUnlimitedExams: access.hasUnlimitedExams,
+          examCredits: access.examCredits,
+          lessonsUntil: access.lessonsUntil ? access.lessonsUntil.toDate().toISOString() : null,
+          videosUntil: access.videosUntil ? access.videosUntil.toDate().toISOString() : null,
+          examsUntil: access.examsUntil ? access.examsUntil.toDate().toISOString() : null,
+        }
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ==========================================
+  // API: REFERRAL SYSTEM
+  // ==========================================
+  app.get('/api/admin/referral/settings', async (req: Request, res: Response) => {
+    const auth = await verifyAuth(req);
+    if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+    const userDoc = await db.collection('users').doc(auth.uid).get();
+    const isAdmin = auth.email === 'fabriceib2006@gmail.com' || userDoc.data()?.role === 'admin';
+    if (!isAdmin) return res.status(403).json({ error: 'Forbidden' });
+    
+    const settingsDoc = await db.collection('siteSettings').doc('referral').get();
+    res.json(settingsDoc.exists ? settingsDoc.data() : { active: false });
+  });
+
+  app.post('/api/admin/referral/settings', async (req: Request, res: Response) => {
+    const auth = await verifyAuth(req);
+    if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+    const userDoc = await db.collection('users').doc(auth.uid).get();
+    const isAdmin = auth.email === 'fabriceib2006@gmail.com' || userDoc.data()?.role === 'admin';
+    if (!isAdmin) return res.status(403).json({ error: 'Forbidden' });
+    
+    await db.collection('siteSettings').doc('referral').set(req.body, { merge: true });
+    res.json({ success: true });
+  });
+
+  app.post('/api/referral/signup-complete', async (req: Request, res: Response) => {
+    const auth = await verifyAuth(req);
+    if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+    const { refCode } = req.body;
+    
+    const settingsDoc = await db.collection('siteSettings').doc('referral').get();
+    if (!settingsDoc.data()?.active) return res.status(400).json({ error: 'Referral not active' });
+
+    await db.runTransaction(async (transaction) => {
+      const userRef = db.collection('users').doc(auth.uid);
+      const userDoc = await transaction.get(userRef);
+      if (!userDoc.exists) throw new Error('User not found');
+      if (userDoc.data()?.referredBy) throw new Error('Already referred');
+      
+      // Generate referral code for new user
+      const newRefCode = Math.random().toString(36).substring(2, 8).toUpperCase();
+      
+      let referredById: string | null = null;
+      if (refCode) {
+        const referrers = await transaction.get(db.collection('users').where('referralCode', '==', refCode));
+        if (referrers.empty) throw new Error('Invalid referral code');
+        const referrer = referrers.docs[0];
+        if (referrer.id === auth.uid) throw new Error('Cannot refer self');
+        if (referrer.data().role === 'admin') throw new Error('Admin cannot be referrer');
+        referredById = referrer.id;
+      }
+      
+      transaction.update(userRef, {
+        referralCode: newRefCode,
+        referredBy: referredById
+      });
+    });
+    res.json({ success: true });
+  });
+
+  app.post('/api/exams/start', async (req: Request, res: Response) => {
+    const auth = await verifyAuth(req);
+    if (!auth) return res.status(401).json({ error: 'Unauthorized: Sign in required.' });
+    const { uid } = auth;
+    try {
+      const attemptsRef = db.collection('users').doc(uid).collection('examAttempts');
+      const purchasesRef = db.collection('users').doc(uid).collection('purchases');
+      const accessRef = db.collection('users').doc(uid).collection('access').doc('current');
+
+      // Fetch global exam settings and published questions outside transaction
+      const settingsDoc = await db.collection('examSettings').doc('global-settings').get();
+      const settings = settingsDoc.exists ? settingsDoc.data()! : { numQuestions: 20, durationMinutes: 20, passMark: 12 };
+      const questionsSnap = await db.collection('questions').where('isPublished', '==', true).get();
+      const allQuestions: any[] = questionsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+      let resultData: { attemptId: string; questionIds: string[]; expiresAt: any; isResumed?: boolean } | undefined;
+
+      await db.runTransaction(async (transaction) => {
+        // ==========================================
+        // 1. ALL READS FIRST (No writes before this!)
+        // ==========================================
+        const purchasesSnap = await transaction.get(purchasesRef);
+        const querySnap = await transaction.get(attemptsRef.where('status', '==', 'in_progress'));
+        const accessDoc = await transaction.get(accessRef);
+        const subsSnap = await transaction.get(db.collection('subscriptions').where('userId', '==', uid));
+
+        // ==========================================
+        // 2. IN-MEMORY COMPUTATION & VALIDATION
+        // ==========================================
+        const now = new Date();
+
+        // Check for active (in-progress, not expired) attempt to resume
+        let activeAttempt: any = null;
+        const attemptsToExpire: string[] = [];
+        for (const doc of querySnap.docs) {
+          const attempt = doc.data();
+          let attExpires: Date | null = null;
+          if (attempt.expiresAt && typeof attempt.expiresAt.toDate === 'function') {
+            attExpires = attempt.expiresAt.toDate();
+          } else if (typeof attempt.expiresAt === 'string') {
+            attExpires = new Date(attempt.expiresAt);
+          }
+
+          if (attExpires && attExpires > now) {
+            activeAttempt = { id: doc.id, ...attempt };
+            break;
+          } else {
+            attemptsToExpire.push(doc.id);
+          }
+        }
+
+        // Case A: Resume existing in-progress attempt (uses nothing)
+        if (activeAttempt) {
+          resultData = {
+            attemptId: activeAttempt.id,
+            questionIds: activeAttempt.questionIds,
+            expiresAt: activeAttempt.expiresAt,
+            isResumed: true
+          };
+
+          // Only expire stale attempts if any
+          for (const attId of attemptsToExpire) {
+            transaction.update(attemptsRef.doc(attId), { status: 'expired' });
+          }
+          return;
+        }
+
+        // Aggregate purchases from user purchases and subscriptions
+        const allPurchases: any[] = [...purchasesSnap.docs.map(d => ({ id: d.id, ...d.data() }))];
+        for (const sDoc of subsSnap.docs) {
+          const sData = sDoc.data();
+          if (!allPurchases.some(p => p.id === sDoc.id || p.planId === sData.planId)) {
+            allPurchases.push({
+              id: sDoc.id,
+              planId: sData.planId,
+              planName: sData.planName,
+              access: sData.access,
+              examLimit: sData.examLimit,
+              examsUsed: sData.examsUsed || 0,
+              validityDays: sData.validityDays,
+              startDate: sData.startDate,
+              expiresAt: sData.endDate,
+              status: sData.status || 'active',
+              isSub: true
+            });
+          }
+        }
+
+        let hasActiveStudyPlan = false;
+        let activeStudyPlan: any = null;
+        const validCountPurchases: any[] = [];
+        let hasUsedUpExamPack = false;
+
+        for (const p of allPurchases) {
+          if (p.status !== 'active' && p.status !== undefined) {
+            if (p.examsUsed !== undefined && p.examsUsed > 0) hasUsedUpExamPack = true;
+            continue;
+          }
+
+          // Check if plan allows exams
+          const allowsExams = Boolean(
+            p.access?.exams ||
+            p.features?.exams ||
+            (p.examLimit !== undefined && p.examLimit !== null && p.examLimit !== 0) ||
+            p.type === 'exams_pack' ||
+            (typeof p.planName === 'string' && p.planName.toLowerCase().includes('exam'))
+          );
+          if (!allowsExams) continue;
+
+          // Study plan: has lessons or videos
+          const isStudy = Boolean(
+            p.access?.trafficRules ||
+            p.access?.lessonVideos ||
+            p.features?.lessons ||
+            p.features?.videos
+          );
+
+          let expiresAt: Date | null = null;
+          if (p.expiresAt && typeof p.expiresAt.toDate === 'function') {
+            expiresAt = p.expiresAt.toDate();
+          } else if (typeof p.expiresAt === 'string') {
+            expiresAt = new Date(p.expiresAt);
+          } else if (p.endDate && typeof p.endDate.toDate === 'function') {
+            expiresAt = p.endDate.toDate();
+          } else if (typeof p.endDate === 'string') {
+            expiresAt = new Date(p.endDate);
+          } else if (p.validityDays && p.startDate) {
+            const start = typeof p.startDate.toDate === 'function' ? p.startDate.toDate() : new Date(p.startDate);
+            expiresAt = new Date(start.getTime() + Number(p.validityDays) * 24 * 3600 * 1000);
+          }
+
+          if (isStudy) {
+            // Study plan: exams unlimited until plan time ends
+            if (!expiresAt || expiresAt > now) {
+              hasActiveStudyPlan = true;
+              activeStudyPlan = p;
+            }
+          } else {
+            // Exams-only plan: limited by count, NO time validity (null = none). Credits stop working when count is used up ONLY.
+            const allowed = typeof p.examLimit === 'number' 
+              ? p.examLimit 
+              : (typeof p.examsAllowed === 'number' ? p.examsAllowed : (typeof p.examCredits === 'number' ? p.examCredits : 5));
+            const used = Number(p.examsUsed) || 0;
+            const remaining = allowed - used;
+            if (remaining > 0) {
+              validCountPurchases.push({ ...p, allowed, used, remaining });
+            } else {
+              hasUsedUpExamPack = true;
+            }
+          }
+        }
+
+        // Check plan eligibility
+        if (!hasActiveStudyPlan && validCountPurchases.length === 0) {
+          const err: any = new Error(hasUsedUpExamPack 
+            ? 'No exam credits remaining. Please buy an Exam Pack or Study Plan.' 
+            : 'No active plan or exam credits found. Please purchase an Exam Pack or Study Plan.');
+          err.code = 'EXAM_CREDITS_EXHAUSTED';
+          err.status = 403;
+          throw err;
+        }
+
+        let targetPurchase: any = null;
+        if (!hasActiveStudyPlan && validCountPurchases.length > 0) {
+          targetPurchase = validCountPurchases[0];
+        }
+
+        // Prepare shuffled questions
+        const shuffledQuestions = [...allQuestions];
+        for (let i = shuffledQuestions.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [shuffledQuestions[i], shuffledQuestions[j]] = [shuffledQuestions[j], shuffledQuestions[i]];
+        }
+        const selected = shuffledQuestions.slice(0, settings.numQuestions || 20);
+        const durationMinutes = settings.durationMinutes || 20;
+        const expiresAt = Timestamp.fromDate(new Date(now.getTime() + durationMinutes * 60000));
+        const newAttemptRef = attemptsRef.doc();
+
+        // ==========================================
+        // 3. ALL WRITES AFTER ALL READS ARE COMPLETE
+        // ==========================================
+        for (const attId of attemptsToExpire) {
+          transaction.update(attemptsRef.doc(attId), { status: 'expired' });
+        }
+
+        // Deduct 1 credit only if exams-only plan
+        if (targetPurchase) {
+          const newUsed = targetPurchase.used + 1;
+          const newRemaining = Math.max(0, targetPurchase.allowed - newUsed);
+
+          transaction.set(purchasesRef.doc(targetPurchase.id), {
+            examsUsed: newUsed,
+            updatedAt: Timestamp.now()
+          }, { merge: true });
+
+          transaction.set(accessRef, {
+            examCredits: newRemaining,
+            planName: targetPurchase.planName || 'Exam Pack',
+            updatedAt: Timestamp.now()
+          }, { merge: true });
+
+          const subMatch = subsSnap.docs.find(s => s.id === targetPurchase.id || s.data().planId === targetPurchase.planId);
+          if (subMatch) {
+            transaction.set(subMatch.ref, {
+              examsUsed: newUsed,
+              updatedAt: Timestamp.now()
+            }, { merge: true });
+          }
+        } else if (hasActiveStudyPlan) {
+          transaction.set(accessRef, {
+            examCredits: null,
+            planName: activeStudyPlan.planName || 'Study Plan',
+            updatedAt: Timestamp.now()
+          }, { merge: true });
+        }
+
+        // Save new in-progress attempt
+        transaction.set(newAttemptRef, {
+          questionIds: selected.map(q => q.id),
+          startedAt: Timestamp.fromDate(now),
+          expiresAt,
+          status: 'in_progress'
+        });
+
+        resultData = {
+          attemptId: newAttemptRef.id,
+          questionIds: selected.map(q => q.id),
+          expiresAt,
+          isResumed: false
+        };
+      });
+
+      if (!resultData) return res.status(500).json({ error: 'Failed to start exam' });
+
+      const questionsMap = new Map(allQuestions.map(q => [q.id, q]));
+      const questions = await Promise.all(resultData.questionIds.map(async (id: string) => {
+        const inMem = questionsMap.get(id);
+        if (inMem) {
+          return {
+            id: inMem.id,
+            text: inMem.text,
+            options: inMem.options,
+            category: inMem.category,
+            imageUrl: inMem.imageUrl
+          };
+        }
+        const qDoc = await db.collection('questions').doc(id).get();
+        const qData = qDoc.data();
+        if (!qData) return null;
+        return {
+          id: qDoc.id,
+          text: qData.text,
+          options: qData.options,
+          category: qData.category,
+          imageUrl: qData.imageUrl
+        };
+      }));
+
+      const expiresAtIso = resultData.expiresAt && typeof resultData.expiresAt.toDate === 'function' 
+        ? resultData.expiresAt.toDate().toISOString() 
+        : new Date(resultData.expiresAt).toISOString();
+
+      return res.json({
+        attemptId: resultData.attemptId,
+        questions: questions.filter(Boolean),
+        expiresAt: expiresAtIso,
+        isResumed: Boolean(resultData.isResumed)
+      });
+    } catch (err: any) {
+      console.error('Start exam failed:', err);
+      const status = err.status || 500;
+      return res.status(status).json({
+        error: err.code || err.message || 'Failed to start exam',
+        code: err.code || 'EXAM_ERROR',
+        message: err.message || 'Failed to start exam'
+      });
+    }
+  });
+
+  async function checkLessonsAccess(uid: string): Promise<boolean> {
+    const now = new Date();
+    const purchasesSnap = await db.collection('users').doc(uid).collection('purchases').where('status', '==', 'active').get();
+    const subsSnap = await db.collection('subscriptions').where('userId', '==', uid).where('status', '==', 'active').get();
+    
+    const allPurchases: any[] = [...purchasesSnap.docs.map(d => d.data())];
+    for (const sDoc of subsSnap.docs) {
+      const sData = sDoc.data();
+      if (!allPurchases.some(p => p.id === sDoc.id || p.planId === sData.planId)) {
+        allPurchases.push({
+          access: sData.access,
+          features: sData.features,
+          expiresAt: sData.endDate,
+          status: 'active'
+        });
+      }
+    }
+
+    for (const p of allPurchases) {
+      let expiresAt: Date | null = null;
+      if (p.expiresAt) {
+        expiresAt = typeof p.expiresAt.toDate === 'function' ? p.expiresAt.toDate() : new Date(p.expiresAt);
+      }
+      if (expiresAt && expiresAt < now) continue;
+
+      const hasLessons = Boolean(
+        p.access?.trafficRules ||
+        p.access?.lessonVideos ||
+        p.features?.lessons ||
+        p.features?.videos ||
+        (typeof p.planName === 'string' && (p.planName.toLowerCase().includes('pro') || p.planName.toLowerCase().includes('theory') || p.planName.toLowerCase().includes('standard')))
+      );
+      if (hasLessons) return true;
+    }
+    return false;
+  }
+
+  // GET /api/lessons/:id/quiz
+  app.get('/api/lessons/:id/quiz', async (req: Request, res: Response) => {
+    const auth = await verifyAuth(req);
+    if (!auth) return res.status(401).json({ error: 'Unauthorized: Sign in required.' });
+    const { uid } = auth;
+    const lessonId = req.params.id;
+
+    try {
+      const hasAccess = await checkLessonsAccess(uid);
+      if (!hasAccess) {
+        return res.status(403).json({ error: 'Forbidden: Lessons access requires an active study plan.', code: 'NO_LESSONS_PLAN' });
+      }
+
+      const lessonDoc = await db.collection('lessons').doc(lessonId).get();
+      if (!lessonDoc.exists) {
+        return res.status(404).json({ error: 'Lesson not found.' });
+      }
+
+      const qSnap = await db.collection('questions').where('lessonId', '==', lessonId).get();
+      const questions = qSnap.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          text: data.text,
+          options: data.options,
+          category: data.category,
+          imageUrl: data.imageUrl
+        };
+      });
+
+      // Shuffle questions
+      for (let i = questions.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [questions[i], questions[j]] = [questions[j], questions[i]];
+      }
+
+      return res.json({
+        lessonId,
+        questions,
+        total: questions.length
+      });
+    } catch (err: any) {
+      console.error('Failed to fetch lesson quiz:', err);
+      return res.status(500).json({ error: err.message || 'Failed to fetch lesson quiz' });
+    }
+  });
+
+  // POST /api/lessons/:id/quiz/submit
+  app.post('/api/lessons/:id/quiz/submit', async (req: Request, res: Response) => {
+    const auth = await verifyAuth(req);
+    if (!auth) return res.status(401).json({ error: 'Unauthorized: Sign in required.' });
+    const { uid } = auth;
+    const lessonId = req.params.id;
+    const { answers } = req.body || {};
+
+    if (!answers || typeof answers !== 'object') {
+      return res.status(400).json({ error: 'Invalid answers payload' });
+    }
+
+    try {
+      const hasAccess = await checkLessonsAccess(uid);
+      if (!hasAccess) {
+        return res.status(403).json({ error: 'Forbidden: Lessons access requires an active study plan.', code: 'NO_LESSONS_PLAN' });
+      }
+
+      const qSnap = await db.collection('questions').where('lessonId', '==', lessonId).get();
+      const questions = qSnap.docs.map(doc => ({ id: doc.id, ...doc.data() as any }));
+
+      let correct = 0;
+      const total = questions.length;
+      const results: any[] = [];
+
+      for (const q of questions) {
+        const userAns = answers[q.id];
+        const isCorrect = userAns === q.correctIndex;
+        if (isCorrect) correct++;
+        results.push({
+          questionId: q.id,
+          userAnswer: userAns,
+          correctIndex: q.correctIndex,
+          explanation: q.explanation,
+          isCorrect
+        });
+      }
+
+      const percent = total > 0 ? Math.round((correct / total) * 100) : 0;
+      const passed = percent >= 70;
+
+      const progressRef = db.collection('users').doc(uid).collection('progress').doc(lessonId);
+      await progressRef.set({
+        lessonId,
+        completed: passed,
+        passed,
+        score: correct,
+        total,
+        percent,
+        attempts: FieldValue.increment(1),
+        lastAccessed: Timestamp.now(),
+        updatedAt: Timestamp.now()
+      }, { merge: true });
+
+      return res.json({
+        success: true,
+        score: correct,
+        total,
+        percent,
+        passed,
+        passMark: 70,
+        results
+      });
+    } catch (err: any) {
+      console.error('Failed to submit lesson quiz:', err);
+      return res.status(500).json({ error: err.message || 'Failed to submit lesson quiz' });
+    }
+  });
+
+  app.post('/api/exams/submit', async (req: Request, res: Response) => {
+    const auth = await verifyAuth(req);
+    if (!auth) return res.status(401).send('Unauthorized');
+    const { uid } = auth;
+    const { attemptId, answers } = req.body;
+    if (typeof attemptId !== 'string' || typeof answers !== 'object' || answers === null) {
+      return res.status(400).json({ error: 'Invalid input' });
+    }
+
+    try {
+      const attemptRef = db.collection('users').doc(uid).collection('examAttempts').doc(attemptId);
+      const attemptDoc = await attemptRef.get();
+      if (!attemptDoc.exists) {
+        return res.status(404).json({ error: 'Attempt not found' });
+      }
+      const attempt = attemptDoc.data()!;
+      if (attempt.status !== 'in_progress') {
+        return res.status(409).json({ error: 'Attempt already submitted' });
+      }
+      if (new Date() > new Date(new Date(attempt.expiresAt).getTime() + 60000)) {
+        await attemptRef.update({ status: 'expired' });
+        return res.status(410).json({ error: 'Attempt expired' });
+      }
+
+      const settingsDoc = await db.collection('examSettings').doc('global-settings').get();
+      if (!settingsDoc.exists) {
+        return res.status(500).json({ error: 'Global exam settings missing' });
+      }
+      const passMark = settingsDoc.data()!.passMark;
+
+      let result;
+      await db.runTransaction(async (transaction) => {
+        // Re-verify inside transaction
+        const freshAttemptDoc = await transaction.get(attemptRef);
+        const freshAttempt = freshAttemptDoc.data()!;
+        if (freshAttempt.status !== 'in_progress') {
+          const err: any = new Error('Attempt already submitted');
+          err.status = 409;
+          throw err;
+        }
+
+        const qIds = freshAttempt.questionIds;
+        let score = 0;
+        const results = [];
+        for (const qId of qIds) {
+          const qDoc = await transaction.get(db.collection('questions').doc(qId));
+          if (!qDoc.exists) {
+            results.push({ questionId: qId, userAnswer: answers[qId], correctIndex: 0, explanation: { en: 'Question missing', rw: '', fr: '' }, isCorrect: false });
+            continue;
+          }
+          const qData = qDoc.data()!;
+          const userAnswer = answers[qId];
+          const isCorrect = userAnswer === qData.correctIndex;
+          if (isCorrect) score++;
+          results.push({
+            questionId: qId,
+            userAnswer,
+            correctIndex: qData.correctIndex,
+            explanation: qData.explanation,
+            isCorrect
+          });
+        }
+
+        const nowIso = new Date().toISOString();
+        transaction.update(attemptRef, {
+          status: 'finished',
+          submittedAt: nowIso,
+          score,
+          total: qIds.length,
+          passed: score >= passMark
+        });
+
+        const resultDocRef = db.collection('users').doc(uid).collection('examResults').doc();
+        const resultRecord = {
+          id: resultDocRef.id,
+          userId: uid,
+          attemptId,
+          score,
+          total: qIds.length,
+          passMark,
+          passed: score >= passMark,
+          submittedAt: nowIso,
+          date: nowIso
+        };
+        transaction.set(resultDocRef, resultRecord);
+        // Also mirror to root collection examResults for administrative reporting
+        transaction.set(db.collection('examResults').doc(resultDocRef.id), resultRecord);
+
+        result = { score, total: qIds.length, passed: score >= passMark, results };
+      });
+
+      res.json(result);
+    } catch (err: any) {
+      console.error('Submit exam failed:', err);
+      const status = err.status || 500;
+      res.status(status).json({ error: err.message || 'Failed to submit exam' });
+    }
+  });
+
+  // GET /api/exams/history
+  app.get('/api/exams/history', async (req: Request, res: Response) => {
+    const auth = await verifyAuth(req);
+    if (!auth) return res.status(401).json({ error: 'Unauthorized: Sign in required.' });
+    const { uid } = auth;
+
+    try {
+      const snap = await db.collection('users').doc(uid).collection('examResults').get();
+      const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      list.sort((a: any, b: any) => {
+        const timeA = new Date(a.submittedAt || a.date || 0).getTime();
+        const timeB = new Date(b.submittedAt || b.date || 0).getTime();
+        return timeB - timeA;
+      });
+      return res.json({ results: list });
+    } catch (err: any) {
+      console.error('Error fetching exam history:', err);
+      return res.status(500).json({ error: err.message || 'Failed to fetch exam history' });
+    }
+  });
+
+  app.get('/api/exams/settings', async (req: Request, res: Response) => {
+    try {
+      const settingsDoc = await db.collection('examSettings').doc('default').get();
+      res.json(settingsDoc.data() || { numQuestions: 20, durationMinutes: 60, passMark: 70 });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Admin database clean and sync endpoint
+  app.post('/api/admin/clean-plans-and-subs', async (req: Request, res: Response) => {
+    const auth = await verifyAuth(req);
+    if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+    const userDoc = await db.collection('users').doc(auth.uid).get();
+    const isAdmin = auth.email === 'fabriceib2006@gmail.com' || userDoc.data()?.role === 'admin';
+    if (!isAdmin) return res.status(403).json({ error: 'Forbidden' });
+
+    try {
+      const summary = await syncDatabasePlansAndSubscriptions();
+      res.json({ success: true, summary });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/debug/ping', async (req: Request, res: Response) => {
+    try {
+      const sa = process.env.FIREBASE_SERVICE_ACCOUNT ? JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT) : null;
+      const oldAttempts = await db.collection('examAttempts').get();
+      const oldResults = await db.collection('examResults').get();
+      res.json({
+        env: { exists: !!sa, project_id: sa?.project_id, client_email: sa?.client_email },
+        oldTopLevelExamAttemptsCount: oldAttempts.size,
+        oldTopLevelExamResultsCount: oldResults.size
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message, code: e.code });
     }
   });
 
@@ -540,8 +2186,67 @@ async function startServer() {
     });
   }
 
+  // Database audit & sync helper for plans and exam-only subscriptions
+  async function syncDatabasePlansAndSubscriptions() {
+    let plansUpdated = 0;
+    let subsUpdated = 0;
+    try {
+      console.log('Auditing Firestore plans and subscriptions for consistency...');
+      const plansSnap = await db.collection('plans').get();
+      for (const pDoc of plansSnap.docs) {
+        const p = pDoc.data();
+        const isExamOnly = Boolean(p.access?.exams) && !p.access?.trafficRules && !p.access?.lessonVideos;
+        const isStudy = Boolean(p.access?.trafficRules || p.access?.lessonVideos);
+
+        const updates: any = {};
+        if (isExamOnly) {
+          if (p.durationDays !== 0) updates.durationDays = 0;
+          if (p.examLimit === null || p.examLimit === undefined || p.examLimit <= 0) updates.examLimit = 5;
+        } else if (isStudy) {
+          if (!p.durationDays || p.durationDays <= 0) updates.durationDays = 30;
+          if (p.examLimit !== null) updates.examLimit = null; // study plans have unlimited exams
+        }
+
+        if (Object.keys(updates).length > 0) {
+          await pDoc.ref.update(updates);
+          plansUpdated++;
+        }
+      }
+
+      // Audit subscriptions for exam-only plans that had endDate set
+      const subsSnap = await db.collection('subscriptions').get();
+      for (const sDoc of subsSnap.docs) {
+        const s = sDoc.data();
+        const isExamOnly = Boolean(s.access?.exams) && !s.access?.trafficRules && !s.access?.lessonVideos;
+        if (isExamOnly && (s.endDate !== null || s.durationDays !== 0)) {
+          await sDoc.ref.update({
+            endDate: null,
+            durationDays: 0,
+          });
+          subsUpdated++;
+
+          if (s.userId) {
+            const pRef = db.collection('users').doc(s.userId).collection('purchases').doc(sDoc.id);
+            const pSnap = await pRef.get();
+            if (pSnap.exists) {
+              await pRef.update({
+                expiresAt: null,
+              });
+            }
+          }
+        }
+      }
+      console.log(`Audit complete: ${plansUpdated} plans and ${subsUpdated} subscriptions synchronized.`);
+    } catch (auditErr) {
+      console.warn('Database audit notice:', auditErr);
+    }
+    return { plansUpdated, subsUpdated };
+  }
+
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`TSINDA server ready on http://0.0.0.0:${PORT}`);
+    // Run database audit in background on start
+    syncDatabasePlansAndSubscriptions().catch(err => console.warn('Startup audit error:', err));
   });
 }
 

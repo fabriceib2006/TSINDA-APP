@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { db } from '../../lib/firebase';
-import { collection, getDocs, doc, updateDoc, deleteDoc } from 'firebase/firestore';
+import { collection, getDocs, doc, updateDoc, deleteDoc, query, where } from 'firebase/firestore';
 import { handleFirestoreError, OperationType } from '../../lib/firestoreUtils';
 import { UserProfile, Subscription, Plan } from '../../types';
-import { normalizeSubscription } from '../../lib/subscriptionUtils';
+import { normalizeSubscription, normalizePlan } from '../../lib/subscriptionUtils';
 import { Search, Shield, Ban, CheckCircle, Trash2, Users, ChevronRight } from 'lucide-react';
 import { ConfirmModal } from '../common/ConfirmModal';
 import { UserDetails } from './UserDetails';
@@ -29,7 +29,7 @@ export const UsersManager: React.FC = () => {
 
       setUsers(usersSnap.docs.map(d => d.data() as UserProfile));
       setSubscriptions(subsSnap.docs.map(d => normalizeSubscription(d.data(), d.id)));
-      setPlans(plansSnap.docs.map(d => ({ id: d.id, ...d.data() } as Plan)));
+      setPlans(plansSnap.docs.map(d => normalizePlan(d.data(), d.id)));
     } catch (err) {
       console.error("Error fetching user data:", err);
     } finally {
@@ -54,6 +54,12 @@ export const UsersManager: React.FC = () => {
   const handleDeleteUser = async () => {
     if (!userToDelete) return;
     try {
+      const subsSnap = await getDocs(query(collection(db, 'subscriptions'), where('userId', '==', userToDelete.uid))).catch(() => null);
+      if (subsSnap) {
+        for (const sDoc of subsSnap.docs) {
+          await deleteDoc(sDoc.ref).catch(() => {});
+        }
+      }
       await deleteDoc(doc(db, 'users', userToDelete.uid));
       setUsers(users.filter(u => u.uid !== userToDelete.uid));
       setUserToDelete(null);
@@ -68,7 +74,11 @@ export const UsersManager: React.FC = () => {
       u.phone.toLowerCase().includes(searchQuery.toLowerCase());
     
     const userSubs = subscriptions.filter(s => s.userId === u.uid && s.status === 'active');
-    const currentSub = userSubs.sort((a, b) => new Date(b.endDate).getTime() - new Date(a.endDate).getTime())[0];
+    const currentSub = userSubs.sort((a, b) => {
+      const aTime = a.endDate ? new Date(a.endDate).getTime() : Infinity;
+      const bTime = b.endDate ? new Date(b.endDate).getTime() : Infinity;
+      return bTime - aTime;
+    })[0];
     
     const matchesStatus = statusFilter === 'all' || u.status === statusFilter;
     const matchesPlan = planFilter === 'all' || (currentSub ? currentSub.planId === planFilter : planFilter === 'none');
@@ -102,7 +112,7 @@ export const UsersManager: React.FC = () => {
             <select value={planFilter} onChange={(e) => setPlanFilter(e.target.value)} className="min-h-[44px] px-3 py-2 bg-white border border-slate-200 rounded-[10px] text-sm focus:outline-none">
                 <option value="all">All Plans</option>
                 <option value="none">No Plan</option>
-                {plans.map(p => <option key={p.id} value={p.id}>{p.name.en}</option>)}
+                {plans.map(p => <option key={p.id} value={p.id}>{typeof p.name === 'string' ? p.name : (p.name.en || p.name.rw || p.id)}</option>)}
             </select>
         </div>
       </div>
@@ -128,7 +138,11 @@ export const UsersManager: React.FC = () => {
               <tbody className="divide-y divide-slate-100 text-sm">
                 {filteredUsers.map((user) => {
                     const userSubs = subscriptions.filter(s => s.userId === user.uid && s.status === 'active');
-                    const currentSub = userSubs.sort((a, b) => new Date(b.endDate).getTime() - new Date(a.endDate).getTime())[0];
+                    const currentSub = userSubs.sort((a, b) => {
+                      const aTime = a.endDate ? new Date(a.endDate).getTime() : Infinity;
+                      const bTime = b.endDate ? new Date(b.endDate).getTime() : Infinity;
+                      return bTime - aTime;
+                    })[0];
                     return (
                         <tr key={user.uid} className="hover:bg-slate-50/60 transition-colors cursor-pointer" onClick={() => setSelectedUser(user)}>
                             <td className="py-4 px-6">
@@ -136,7 +150,7 @@ export const UsersManager: React.FC = () => {
                                 <div className="text-xs text-slate-500">{user.email}</div>
                             </td>
                             <td className="py-4 px-6">{currentSub ? (typeof currentSub.planName === 'string' ? currentSub.planName : (currentSub.planName.en || currentSub.planName.rw)) : '-'}</td>
-                            <td className="py-4 px-6">{currentSub ? new Date(currentSub.endDate).toLocaleDateString() : '-'}</td>
+                            <td className="py-4 px-6">{currentSub ? (currentSub.endDate ? new Date(currentSub.endDate).toLocaleDateString() : 'No expiry') : '-'}</td>
                             <td className="py-4 px-6">{currentSub ? `${currentSub.examsUsed} / ${currentSub.examLimit || '∞'}` : '-'}</td>
                             <td className="py-4 px-6">
                                 <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold ${user.status === 'active' ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>

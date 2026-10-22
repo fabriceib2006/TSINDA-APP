@@ -10,6 +10,8 @@ export interface UserProfile {
   status: 'active' | 'suspended';
   language?: Language;
   createdAt: string;
+  referralCode?: string;
+  referredBy?: string;
 }
 
 export interface PlanAccess {
@@ -40,7 +42,7 @@ export interface Subscription {
   price: number;
   durationDays: number;
   startDate: string;
-  endDate: string;
+  endDate: string | null;
   access: PlanAccess;
   examLimit: number | null;
   examsUsed: number;
@@ -73,6 +75,7 @@ export interface CombinedAccess {
   examsUsed: number;
   examsRemaining: number | null;
   activeSubscriptionId: string | null;
+  activePlanName?: Record<Language, string> | string | null;
   earliestExpiryDate: string | null;
   latestExpiryDate: string | null;
   activeSubscriptions: Subscription[];
@@ -92,9 +95,12 @@ export interface Payment {
   kind?: string;
   method?: string;
   status: 'successful' | 'success' | 'pending' | 'failed';
+  paypackStatus?: 'successful' | 'pending' | 'failed' | 'sandbox' | string | null;
+  isSandbox?: boolean;
   failureReason?: string | null;
   subscriptionId?: string | null;
   reference?: string;
+  lastPaypackCheckAt?: string | any;
   createdAt: string | any;
   updatedAt?: string | any;
 }

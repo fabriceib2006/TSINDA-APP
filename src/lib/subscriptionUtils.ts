@@ -31,7 +31,7 @@ export function normalizePlan(raw: any, id: string): Plan {
     name,
     description,
     price: typeof raw.price === 'number' ? raw.price : 1000,
-    durationDays: typeof raw.durationDays === 'number' && raw.durationDays >= 1 ? raw.durationDays : 30,
+    durationDays: typeof raw.durationDays === 'number' && raw.durationDays >= 0 ? raw.durationDays : 0,
     access,
     examLimit: raw.examLimit === undefined ? null : (raw.examLimit === null ? null : Number(raw.examLimit)),
     isActive: raw.isActive !== undefined ? Boolean(raw.isActive) : true,
@@ -57,9 +57,9 @@ export function normalizeSubscription(raw: any, id: string): Subscription {
     planId: raw.planId || '',
     planName: raw.planName || 'Standard Pass',
     price: typeof raw.price === 'number' ? raw.price : 0,
-    durationDays: typeof raw.durationDays === 'number' ? raw.durationDays : 30,
+    durationDays: typeof raw.durationDays === 'number' ? raw.durationDays : 0,
     startDate: raw.startDate || new Date().toISOString(),
-    endDate: raw.endDate || new Date().toISOString(),
+    endDate: raw.endDate || null,
     access,
     examLimit: raw.examLimit === undefined ? null : (raw.examLimit === null ? null : Number(raw.examLimit)),
     examsUsed: typeof raw.examsUsed === 'number' ? raw.examsUsed : 0,
@@ -82,9 +82,18 @@ export function normalizeSubscription(raw: any, id: string): Subscription {
 export function getCombinedAccess(subscriptions: Subscription[]): CombinedAccess {
   const now = new Date();
   
-  // Filter active and unexpired subscriptions
+  // Filter active subscriptions:
+  // - Study plans (has lessonVideos or trafficRules) expire by time
+  // - Exams-only plans (limited by number of exams) never expire by time
   const activeSubs = subscriptions.filter(sub => {
     if (sub.status !== 'active') return false;
+    const isStudy = Boolean(sub.access?.lessonVideos || sub.access?.trafficRules);
+    if (!isStudy) {
+      const allowed = typeof sub.examLimit === 'number' ? sub.examLimit : 5;
+      const used = sub.examsUsed || 0;
+      return (allowed - used) > 0;
+    }
+    if (!sub.endDate) return true;
     const end = new Date(sub.endDate);
     return !isNaN(end.getTime()) && end > now;
   });
@@ -100,6 +109,7 @@ export function getCombinedAccess(subscriptions: Subscription[]): CombinedAccess
       examsUsed: 0,
       examsRemaining: 0,
       activeSubscriptionId: null,
+      activePlanName: null,
       earliestExpiryDate: null,
       latestExpiryDate: null,
       activeSubscriptions: [],
@@ -119,16 +129,21 @@ export function getCombinedAccess(subscriptions: Subscription[]): CombinedAccess
   let examsUsed = 0;
   let examsRemaining: number | null = 0;
   let activeSubscriptionId: string | null = null;
+  let activePlanName: string | Record<Language, string> | null = activeSubs[0]?.planName || null;
 
   if (exams && examSubs.length > 0) {
-    // If any active subscription has unlimited exams (examLimit === null), use it!
+    // If any active study plan allows exams, it gives unlimited exams!
+    const studyExamSub = examSubs.find(s => Boolean(s.access?.lessonVideos || s.access?.trafficRules));
     const unlimitedSub = examSubs.find(s => s.examLimit === null || s.examLimit === undefined);
-    if (unlimitedSub) {
+    
+    if (studyExamSub || unlimitedSub) {
+      const best = studyExamSub || unlimitedSub!;
       isUnlimitedExams = true;
       totalExamsAllowed = null;
-      examsUsed = unlimitedSub.examsUsed || 0;
+      examsUsed = best.examsUsed || 0;
       examsRemaining = null;
-      activeSubscriptionId = unlimitedSub.id;
+      activeSubscriptionId = best.id;
+      activePlanName = best.planName;
     } else {
       // Find the subscription with the most exams remaining
       let bestSub = examSubs[0];
@@ -148,14 +163,17 @@ export function getCombinedAccess(subscriptions: Subscription[]): CombinedAccess
       examsUsed = bestSub.examsUsed || 0;
       examsRemaining = maxRemaining;
       activeSubscriptionId = bestSub.id;
+      activePlanName = bestSub.planName;
     }
   } else if (activeSubs.length > 0) {
     activeSubscriptionId = activeSubs[0].id;
+    activePlanName = activeSubs[0].planName;
   }
 
-  // Calculate expiry dates
+  // Calculate expiry dates (from study plans that have an expiry)
   const sortedDates = activeSubs
-    .map(s => new Date(s.endDate).getTime())
+    .filter(s => Boolean(s.access?.lessonVideos || s.access?.trafficRules) && s.endDate)
+    .map(s => new Date(s.endDate!).getTime())
     .filter(t => !isNaN(t))
     .sort((a, b) => a - b);
 
@@ -172,6 +190,7 @@ export function getCombinedAccess(subscriptions: Subscription[]): CombinedAccess
     examsUsed,
     examsRemaining,
     activeSubscriptionId,
+    activePlanName,
     earliestExpiryDate,
     latestExpiryDate,
     activeSubscriptions: activeSubs,

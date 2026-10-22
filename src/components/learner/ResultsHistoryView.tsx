@@ -1,27 +1,49 @@
 import React, { useEffect, useState } from 'react';
 import { db } from '../../lib/firebase';
-import { collection, getDocs, query, where } from 'firebase/firestore';
-import { handleFirestoreError, OperationType } from '../../lib/firestoreUtils';
+import { collection, getDocs, query } from 'firebase/firestore';
 import { useAuth } from '../../context/AuthContext';
-import { Award, ArrowLeft, CheckCircle2, XCircle, Calendar } from 'lucide-react';
+import { Award, ArrowLeft, CheckCircle2, XCircle, Calendar, RefreshCw } from 'lucide-react';
 
 export const ResultsHistoryView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
-  const { userProfile } = useAuth();
+  const { userProfile, firebaseUser } = useAuth();
   const [results, setResults] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     async function fetchResults() {
-      if (!userProfile) return;
+      if (!userProfile && !firebaseUser) return;
+      setLoading(true);
       try {
-        const q = query(collection(db, 'examResults'), where('userId', '==', userProfile.uid));
-        const snap = await getDocs(q).catch(err => {
-          handleFirestoreError(err, OperationType.LIST, 'examResults');
-          return null;
-        });
-        if (snap) {
-          const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-          setResults(list.sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime()));
+        // Try server-side endpoint first
+        const token = await firebaseUser?.getIdToken();
+        if (token) {
+          const res = await fetch('/api/exams/history', {
+            headers: { Authorization: `Bearer ${token}` }
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (Array.isArray(data.results)) {
+              setResults(data.results);
+              setLoading(false);
+              return;
+            }
+          }
+        }
+
+        // Fallback to client Firestore subcollection
+        const uid = userProfile?.uid || firebaseUser?.uid;
+        if (uid) {
+          const q = query(collection(db, 'users', uid, 'examResults'));
+          const snap = await getDocs(q).catch(() => null);
+          if (snap) {
+            const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+            list.sort((a: any, b: any) => {
+              const timeA = new Date(a.submittedAt || a.date || 0).getTime();
+              const timeB = new Date(b.submittedAt || b.date || 0).getTime();
+              return timeB - timeA;
+            });
+            setResults(list);
+          }
         }
       } catch (err) {
         console.error("Error fetching results history:", err);
@@ -30,7 +52,7 @@ export const ResultsHistoryView: React.FC<{ onBack: () => void }> = ({ onBack })
       }
     }
     fetchResults();
-  }, [userProfile]);
+  }, [userProfile, firebaseUser]);
 
   return (
     <div className="space-y-6">
@@ -82,10 +104,10 @@ export const ResultsHistoryView: React.FC<{ onBack: () => void }> = ({ onBack })
                   <tr key={r.id} className="hover:bg-slate-50/60 transition-colors">
                     <td className="py-4 px-6 text-slate-600 text-xs flex items-center gap-2 whitespace-nowrap">
                       <Calendar className="w-4 h-4 text-slate-400" />
-                      <span>{new Date(r.date).toLocaleString()}</span>
+                      <span>{new Date(r.submittedAt || r.date || Date.now()).toLocaleString()}</span>
                     </td>
                     <td className="py-4 px-6 font-bold text-slate-900 whitespace-nowrap">{r.score} / {r.total}</td>
-                    <td className="py-4 px-6 font-semibold text-blue-600 whitespace-nowrap">{r.passMark}</td>
+                    <td className="py-4 px-6 font-semibold text-blue-600 whitespace-nowrap">{r.passMark || 12}</td>
                     <td className="py-4 px-6 whitespace-nowrap">
                       <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${
                         r.passed ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'

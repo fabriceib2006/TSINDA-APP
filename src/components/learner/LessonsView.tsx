@@ -19,7 +19,9 @@ import {
   ImageIcon,
   Sparkles,
   ShieldCheck,
-  CheckCircle2
+  CheckCircle2,
+  XCircle,
+  RefreshCw
 } from 'lucide-react';
 import { SubscriptionModal } from './SubscriptionModal';
 import { RichTextRenderer } from '../common/RichTextRenderer';
@@ -28,7 +30,12 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
   onBack,
   initialTab = 'lessons',
 }) => {
-  const { userProfile } = useAuth();
+  const { userProfile, firebaseUser, getIdToken } = useAuth();
+  const getToken = async () => {
+    if (typeof getIdToken === 'function') return await getIdToken();
+    return firebaseUser && typeof firebaseUser.getIdToken === 'function' ? await firebaseUser.getIdToken() : '';
+  };
+
   const { language } = useLanguage();
   const [activeSection, setActiveSection] = useState<'lessons' | 'videos'>(initialTab);
   const [lessons, setLessons] = useState<Lesson[]>([]);
@@ -36,10 +43,20 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
   const [selectedLesson, setSelectedLesson] = useState<Lesson | null>(null);
   const [selectedVideo, setSelectedVideo] = useState<VideoLesson | null>(null);
   const [access, setAccess] = useState<CombinedAccess | null>(null);
+  const [progressMap, setProgressMap] = useState<Record<string, any>>({});
   const [loading, setLoading] = useState(true);
   const [isSubModalOpen, setIsSubModalOpen] = useState(false);
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
+
+  // Lesson Quiz State
+  const [quizState, setQuizState] = useState<'idle' | 'loading' | 'active' | 'submitted'>('idle');
+  const [quizQuestions, setQuizQuestions] = useState<any[]>([]);
+  const [quizAnswers, setQuizAnswers] = useState<Record<string, number>>({});
+  const [quizResult, setQuizResult] = useState<any | null>(null);
+  const [quizError, setQuizError] = useState<string | null>(null);
+  const [quizLoading, setQuizLoading] = useState(false);
+  const [noQuizYet, setNoQuizYet] = useState(false);
 
   const checkSubAndFetch = async () => {
     if (!userProfile) return;
@@ -57,7 +74,19 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
         setAccess(getCombinedAccess([]));
       }
 
-      // 2. Fetch published lessons
+      // 2. Fetch user progress
+      const progressSnap = await getDocs(
+        collection(db, 'users', userProfile.uid, 'progress')
+      ).catch(() => null);
+      if (progressSnap) {
+        const pMap: Record<string, any> = {};
+        progressSnap.docs.forEach(d => {
+          pMap[d.id] = d.data();
+        });
+        setProgressMap(pMap);
+      }
+
+      // 3. Fetch published lessons
       const lSnap = await getDocs(query(collection(db, 'lessons'), orderBy('order', 'asc'))).catch((err) => {
         handleFirestoreError(err, OperationType.LIST, 'lessons');
         return null;
@@ -69,7 +98,7 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
         setLessons(list);
       }
 
-      // 3. Fetch published videos
+      // 4. Fetch published videos
       const vSnap = await getDocs(query(collection(db, 'videos'), orderBy('order', 'asc'))).catch((err) => {
         handleFirestoreError(err, OperationType.LIST, 'videos');
         return null;
@@ -125,11 +154,86 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
   const handleSelectLesson = (lesson: Lesson) => {
     setSelectedLesson(lesson);
     setSelectedVideo(null);
+    setQuizState('idle');
+    setQuizQuestions([]);
+    setQuizAnswers({});
+    setQuizResult(null);
+    setQuizError(null);
+    setNoQuizYet(false);
   };
 
   const handleSelectVideo = (video: VideoLesson) => {
     setSelectedVideo(video);
     setSelectedLesson(null);
+  };
+
+  const handleStartLessonQuiz = async () => {
+    if (!selectedLesson) return;
+    setQuizLoading(true);
+    setQuizError(null);
+    setNoQuizYet(false);
+    try {
+      const token = await getToken();
+      const res = await fetch(`/api/lessons/${selectedLesson.id}/quiz`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!res.ok) {
+        if (res.status === 403) {
+          setIsSubModalOpen(true);
+          return;
+        }
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'Failed to fetch lesson quiz');
+      }
+      const data = await res.json();
+      if (!data.questions || data.questions.length === 0) {
+        setNoQuizYet(true);
+        setQuizState('idle');
+      } else {
+        setQuizQuestions(data.questions);
+        setQuizAnswers({});
+        setQuizResult(null);
+        setQuizState('active');
+      }
+    } catch (err: any) {
+      console.error('Error fetching quiz:', err);
+      setQuizError(err.message || 'Failed to start quiz');
+    } finally {
+      setQuizLoading(false);
+    }
+  };
+
+  const handleQuizAnswer = (questionId: string, optionIndex: number) => {
+    setQuizAnswers(prev => ({ ...prev, [questionId]: optionIndex }));
+  };
+
+  const handleQuizSubmit = async () => {
+    if (!selectedLesson) return;
+    setQuizLoading(true);
+    try {
+      const token = await getToken();
+      const res = await fetch(`/api/lessons/${selectedLesson.id}/quiz/submit`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ answers: quizAnswers })
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'Failed to submit quiz');
+      }
+      const resultData = await res.json();
+      setQuizResult(resultData);
+      setQuizState('submitted');
+      checkSubAndFetch();
+    } catch (err: any) {
+      console.error('Error submitting quiz:', err);
+      setQuizError(err.message || 'Failed to submit quiz');
+    } finally {
+      setQuizLoading(false);
+    }
   };
 
   return (
@@ -176,10 +280,10 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
                     Ref: {selectedLesson.gazetteReference}
                   </span>
                 )}
-                {selectedLesson.isFreePreview && (
+                {progressMap[selectedLesson.id]?.passed && (
                   <span className="text-xs font-semibold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full flex items-center gap-1">
-                    <Sparkles className="w-3 h-3 text-emerald-600" />
-                    <span>Free Preview</span>
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>Quiz Passed</span>
                   </span>
                 )}
               </div>
@@ -197,7 +301,7 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
           </div>
 
           {/* Locked Check for Lesson */}
-          {!hasTrafficRulesAccess && !selectedLesson.isFreePreview ? (
+          {!hasTrafficRulesAccess ? (
             <div className="p-8 sm:p-12 text-center bg-slate-50 rounded-xl border border-slate-200 space-y-4">
               <div className="w-16 h-16 bg-amber-100 text-amber-700 rounded-2xl flex items-center justify-center mx-auto shadow-xs">
                 <Lock className="w-8 h-8" />
@@ -243,6 +347,173 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
                   </div>
                 </div>
               )}
+
+              {/* LESSON QUIZ SECTION */}
+              <div className="mt-8 pt-6 border-t border-slate-200 space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+                    <BookOpen className="w-5 h-5 text-blue-600" />
+                    <span>{language === 'rw' ? "Ikizamini cy'iyi Nyigisho" : language === 'fr' ? "Quiz de la Leçon" : "Lesson Quiz"}</span>
+                  </h3>
+                  {progressMap[selectedLesson.id]?.passed && (
+                    <span className="text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-1 rounded-full flex items-center gap-1.5">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                      <span>{language === 'rw' ? "Quiz Yatsinzwe" : language === 'fr' ? "Quiz Réussi" : "Quiz Passed"}</span>
+                    </span>
+                  )}
+                </div>
+
+                {noQuizYet ? (
+                  <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 text-sm text-slate-600 text-center">
+                    {language === 'rw' ? "Nta kizamini cy'iyi nyigisho kirajyaho." : language === 'fr' ? "Pas encore de quiz pour cette leçon." : "No quiz for this lesson yet."}
+                  </div>
+                ) : quizState === 'idle' ? (
+                  <div className="p-6 bg-blue-50/60 rounded-xl border border-blue-200 flex flex-col sm:flex-row items-center justify-between gap-4">
+                    <div className="space-y-1 text-center sm:text-left">
+                      <h4 className="font-bold text-slate-900 text-sm sm:text-base">
+                        {language === 'rw' ? "Witeguye kwitoza kuri iyi nyigisho?" : language === 'fr' ? "Prêt à faire le quiz de cette leçon ?" : "Take the quiz for this lesson"}
+                      </h4>
+                      <p className="text-xs text-slate-600">
+                        {language === 'rw' ? "Gerageza ubumenyi bwawe n'ibibazo byihariye by'iyi nyigisho." : language === 'fr' ? "Testez vos connaissances avec les questions de cette leçon." : "Test your understanding with questions specific to this lesson."}
+                      </p>
+                    </div>
+                    <button
+                      onClick={handleStartLessonQuiz}
+                      disabled={quizLoading}
+                      className="min-h-[44px] px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-[10px] text-xs sm:text-sm shadow-sm transition-colors shrink-0 disabled:opacity-50"
+                    >
+                      {quizLoading ? 'Loading...' : (language === 'rw' ? "Fata Ikizamini cy'Iyi Nyigisho" : language === 'fr' ? "Passer le Quiz" : "Take the quiz for this lesson")}
+                    </button>
+                  </div>
+                ) : quizState === 'active' ? (
+                  <div className="space-y-6 bg-slate-50 p-6 rounded-xl border border-slate-200">
+                    <div className="flex justify-between items-center text-xs font-semibold text-slate-600 border-b border-slate-200 pb-3">
+                      <span>{quizQuestions.length} Questions</span>
+                      <span className="text-blue-600">Pass mark: 70%</span>
+                    </div>
+
+                    <div className="space-y-6">
+                      {quizQuestions.map((q, idx) => (
+                        <div key={q.id} className="bg-white p-5 rounded-xl border border-slate-200 space-y-3 shadow-2xs">
+                          <div className="font-bold text-slate-900 text-sm sm:text-base flex gap-2">
+                            <span className="text-blue-600">#{idx + 1}</span>
+                            <span>{q.text}</span>
+                          </div>
+                          {q.imageUrl && (
+                            <div className="rounded-lg overflow-hidden border border-slate-200 max-w-xs bg-slate-50">
+                              <img src={q.imageUrl} alt="" className="w-full h-36 object-contain p-1" />
+                            </div>
+                          )}
+                          <div className="grid grid-cols-1 gap-2 pt-2">
+                            {(q.options || []).map((opt: string, optIdx: number) => {
+                              const isSelected = quizAnswers[q.id] === optIdx;
+                              return (
+                                <button
+                                  key={optIdx}
+                                  type="button"
+                                  onClick={() => handleQuizAnswer(q.id, optIdx)}
+                                  className={`w-full text-left p-3 rounded-lg border text-xs sm:text-sm font-medium transition-all flex items-center gap-3 ${
+                                    isSelected
+                                      ? 'bg-blue-50 border-blue-600 text-blue-900'
+                                      : 'bg-white border-slate-200 hover:bg-slate-50 text-slate-800'
+                                  }`}
+                                >
+                                  <span className={`w-6 h-6 rounded-full border flex items-center justify-center shrink-0 text-xs font-bold ${
+                                    isSelected ? 'bg-blue-600 text-white border-blue-600' : 'border-slate-300 text-slate-500'
+                                  }`}>
+                                    {String.fromCharCode(65 + optIdx)}
+                                  </span>
+                                  <span>{opt}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="flex justify-end gap-3 pt-4 border-t border-slate-200">
+                      <button
+                        onClick={() => setQuizState('idle')}
+                        className="px-4 py-2.5 bg-slate-200 hover:bg-slate-300 text-slate-700 font-semibold rounded-[10px] text-xs"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={handleQuizSubmit}
+                        disabled={quizLoading || Object.keys(quizAnswers).length === 0}
+                        className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-[10px] text-xs shadow-sm disabled:opacity-50"
+                      >
+                        {quizLoading ? 'Submitting...' : 'Submit Quiz'}
+                      </button>
+                    </div>
+                  </div>
+                ) : quizState === 'submitted' && quizResult ? (
+                  <div className="space-y-6 bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                    <div className={`p-6 rounded-xl text-center space-y-2 ${
+                      quizResult.passed ? 'bg-emerald-50 border border-emerald-200 text-emerald-900' : 'bg-amber-50 border border-amber-200 text-amber-900'
+                    }`}>
+                      <div className="text-2xl font-bold">
+                        {quizResult.passed ? (language === 'rw' ? "Watsinze Ikizamini!" : language === 'fr' ? "Quiz Réussi !" : "Quiz Passed Successfully!") : (language === 'rw' ? "Ntibihagije, Ongera ugerageze" : language === 'fr' ? "Réessayez" : "Keep practicing!")}
+                      </div>
+                      <p className="text-sm font-medium">
+                        Score: <span className="font-bold">{quizResult.score}</span> / {quizResult.total} ({quizResult.percent}%) — Pass mark: 70%
+                      </p>
+                    </div>
+
+                    {/* Results review with correct answers and explanations */}
+                    <div className="space-y-4">
+                      <h4 className="font-bold text-slate-900 text-sm">Detailed Review & Explanations</h4>
+                      {quizResult.results.map((resItem: any, rIdx: number) => {
+                        const qObj = quizQuestions.find(q => q.id === resItem.questionId);
+                        return (
+                          <div key={resItem.questionId} className={`p-4 rounded-xl border space-y-2 ${
+                            resItem.isCorrect ? 'bg-emerald-50/40 border-emerald-200' : 'bg-rose-50/40 border-rose-200'
+                          }`}>
+                            <div className="font-bold text-slate-900 text-xs sm:text-sm flex items-start gap-2">
+                              {resItem.isCorrect ? <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" /> : <XCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />}
+                              <span>#{rIdx + 1} {qObj?.text}</span>
+                            </div>
+                            <div className="text-xs space-y-1 pl-6">
+                              <div>Your Answer: <span className={resItem.isCorrect ? 'text-emerald-700 font-bold' : 'text-rose-700 font-bold'}>{qObj?.options?.[resItem.userAnswer] ?? 'None'}</span></div>
+                              {!resItem.isCorrect && (
+                                <div className="text-emerald-800 font-medium">Correct Answer: {qObj?.options?.[resItem.correctIndex]}</div>
+                              )}
+                              {resItem.explanation && (
+                                <div className="mt-2 p-3 bg-white/80 rounded-lg border border-slate-200 text-slate-700 text-xs">
+                                  <span className="font-semibold text-slate-900">Explanation:</span> {typeof resItem.explanation === 'object' ? (resItem.explanation[language] || resItem.explanation.en) : resItem.explanation}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <div className="flex justify-between items-center pt-4 border-t border-slate-200">
+                      <button
+                        onClick={() => setQuizState('idle')}
+                        className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-[10px] text-xs"
+                      >
+                        Back to Lesson
+                      </button>
+                      <button
+                        onClick={handleStartLessonQuiz}
+                        className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-[10px] text-xs shadow-sm flex items-center gap-2"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        <span>Retry Quiz</span>
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+
+                {quizError && (
+                  <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 rounded-lg text-xs">
+                    {quizError}
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -401,9 +672,10 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
               ) : (
                 <div className="grid grid-cols-1 gap-3">
                   {filteredLessons.map((lesson) => {
-                    const isLocked = !hasTrafficRulesAccess && !lesson.isFreePreview;
+                    const isLocked = !hasTrafficRulesAccess;
                     const localizedTitle =
                       lesson.title?.[language as Language] || lesson.title?.en || lesson.title?.rw || 'Lesson';
+                    const hasPassed = progressMap[lesson.id]?.passed;
 
                     return (
                       <div
@@ -436,10 +708,10 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
                                   {lesson.gazetteReference}
                                 </span>
                               )}
-                              {lesson.isFreePreview && (
+                              {hasPassed && (
                                 <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded flex items-center gap-1">
-                                  <Sparkles className="w-3 h-3 text-emerald-600" />
-                                  <span>Free</span>
+                                  <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                  <span>Passed</span>
                                 </span>
                               )}
                             </div>

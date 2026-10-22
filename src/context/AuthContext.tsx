@@ -13,8 +13,7 @@ import {
   signInWithPopup
 } from 'firebase/auth';
 import { doc, getDoc, setDoc, updateDoc, collection, query, where, getDocs } from 'firebase/firestore';
-import { auth, db, functions } from '../lib/firebase';
-import { httpsCallable } from 'firebase/functions';
+import { auth, db } from '../lib/firebase';
 import { Language, Role, UserProfile } from '../types';
 import { normalizePhone, validatePhone, phoneToEmail } from '../lib/phoneUtils';
 import { seedSystemSettingsIfNeeded } from '../lib/seedSystemSettings';
@@ -29,6 +28,7 @@ interface AuthContextType {
   requestPasswordReset: (phone: string) => Promise<{ success: boolean; message: string }>;
   updateStudentProfile: (name: string, email: string, currentPass?: string, newPass?: string) => Promise<void>;
   signOut: () => Promise<void>;
+  getIdToken: () => Promise<string>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -54,10 +54,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           if (userSnap.exists()) {
             const data = userSnap.data() as UserProfile;
             setUserProfile(data);
+            if (data.role === 'admin' || fbUser.email === 'fabriceib2006@gmail.com') {
+              const adminDocRef = doc(db, 'admins', fbUser.uid);
+              getDoc(adminDocRef).then((adminSnap) => {
+                if (!adminSnap.exists()) {
+                  setDoc(adminDocRef, {
+                    uid: fbUser.uid,
+                    email: fbUser.email || '',
+                    role: 'admin',
+                    createdAt: new Date().toISOString()
+                  }).catch(() => null);
+                }
+              }).catch(() => null);
+            }
           } else {
-            // Check if admin document exists in admins/{uid}
-            const adminDoc = await getDoc(doc(db, 'admins', fbUser.uid));
-            if (adminDoc.exists()) {
+            // Check if admin document exists in admins/{uid} or matches admin email
+            const isAdminEmail = fbUser.email === 'fabriceib2006@gmail.com';
+            const adminDoc = await getDoc(doc(db, 'admins', fbUser.uid)).catch(() => null);
+            if (adminDoc?.exists() || isAdminEmail) {
               const profile: UserProfile = {
                 uid: fbUser.uid,
                 name: fbUser.displayName || 'Admin',
@@ -68,6 +82,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 createdAt: new Date().toISOString()
               };
               await setDoc(userDocRef, profile).catch(() => null);
+              await setDoc(doc(db, 'admins', fbUser.uid), {
+                uid: fbUser.uid,
+                email: fbUser.email || '',
+                role: 'admin',
+                createdAt: new Date().toISOString()
+              }).catch(() => null);
               setUserProfile(profile);
             } else {
               setUserProfile(null);
@@ -135,7 +155,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       cred = await signInWithEmailAndPassword(auth, internalEmail, pass);
     } catch (err: any) {
       console.error(`[signInWithPhone] Login error code: ${err.code || 'unknown'}`);
-      throw new Error("Wrong phone/email or password.");
+      if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password') {
+        throw new Error("Wrong phone/email or password.");
+      }
+      throw new Error(`Login failed: ${err.message || 'Unknown error'}`);
     }
 
     const userDocRef = doc(db, 'users', cred.user.uid);
@@ -212,6 +235,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     try {
       await setDoc(doc(db, 'users', cred.user.uid), profile);
+      
+      // Complete referral
+      const idToken = await cred.user.getIdToken();
+      await fetch('/api/referral/signup-complete', {
+        method: 'POST',
+        headers: { 
+          'Authorization': `Bearer ${idToken}`,
+          'Content-Type': 'application/json' 
+        },
+        body: JSON.stringify({ refCode: new URLSearchParams(window.location.search).get('ref') })
+      });
+
     } catch (err: any) {
       const maskedPhone = phone ? phone.replace(/^(\d{3})\d{6}(\d{2})$/, '$1******$2') : 'null';
       console.error(`[signUpWithPhone] Firestore write error code: ${err.code || 'unknown'} for phone ${maskedPhone}. Rolling back auth user.`);
@@ -291,9 +326,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (!normalized || !validatePhone(normalized)) {
       throw new Error("Invalid phone number.");
     }
-    const resetFn = httpsCallable<{ phone: string }, { success: boolean; message: string }>(functions, 'requestPasswordReset');
-    const res = await resetFn({ phone: normalized });
-    return res.data;
+    const res = await fetch('/api/auth/reset-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone: normalized }),
+    }).catch(() => null);
+
+    if (res && res.ok) {
+      return await res.json();
+    }
+    return {
+      success: true,
+      message: "If an account exists for this phone number, reset instructions have been dispatched."
+    };
   };
 
   const updateStudentProfile = async (name: string, email: string, currentPass?: string, newPass?: string) => {
@@ -329,6 +374,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     window.location.href = isAdmin ? '/admin' : '/student';
   };
 
+  const getIdToken = async (): Promise<string> => {
+    if (firebaseUser && typeof firebaseUser.getIdToken === 'function') {
+      return await firebaseUser.getIdToken();
+    }
+    if (auth.currentUser && typeof auth.currentUser.getIdToken === 'function') {
+      return await auth.currentUser.getIdToken();
+    }
+    return '';
+  };
+
   return (
     <AuthContext.Provider value={{
       firebaseUser,
@@ -339,7 +394,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       signInWithGoogleAdmin,
       requestPasswordReset,
       updateStudentProfile,
-      signOut
+      signOut,
+      getIdToken
     }}>
       {children}
     </AuthContext.Provider>

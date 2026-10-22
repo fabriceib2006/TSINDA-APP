@@ -19,6 +19,7 @@ export const AdminDashboard: React.FC = () => {
           handleFirestoreError(err, OperationType.LIST, 'users');
           return null;
         });
+        const userIds = usersSnap ? new Set(usersSnap.docs.map(d => d.id)) : new Set<string>();
         if (usersSnap) setUsersCount(usersSnap.size);
 
         // Fetch subscriptions
@@ -30,7 +31,8 @@ export const AdminDashboard: React.FC = () => {
           const now = new Date();
           const active = subsSnap.docs.filter(d => {
             const s = d.data() as Subscription;
-            return s.status === 'active' && new Date(s.endDate) > now;
+            const isUnexpired = !s.endDate || new Date(s.endDate) > now;
+            return s.status === 'active' && isUnexpired && userIds.has(s.userId);
           }).length;
           setActiveSubsCount(active);
         }

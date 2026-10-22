@@ -1,885 +1,559 @@
 import React, { useEffect, useState } from 'react';
-import { db, functions } from '../../lib/firebase';
-import { collection, getDocs, doc, query, where, addDoc, updateDoc } from 'firebase/firestore';
-import { httpsCallable } from 'firebase/functions';
-import { handleFirestoreError, OperationType } from '../../lib/firestoreUtils';
-import { Question, ExamSettings, Language, Subscription, CombinedAccess, ExamAttempt } from '../../types';
-import { normalizeSubscription, getCombinedAccess } from '../../lib/subscriptionUtils';
 import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
+import { Question, ExamSettings, Language, CombinedAccess, Subscription } from '../../types';
+import { db } from '../../lib/firebase';
+import { collection, query, where, getDocs } from 'firebase/firestore';
+import { normalizeSubscription, getCombinedAccess } from '../../lib/subscriptionUtils';
 import { 
   Clock, 
   ArrowLeft, 
   Award, 
-  HelpCircle, 
   Lock, 
   CheckCircle2, 
   XCircle, 
-  Play, 
-  RotateCcw,
-  ShieldCheck,
-  AlertCircle
+  Play,
+  AlertCircle,
+  RefreshCw,
+  Check,
+  ChevronRight,
+  ChevronLeft
 } from 'lucide-react';
 import { SubscriptionModal } from './SubscriptionModal';
 import { getLocalizedQuestionText, getLocalizedQuestionOptions, getLocalizedQuestionExplanation, NotTranslatedBadge } from '../../lib/i18n';
 
-interface ExamResult {
-  id?: string;
-  userId: string;
-  score: number;
-  total: number;
-  passMark: number;
-  passed: boolean;
-  date: string;
-  answers: { question: Question; selectedIndex: number; correct: boolean }[];
-}
-
-export interface ServerExamReviewItem {
-  questionId: string;
-  questionIndex: number;
-  correctIndex: number;
-  studentAnswer: number | null;
-  isCorrect: boolean;
-}
-
 export interface ServerExamResult {
-  success?: boolean;
   score: number;
   passed: boolean;
   total: number;
   passMark: number;
-  expired?: boolean;
-  review: ServerExamReviewItem[];
+  results: {
+    questionId: string;
+    userAnswer: number;
+    correctIndex: number;
+    explanation: Record<Language, string>;
+    isCorrect: boolean;
+  }[];
 }
 
 export const MockExamView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
-  const { userProfile } = useAuth();
+  const { userProfile, firebaseUser, getIdToken } = useAuth();
   const { language } = useLanguage();
-  const [allQuestions, setAllQuestions] = useState<Question[]>([]);
+  const getToken = async () => {
+    if (typeof getIdToken === 'function') return await getIdToken();
+    return firebaseUser && typeof firebaseUser.getIdToken === 'function' ? await firebaseUser.getIdToken() : '';
+  };
+  
   const [examQuestions, setExamQuestions] = useState<Question[]>([]);
   const [settings, setSettings] = useState<ExamSettings>({ id: 'global', numQuestions: 20, durationMinutes: 20, passMark: 12 });
   const [access, setAccess] = useState<CombinedAccess | null>(null);
   
-  // Exam state
   const [examState, setExamState] = useState<'ready' | 'running' | 'submitted'>('ready');
   const [currentAttemptId, setCurrentAttemptId] = useState<string | null>(null);
-  const [activeSubId, setActiveSubId] = useState<string | null>(null);
-  const [isResumed, setIsResumed] = useState(false);
   const [serverResult, setServerResult] = useState<ServerExamResult | null>(null);
 
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [userAnswers, setUserAnswers] = useState<Record<number, number>>({});
-  const [timeLeft, setTimeLeft] = useState(20 * 60); // seconds
+  const [userAnswers, setUserAnswers] = useState<Record<string, number>>({});
+  const [timeLeft, setTimeLeft] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [errorCode, setErrorCode] = useState<'NO_PLAN' | 'NO_CREDITS' | null>(null);
+  const [isResumed, setIsResumed] = useState(false);
   const [reviewMode, setReviewMode] = useState(false);
   const [isSubModalOpen, setIsSubModalOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
+  useEffect(() => {
+    let timer: any = null;
+    if (examState === 'running' && timeLeft > 0) {
+      timer = setInterval(() => {
+        setTimeLeft(prev => {
+          if (prev <= 1) {
+            clearInterval(timer);
+            handleSubmitExam();
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    }
+    return () => { if (timer) clearInterval(timer); };
+  }, [examState, timeLeft]);
+
   const initData = async () => {
     if (!userProfile) return;
     setLoading(true);
+    setErrorMsg(null);
 
     try {
-      // 1. Fetch Exam Settings
-      const setSnap = await getDocs(collection(db, 'examSettings')).catch(() => null);
-      let numQ = 20;
-      let durMin = 20;
-      let pass = 12;
-      if (setSnap && !setSnap.empty) {
-        const s = setSnap.docs[0].data() as ExamSettings;
-        numQ = s.numQuestions || 20;
-        durMin = s.durationMinutes || 20;
-        pass = s.passMark || 12;
-        setSettings(s);
+      const token = await getToken();
+      const settingsRes = await fetch('/api/exams/settings', { headers: { 'Authorization': `Bearer ${token}` } });
+      if (!settingsRes.ok) throw new Error('Failed to fetch exam settings');
+      const settingsData = await settingsRes.json();
+      setSettings(settingsData);
+      
+      const [subsSnap, purchasesSnap, accessSnap] = await Promise.all([
+        getDocs(query(collection(db, 'subscriptions'), where('userId', '==', userProfile.uid))).catch(() => null),
+        getDocs(query(collection(db, 'users', userProfile.uid, 'purchases'), where('status', '==', 'active'))).catch(() => null),
+        getDocs(collection(db, 'users', userProfile.uid, 'access')).catch(() => null),
+      ]);
+
+      const allList: Subscription[] = [];
+      if (purchasesSnap) {
+        purchasesSnap.docs.forEach(d => allList.push(normalizeSubscription(d.data(), d.id)));
       }
-
-      // 2. Fetch User Subscriptions & Compute Combined Access
-      const subsSnap = await getDocs(
-        query(collection(db, 'subscriptions'), where('userId', '==', userProfile.uid))
-      ).catch(() => null);
-
-      let combined: CombinedAccess;
       if (subsSnap) {
-        const subs = subsSnap.docs.map(d => normalizeSubscription(d.data(), d.id));
-        combined = getCombinedAccess(subs);
-        setAccess(combined);
-      } else {
-        combined = getCombinedAccess([]);
-        setAccess(combined);
-      }
-
-      // 3. Fetch all published questions
-      const qSnap = await getDocs(collection(db, 'questions')).catch(err => {
-        handleFirestoreError(err, OperationType.LIST, 'questions');
-        return null;
-      });
-
-      let publishedQuestions: Question[] = [];
-      if (qSnap) {
-        publishedQuestions = qSnap.docs
-          .map(d => ({ id: d.id, ...d.data() } as Question))
-          .filter(q => q.isPublished);
-        setAllQuestions(publishedQuestions);
-      }
-
-      // 4. Check for existing in_progress attempt to resume!
-      const attemptsSnap = await getDocs(
-        query(
-          collection(db, 'examAttempts'),
-          where('userId', '==', userProfile.uid),
-          where('status', '==', 'in_progress')
-        )
-      ).catch(() => null);
-
-      if (attemptsSnap && !attemptsSnap.empty) {
-        const attemptDoc = attemptsSnap.docs[0];
-        const attemptData = attemptDoc.data() as ExamAttempt;
-        const startedTime = new Date(attemptData.startedAt).getTime();
-        const durationSeconds = (attemptData.durationMinutes || durMin) * 60;
-        const elapsedSeconds = Math.floor((Date.now() - startedTime) / 1000);
-
-        if (elapsedSeconds >= durationSeconds) {
-          // Attempt expired while user was away: auto-submit it
-          await handleFinalizeExpiredAttempt(attemptDoc.id, attemptData, publishedQuestions, pass);
-        } else {
-          // Resume the in-progress attempt!
-          setCurrentAttemptId(attemptDoc.id);
-          setActiveSubId(attemptData.subscriptionId || combined.activeSubscriptionId);
-          setTimeLeft(durationSeconds - elapsedSeconds);
-          setIsResumed(true);
-
-          // Restore questions list
-          let restoredQuestions: Question[] = [];
-          if (attemptData.questionIds && attemptData.questionIds.length > 0) {
-            restoredQuestions = attemptData.questionIds
-              .map(id => publishedQuestions.find(q => q.id === id))
-              .filter(Boolean) as Question[];
+        subsSnap.docs.forEach(d => {
+          if (!allList.some(p => p.id === d.id || p.planId === d.data().planId)) {
+            allList.push(normalizeSubscription(d.data(), d.id));
           }
-          if (restoredQuestions.length === 0) {
-            restoredQuestions = publishedQuestions.slice(0, numQ);
-          }
-          setExamQuestions(restoredQuestions);
-          if (attemptData.userAnswers) {
-            setUserAnswers(attemptData.userAnswers);
-          }
-          setExamState('running');
-        }
-      }
-    } catch (err) {
-      console.error("Error initializing exam view:", err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    initData();
-  }, [userProfile]);
-
-  // Handle auto-finalizing an attempt that expired offline
-  const handleFinalizeExpiredAttempt = async (
-    attemptId: string, 
-    attempt: ExamAttempt, 
-    allQ: Question[], 
-    _passMark: number
-  ) => {
-    try {
-      const qIds = attempt.questionIds || [];
-      const questionsList = qIds.map(id => allQ.find(q => q.id === id)).filter(Boolean) as Question[];
-
-      // Finalize attempt on server via submitExam Cloud Function (never touches subscriptions directly)
-      const submitExamCallable = httpsCallable<
-        { attemptId: string },
-        ServerExamResult
-      >(functions, 'submitExam');
-
-      const res = await submitExamCallable({
-        attemptId,
-      });
-
-      if (res.data) {
-        setServerResult(res.data);
-      }
-
-      // Show submitted view
-      setExamQuestions(questionsList);
-      setUserAnswers(attempt.userAnswers || {});
-      setExamState('submitted');
-    } catch (e) {
-      console.error("Error finalizing expired attempt:", e);
-    }
-  };
-
-  // Timer countdown while exam is running
-  useEffect(() => {
-    if (examState !== 'running' || loading) return;
-
-    const timer = setInterval(() => {
-      setTimeLeft(prev => {
-        if (prev <= 1) {
-          clearInterval(timer);
-          handleSubmitExam();
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
-    return () => clearInterval(timer);
-  }, [examState, loading, examQuestions, userAnswers, currentAttemptId, activeSubId]);
-
-  // Start a fresh exam attempt
-  const handleStartExam = async () => {
-    if (!userProfile || !access) return;
-
-    // Verify exam limits
-    if (!access.isUnlimitedExams && access.examsRemaining !== null && access.examsRemaining <= 0) {
-      setIsSubModalOpen(true);
-      return;
-    }
-
-    setLoading(true);
-    try {
-      // Pick random published questions
-      const shuffled = [...allQuestions];
-      for (let i = shuffled.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-      }
-      const selected = shuffled.slice(0, settings.numQuestions);
-
-      // Call startExam Cloud Function (creates attempt and increments examsUsed atomically on server)
-      const startExamCallable = httpsCallable<
-        { questionIds: string[] },
-        {
-          resumed: boolean;
-          attemptId: string;
-          startedAt: string;
-          expiresAt?: string;
-          durationMinutes: number;
-          numQuestions?: number;
-          passMark?: number;
-          attempt?: any;
-        }
-      >(functions, 'startExam');
-
-      const result = await startExamCallable({
-        questionIds: selected.map(q => q.id),
-      });
-
-      const resData = result.data;
-      if (resData.resumed && resData.attempt) {
-        const existing = resData.attempt;
-        const qIds = existing.questionIds || [];
-        const questionsList = qIds.map((id: string) => allQuestions.find(q => q.id === id)).filter(Boolean) as Question[];
-        setExamQuestions(questionsList.length > 0 ? questionsList : selected);
-        setUserAnswers(existing.userAnswers || {});
-        setCurrentIndex(0);
-        setCurrentAttemptId(resData.attemptId);
-        setActiveSubId(existing.subscriptionId || '');
-        const expiresAtTime = resData.expiresAt
-          ? new Date(resData.expiresAt).getTime()
-          : (new Date(resData.startedAt).getTime() + (resData.durationMinutes || 20) * 60 * 1000);
-        const remaining = Math.max(0, Math.floor((expiresAtTime - Date.now()) / 1000));
-        setTimeLeft(remaining);
-      } else {
-        setExamQuestions(selected);
-        setUserAnswers({});
-        setCurrentIndex(0);
-        const dur = resData.durationMinutes || settings.durationMinutes;
-        setTimeLeft(dur * 60);
-        setCurrentAttemptId(resData.attemptId);
-        setActiveSubId(access.activeSubscriptionId || '');
-      }
-
-      setServerResult(null);
-      setExamState('running');
-    } catch (err) {
-      console.error("Error starting exam attempt:", err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Answer selection: updates local state and saves to attempt via saveAnswer callable
-  const handleSelectOption = (idx: number) => {
-    if (examState !== 'running') return;
-    const updated = { ...userAnswers, [currentIndex]: idx };
-    setUserAnswers(updated);
-
-    // Persist answer on server via saveAnswer callable
-    if (currentAttemptId) {
-      const saveAnswerCallable = httpsCallable<
-        { attemptId: string; questionIndex: number; optionIndex: number },
-        { success: boolean }
-      >(functions, 'saveAnswer');
-
-      saveAnswerCallable({
-        attemptId: currentAttemptId,
-        questionIndex: currentIndex,
-        optionIndex: idx,
-      }).catch(err => {
-        console.error("Error saving answer via saveAnswer callable:", err);
-      });
-    }
-  };
-
-  // Submit Exam on server via submitExam callable
-  const handleSubmitExam = async () => {
-    if (submitting || examState === 'submitted' || !userProfile || !currentAttemptId) return;
-    setSubmitting(true);
-
-    try {
-      // Finalize attempt on server via submitExam Cloud Function (never touches subscriptions directly)
-      const submitExamCallable = httpsCallable<
-        { attemptId: string },
-        ServerExamResult
-      >(functions, 'submitExam');
-
-      const res = await submitExamCallable({
-        attemptId: currentAttemptId,
-      });
-
-      const serverRes = res.data;
-      if (serverRes) {
-        setServerResult(serverRes);
-
-        const evaluatedAnswers = serverRes.review.map(r => {
-          const q = examQuestions[r.questionIndex] || allQuestions.find(item => item.id === r.questionId);
-          return {
-            question: q as Question,
-            selectedIndex: r.studentAnswer ?? -1,
-            correct: r.isCorrect,
-          };
-        }).filter(a => !!a.question);
-
-        // Also create record in examResults for learner history
-        const resultData: Omit<ExamResult, 'id'> = {
-          userId: userProfile.uid,
-          score: serverRes.score,
-          total: serverRes.total,
-          passMark: serverRes.passMark,
-          passed: serverRes.passed,
-          date: new Date().toISOString(),
-          answers: evaluatedAnswers,
-        };
-        await addDoc(collection(db, 'examResults'), resultData).catch(err => {
-          handleFirestoreError(err, OperationType.CREATE, 'examResults');
         });
       }
 
+      const combined = getCombinedAccess(allList);
+      const currentDoc = accessSnap?.docs.find(d => d.id === 'current');
+      if (currentDoc) {
+        const cData = currentDoc.data();
+        if (cData.planName) combined.activePlanName = cData.planName;
+        if (typeof cData.examCredits === 'number') {
+          combined.examsRemaining = cData.examCredits;
+          combined.isUnlimitedExams = false;
+        } else if (cData.examCredits === null && combined.exams) {
+          combined.isUnlimitedExams = true;
+          combined.examsRemaining = null;
+        }
+      }
+
+      setAccess(combined);
+    } catch (err: any) {
+      console.error("Error initializing exam view:", err);
+      setErrorMsg(err.message || 'Failed to initialize exam');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { initData(); }, [userProfile]);
+
+  const handleStartExam = async () => {
+    setLoading(true);
+    setErrorMsg(null);
+    try {
+      const token = await getToken();
+      const res = await fetch('/api/exams/start', { 
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        if (errData.code === 'NO_PLAN' || errData.code === 'NO_CREDITS') {
+          setErrorCode(errData.code);
+        }
+        throw new Error(errData.error || 'Failed to start exam');
+      }
+      const data = await res.json();
+      setExamQuestions(data.questions);
+      setCurrentAttemptId(data.attemptId);
+      
+      const expiresAt = new Date(data.expiresAt).getTime();
+      const remaining = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
+      setTimeLeft(remaining);
+      
+      // Check if it was an existing attempt
+      // If remaining time is less than total duration, consider it resumed
+      const totalSecs = (settings.durationMinutes || 20) * 60;
+      if (remaining < totalSecs - 5) {
+        setIsResumed(true);
+      }
+
+      setExamState('running');
+    } catch (err: any) {
+      console.error("Error starting exam:", err);
+      setErrorMsg(err.message || 'Failed to start exam');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSubmitExam = async () => {
+    if (!currentAttemptId) return;
+    setSubmitting(true);
+    try {
+      const token = await getToken();
+      const res = await fetch('/api/exams/submit', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ attemptId: currentAttemptId, answers: userAnswers })
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'Failed to submit exam');
+      }
+      const data = await res.json();
+      setServerResult({
+        score: data.score,
+        passed: data.passed,
+        total: data.total,
+        passMark: settings.passMark || 12,
+        results: data.results
+      });
       setExamState('submitted');
-    } catch (err) {
-      console.error("Error finalizing exam:", err);
+    } catch (err: any) {
+      console.error("Error submitting exam:", err);
+      setErrorMsg(err.message || 'Failed to submit exam');
     } finally {
       setSubmitting(false);
     }
   };
 
-  const formatTime = (secs: number) => {
-    const mins = Math.floor(secs / 60);
-    const s = secs % 60;
-    return `${mins}:${s < 10 ? '0' : ''}${s}`;
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
   };
 
-  if (loading) {
+  if (loading && examState === 'ready') {
     return (
-      <div className="max-w-3xl mx-auto space-y-6">
-        <div className="flex items-center justify-between">
-          <div className="h-6 bg-slate-200 rounded w-28 animate-pulse"></div>
-          <div className="h-8 bg-slate-200 rounded-xl w-24 animate-pulse"></div>
-        </div>
-        <div className="bg-white rounded-xl border border-slate-200 p-8 space-y-6 animate-pulse">
-          <div className="h-4 bg-slate-100 rounded w-32"></div>
-          <div className="h-6 bg-slate-200 rounded w-3/4"></div>
-          <div className="space-y-3 pt-2">
-            {[1, 2, 3, 4].map((i) => (
-              <div key={i} className="h-14 bg-slate-100 rounded-[10px]"></div>
-            ))}
-          </div>
-        </div>
+      <div className="flex items-center justify-center min-h-[400px]">
+        <RefreshCw className="w-8 h-8 text-blue-600 animate-spin" />
       </div>
     );
   }
 
-  // 1. Access Check: No active subscription OR exams access false
-  if (!access?.hasActiveSubscription || !access.exams) {
+  if (errorCode || (!loading && access && (!access.exams || (!access.isUnlimitedExams && access.examsRemaining === 0)))) {
+    const isNoCredits = errorCode === 'NO_CREDITS' || (access && access.exams && !access.isUnlimitedExams && access.examsRemaining === 0);
     return (
-      <div className="max-w-md mx-auto bg-white rounded-xl border border-slate-200 p-8 text-center space-y-6 shadow-sm">
-        <div className="w-16 h-16 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center mx-auto shadow-xs">
-          <Lock className="w-8 h-8" />
-        </div>
-        <div className="space-y-2">
-          <h3 className="text-xl font-bold text-slate-900">National Exam Locked</h3>
-          <p className="text-sm text-slate-500 leading-relaxed">
-            {access?.hasActiveSubscription 
-              ? "Your current active subscription plan does not include Rwanda National Gazette exam simulations."
-              : "Upgrade to a TSINDA study pass to unlock timed 20-question exam simulations."}
-          </p>
-        </div>
-        <div className="space-y-3">
-          <button
-            onClick={() => setIsSubModalOpen(true)}
-            className="w-full min-h-[44px] px-5 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-[10px] shadow-sm transition-colors text-sm"
-          >
-            Upgrade Plan
-          </button>
-          <button
-            onClick={onBack}
-            className="w-full min-h-[44px] px-5 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-[10px] transition-colors text-sm"
-          >
-            Back to Dashboard
-          </button>
-        </div>
-        <SubscriptionModal
-          isOpen={isSubModalOpen}
-          onClose={() => setIsSubModalOpen(false)}
-          onSubscribed={initData}
-        />
-      </div>
-    );
-  }
-
-  // 2. Exam Limit Check: examsUsed >= examLimit
-  if (!access.isUnlimitedExams && access.examsRemaining !== null && access.examsRemaining <= 0) {
-    return (
-      <div className="max-w-md mx-auto bg-white rounded-xl border border-slate-200 p-8 text-center space-y-6 shadow-sm">
+      <div className="max-w-md mx-auto bg-white rounded-2xl border border-slate-200 p-8 text-center space-y-6 shadow-sm my-12">
         <div className="w-16 h-16 bg-amber-50 text-amber-600 rounded-2xl flex items-center justify-center mx-auto shadow-xs">
           <Lock className="w-8 h-8" />
         </div>
         <div className="space-y-2">
-          <h3 className="text-xl font-bold text-slate-900">Exam limit reached, upgrade your plan</h3>
-          <p className="text-sm text-slate-500 leading-relaxed">
-            You have used all {access.totalExamsAllowed} completed mock exams included with your current pass.
-          </p>
-          <p className="text-xs text-slate-400">
-            Exams used: {access.examsUsed} of {access.totalExamsAllowed} • Expiry: {new Date(access.earliestExpiryDate || '').toLocaleDateString()}
+          <h3 className="text-xl font-bold text-slate-900">
+            {isNoCredits
+              ? (language === 'rw' ? 'Ibizamini Byashize (No Credits)' : language === 'fr' ? 'Crédits Épuisés' : 'No Exam Credits Remaining')
+              : (language === 'rw' ? 'Nta Gahunda Ifunguye (No Plan)' : language === 'fr' ? 'Aucun Forfait Actif' : 'No Active Plan')}
+          </h3>
+          <p className="text-sm text-slate-600 leading-relaxed">
+            {isNoCredits
+              ? (language === 'rw'
+                  ? 'Wakoresheje ibizamini byose wari wemerewe muri gahunda yawe. Nyamuneka gura indi gahunda cyangwa ibizamini byo gukomeza.'
+                  : language === 'fr'
+                  ? 'Vous avez utilisé tous vos crédits d\'examen. Veuillez mettre à niveau votre forfait ou acheter un pack d\'examens.'
+                  : 'You have used all exam credits on your current plan. Please upgrade your plan or purchase an exam pack to continue.')
+              : (language === 'rw'
+                  ? 'Nta gahunda y\'ifite ifunguye irimo ibizamini byo kwimenyereza. Nyamuneka hitamo gahunda kugira ngo utangire kwitoza.'
+                  : language === 'fr'
+                  ? 'Vous n\'avez pas de forfait actif incluant les examens blancs. Veuillez choisir un forfait pour commencer à vous entraîner.'
+                  : 'You do not hold an active plan that allows exams. Please subscribe to a study plan or exam pack to start practicing.')}
           </p>
         </div>
         <div className="space-y-3">
           <button
             onClick={() => setIsSubModalOpen(true)}
-            className="w-full min-h-[44px] px-5 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-[10px] shadow-sm transition-colors text-sm"
+            className="w-full min-h-[48px] px-5 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl shadow-md transition-colors text-sm flex items-center justify-center gap-2"
           >
-            Upgrade Your Plan
+            <span>{language === 'rw' ? 'Gura / Hindura Gahunda' : language === 'fr' ? 'Mettre à niveau' : 'Upgrade Plan'}</span>
           </button>
           <button
             onClick={onBack}
-            className="w-full min-h-[44px] px-5 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-[10px] transition-colors text-sm"
+            className="w-full min-h-[48px] px-5 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-xl transition-colors text-sm"
           >
-            Back to Dashboard
+            {language === 'rw' ? 'Subira kuri Dashboard' : language === 'fr' ? 'Retour au tableau de bord' : 'Back to Dashboard'}
           </button>
         </div>
         <SubscriptionModal
           isOpen={isSubModalOpen}
-          onClose={() => setIsSubModalOpen(false)}
-          onSubscribed={initData}
+          onClose={() => { setIsSubModalOpen(false); setErrorCode(null); initData(); }}
+          onSubscribed={() => { setIsSubModalOpen(false); setErrorCode(null); initData(); }}
         />
       </div>
     );
   }
 
-  // 3. Question Bank Validation
-  if (allQuestions.length < settings.numQuestions && examState === 'ready') {
-    return (
-      <div className="space-y-6">
-        <button onClick={onBack} className="min-h-[44px] flex items-center gap-2 text-sm font-semibold text-slate-600 hover:text-slate-900">
-          <ArrowLeft className="w-4 h-4" /> 
-          <span>Back to Dashboard</span>
-        </button>
-        <div className="bg-white rounded-xl border border-slate-200 p-10 sm:p-14 text-center space-y-3 shadow-sm">
-          <div className="w-12 h-12 bg-slate-100 text-slate-400 rounded-xl flex items-center justify-center mx-auto">
-            <HelpCircle className="w-6 h-6" />
-          </div>
-          <h3 className="font-bold text-slate-900 text-base">Question bank not ready</h3>
-          <p className="text-sm text-slate-500 max-w-sm mx-auto">
-            Need at least {settings.numQuestions} published questions to launch a national theory simulation.
-          </p>
-        </div>
-      </div>
-    );
-  }
-
-  // 4. Initial Ready Screen (Before starting)
-  if (examState === 'ready') {
-    const expiryFormatted = access.earliestExpiryDate 
-      ? new Date(access.earliestExpiryDate).toLocaleDateString()
-      : 'Active';
-
-    return (
-      <div className="max-w-2xl mx-auto space-y-6">
+  return (
+    <div className="max-w-4xl mx-auto space-y-6 pb-12">
+      {/* Top Bar */}
+      <div className="flex items-center justify-between">
         <button
           onClick={onBack}
-          className="min-h-[44px] flex items-center gap-2 text-sm font-semibold text-slate-600 hover:text-slate-900 transition-colors"
+          className="inline-flex items-center gap-2 text-sm font-semibold text-slate-600 hover:text-slate-950 transition-colors"
         >
-          <ArrowLeft className="w-4 h-4" /> 
-          <span>Back to Dashboard</span>
+          <ArrowLeft className="w-4 h-4" />
+          <span>{language === 'rw' ? 'Subira kuri Dashboard' : language === 'fr' ? 'Retour au tableau de bord' : 'Back to Dashboard'}</span>
         </button>
-
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 sm:p-8 space-y-6">
-          <div className="flex items-center gap-4 pb-6 border-b border-slate-100">
-            <div className="w-14 h-14 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center shrink-0">
-              <Award className="w-8 h-8" />
-            </div>
-            <div>
-              <h2 className="text-xl sm:text-2xl font-bold text-slate-900">Rwanda National Theory Exam Simulation</h2>
-              <p className="text-xs sm:text-sm text-slate-500">Official format governed by the Rwanda National Police traffic code.</p>
-            </div>
-          </div>
-
-          {/* Learner Plan & Exam Usage Stats */}
-          <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-            <div>
-              <div className="text-xs text-slate-500 font-semibold uppercase">Exam Usage Status</div>
-              <div className="text-base font-bold text-slate-900 mt-0.5">
-                Exams used: {access.examsUsed} of {access.isUnlimitedExams ? 'Unlimited' : access.totalExamsAllowed}
-              </div>
-            </div>
-            <div className="text-left sm:text-right">
-              <div className="text-xs text-slate-500 font-semibold uppercase">Plan Expiry Date</div>
-              <div className="text-sm font-bold text-blue-600 mt-0.5">{expiryFormatted}</div>
-            </div>
-          </div>
-
-          {/* Exam Parameters */}
-          <div className="grid grid-cols-3 gap-3 p-4 bg-white rounded-xl border border-slate-200 text-center">
-            <div>
-              <span className="text-xs text-slate-400 block font-semibold uppercase">Questions</span>
-              <span className="text-lg sm:text-xl font-bold text-slate-900">{settings.numQuestions}</span>
-            </div>
-            <div>
-              <span className="text-xs text-slate-400 block font-semibold uppercase">Duration</span>
-              <span className="text-lg sm:text-xl font-bold text-blue-600">{settings.durationMinutes} min</span>
-            </div>
-            <div>
-              <span className="text-xs text-slate-400 block font-semibold uppercase">Pass Mark</span>
-              <span className="text-lg sm:text-xl font-bold text-emerald-600">{settings.passMark} / {settings.numQuestions}</span>
-            </div>
-          </div>
-
-          <div className="space-y-2 text-xs text-slate-600 leading-relaxed">
-            <p>• Once you click Start, the official timer starts ticking immediately.</p>
-            <p>• If you disconnect or refresh, your in-progress exam attempt will be resumed automatically.</p>
-            <p>• When the timer expires or you click Submit, your attempt will be scored and counted towards your subscription limit.</p>
-          </div>
-
-          <button
-            onClick={handleStartExam}
-            className="w-full min-h-[44px] py-3.5 px-6 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-[10px] shadow-sm transition-colors text-sm flex items-center justify-center gap-2"
-          >
-            <Play className="w-4 h-4 fill-current" />
-            <span>Start National Exam</span>
-          </button>
-        </div>
       </div>
-    );
-  }
 
-  // 5. Exam Submitted / Results Screen
-  if (examState === 'submitted') {
-    const finalScore = serverResult ? serverResult.score : 0;
-    const finalTotal = serverResult ? serverResult.total : examQuestions.length;
-    const finalPassMark = serverResult ? serverResult.passMark : settings.passMark;
-    const passed = serverResult ? serverResult.passed : false;
-    const isExpired = serverResult?.expired;
-
-    return (
-      <div className="max-w-2xl mx-auto space-y-6">
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 sm:p-8 text-center space-y-6">
-          <div className={`w-20 h-20 rounded-full flex items-center justify-center mx-auto ${passed ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-600'}`}>
-            <Award className="w-10 h-10" />
+      {errorMsg && (
+        <div className="p-4 bg-red-50 text-red-700 rounded-xl border border-red-200 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <AlertCircle className="w-5 h-5 shrink-0" />
+            <div className="text-sm font-medium">{errorMsg}</div>
           </div>
-
-          <div className="space-y-2">
-            <h2 className="text-2xl sm:text-3xl font-extrabold text-slate-900">
-              {passed ? "Congratulations! Passed" : "Exam Not Passed"}
-            </h2>
-            <p className="text-sm text-slate-500 max-w-md mx-auto leading-relaxed">
-              {passed 
-                ? "You have achieved the required passing score according to Rwanda Gazette criteria." 
-                : `You did not achieve the required passing mark of ${finalPassMark}. Review the official answers and try again.`}
-            </p>
-            {isExpired && (
-              <div className="inline-block mt-2 px-3 py-1 bg-amber-50 text-amber-800 text-xs font-semibold rounded-full border border-amber-200">
-                Exam time expired &mdash; finalized with saved answers
-              </div>
-            )}
-          </div>
-
-          <div className="grid grid-cols-3 gap-3 sm:gap-4 p-4 bg-slate-50 rounded-xl border border-slate-100">
-            <div>
-              <div className="text-xs text-slate-500 font-semibold uppercase">Your Score</div>
-              <div className="text-xl sm:text-2xl font-bold text-slate-900 mt-1">{finalScore} / {finalTotal}</div>
-            </div>
-            <div>
-              <div className="text-xs text-slate-500 font-semibold uppercase">Pass Mark</div>
-              <div className="text-xl sm:text-2xl font-bold text-blue-600 mt-1">{finalPassMark}</div>
-            </div>
-            <div>
-              <div className="text-xs text-slate-500 font-semibold uppercase">Status</div>
-              <div className={`text-xl sm:text-2xl font-bold mt-1 ${passed ? 'text-emerald-600' : 'text-red-600'}`}>
-                {passed ? 'PASS' : 'FAIL'}
-              </div>
-            </div>
-          </div>
-
-          <div className="flex flex-col sm:flex-row gap-3">
+          {(errorMsg.toLowerCase().includes('plan') || errorMsg.toLowerCase().includes('credit') || errorMsg.toLowerCase().includes('expired')) && (
             <button
-              onClick={() => setReviewMode(true)}
-              className="flex-1 min-h-[44px] py-3 px-4 bg-slate-900 hover:bg-slate-800 text-white font-semibold rounded-[10px] text-sm transition-colors"
+              onClick={() => setIsSubModalOpen(true)}
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-xs shrink-0 transition-colors shadow-sm"
             >
-              Review Answers & Explanations
+              {language === 'rw' ? 'Hindura Porogaramu' : language === 'fr' ? 'Changer de forfait' : 'Upgrade Plan'}
             </button>
-            <button
-              onClick={() => {
-                setExamState('ready');
-                setServerResult(null);
-                setUserAnswers({});
-                setReviewMode(false);
-                initData();
-              }}
-              className="flex-1 min-h-[44px] py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-[10px] text-sm transition-colors"
-            >
-              Take Another Exam
-            </button>
-            <button
-              onClick={onBack}
-              className="min-h-[44px] py-3 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-[10px] text-sm transition-colors"
-            >
-              Dashboard
-            </button>
-          </div>
-        </div>
-
-        {reviewMode && (
-          <div className="space-y-4">
-            <h3 className="text-lg font-bold text-slate-900">Review Questions & Explanations</h3>
-            {(serverResult?.review && serverResult.review.length > 0
-              ? serverResult.review
-              : examQuestions.map((q, idx) => ({
-                  questionId: q.id,
-                  questionIndex: idx,
-                  correctIndex: q.correctIndex,
-                  studentAnswer: userAnswers[idx] ?? null,
-                  isCorrect: userAnswers[idx] === q.correctIndex,
-                }))
-            ).map((rev) => {
-              const q = examQuestions[rev.questionIndex] || allQuestions.find(item => item.id === rev.questionId);
-              if (!q) return null;
-              const selected = rev.studentAnswer;
-              const isCorrect = rev.isCorrect;
-              const correctIdx = rev.correctIndex;
-              return (
-                <div key={q.id} className="bg-white rounded-xl border border-slate-200 p-5 space-y-3 shadow-xs">
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="font-bold text-slate-900">Question {rev.questionIndex + 1}</span>
-                    <span className={`px-2 py-0.5 rounded-full font-bold ${isCorrect ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
-                      {isCorrect ? 'Correct' : 'Incorrect'}
-                    </span>
-                  </div>
-                  {(() => {
-                    const locText = getLocalizedQuestionText(q, language as Language);
-                    const locOpts = getLocalizedQuestionOptions(q, language as Language);
-                    const locExp = getLocalizedQuestionExplanation(q, language as Language);
-
-                    return (
-                      <>
-                        <div className="flex items-start justify-between gap-3">
-                          <p className="text-sm font-semibold text-slate-900">{locText.text}</p>
-                          {locText.isFallback && <NotTranslatedBadge />}
-                        </div>
-                        <div className="space-y-1.5 text-xs">
-                          {locOpts.isFallback && (
-                            <div className="flex items-center gap-1.5 text-[11px] text-amber-700 bg-amber-50/70 px-2 py-1 rounded border border-amber-200/50">
-                              <NotTranslatedBadge />
-                              <span>Options in English (translation pending)</span>
-                            </div>
-                          )}
-                          {locOpts.options.map((opt, oIdx) => (
-                            <div
-                              key={oIdx}
-                              className={`p-2.5 rounded-lg border ${
-                                oIdx === correctIdx
-                                  ? 'bg-emerald-50 border-emerald-300 text-emerald-900 font-bold'
-                                  : oIdx === selected
-                                  ? 'bg-red-50 border-red-300 text-red-900 line-through'
-                                  : 'border-slate-100 text-slate-600'
-                              }`}
-                            >
-                              {String.fromCharCode(65 + oIdx)}. {opt}
-                            </div>
-                          ))}
-                        </div>
-                        {locExp.explanation && (
-                          <div className="p-3 bg-blue-50/70 rounded-lg text-xs text-blue-900 border border-blue-100 space-y-1">
-                            <div className="flex items-center justify-between gap-2">
-                              <strong>Rwanda Gazette Note:</strong>
-                              {locExp.isFallback && <NotTranslatedBadge />}
-                            </div>
-                            <p>{locExp.explanation}</p>
-                          </div>
-                        )}
-                      </>
-                    );
-                  })()}
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  // 6. Running Exam Screen
-  const currentQ = examQuestions[currentIndex];
-  if (!currentQ) return null;
-
-  const answeredCount = Object.keys(userAnswers).length;
-
-  return (
-    <div className="max-w-3xl mx-auto space-y-6">
-      {/* Top Header with Timer & Resume Alert */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-bold text-slate-900">National Exam</span>
-          {isResumed && (
-            <span className="text-[11px] font-bold bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full">
-              Resumed Attempt
-            </span>
           )}
         </div>
+      )}
 
-        <div className="flex items-center gap-4">
-          <span className="text-xs text-slate-500 font-medium">
-            Answered: <strong>{answeredCount}</strong> of {examQuestions.length}
-          </span>
-          <div className={`min-h-[44px] px-4 py-2 rounded-xl flex items-center gap-2 font-mono font-bold text-sm shadow-xs ${
-            timeLeft < 300 ? 'bg-red-50 text-red-600 border border-red-200 animate-pulse' : 'bg-blue-50 text-blue-700 border border-blue-200'
-          }`}>
-            <Clock className="w-4 h-4" />
-            <span>{formatTime(timeLeft)}</span>
+      {/* READY STATE */}
+      {examState === 'ready' && (
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden p-6 sm:p-10 space-y-8">
+          <div className="flex items-start gap-4">
+            <div className="w-14 h-14 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center shrink-0">
+              <Award className="w-7 h-7" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-extrabold text-slate-900">
+                {language === 'rw' ? 'Igitabo cy\'Iizamini ry\'Imenyekerezo' : language === 'fr' ? 'Examen Blanc National' : 'National Mock Exam'}
+              </h1>
+              <p className="text-sm text-slate-600 mt-1">
+                {language === 'rw' 
+                  ? 'Iizamini ryegereje ryateguwe nk\'irya nyirizina rya Polisi y\'u Rwanda (RNP).'
+                  : language === 'fr'
+                  ? 'Simulation officielle d\'examen théorique du code de la route rwandais.'
+                  : 'Official simulation modeled after the Rwanda National Police driving theory exam.'}
+              </p>
+            </div>
           </div>
-        </div>
-      </div>
 
-      {/* Progress Dots Bar */}
-      <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
-        {examQuestions.map((_, i) => (
-          <button
-            key={i}
-            onClick={() => setCurrentIndex(i)}
-            className={`min-h-[32px] min-w-[32px] rounded-lg text-xs font-bold transition-all ${
-              currentIndex === i
-                ? 'bg-blue-600 text-white shadow-xs scale-105'
-                : userAnswers[i] !== undefined
-                ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
-            }`}
-          >
-            {i + 1}
-          </button>
-        ))}
-      </div>
-
-      {/* Current Question Card */}
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 sm:p-8 space-y-6">
-        <div className="flex items-center justify-between text-xs text-slate-500 pb-4 border-b border-slate-100">
-          <span className="font-bold text-blue-600 uppercase tracking-wider">
-            Question {currentIndex + 1} of {examQuestions.length}
-          </span>
-          <span className="bg-slate-100 text-slate-700 font-semibold px-2.5 py-1 rounded-full">
-            {currentQ.category}
-          </span>
-        </div>
-
-        {/* Image thumbnail if question has image */}
-        {currentQ.imageUrl && (
-          <div className="flex justify-center p-3 bg-slate-50 rounded-xl border border-slate-100">
-            <img src={currentQ.imageUrl} alt="Exam illustration" className="max-h-56 object-contain rounded-lg" />
-          </div>
-        )}
-
-        {(() => {
-          const locText = getLocalizedQuestionText(currentQ, language as Language);
-          const locOpts = getLocalizedQuestionOptions(currentQ, language as Language);
-
-          return (
-            <>
-              <div className="flex items-start justify-between gap-3">
-                <h2 className="text-base sm:text-lg font-bold text-slate-900 leading-snug">
-                  {locText.text}
-                </h2>
-                {locText.isFallback && <NotTranslatedBadge />}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="bg-slate-50 border border-slate-100 rounded-xl p-4 space-y-1">
+              <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                {language === 'rw' ? 'Ibibazo' : language === 'fr' ? 'Questions' : 'Questions'}
               </div>
+              <div className="text-xl font-bold text-slate-900">{settings.numQuestions}</div>
+            </div>
+            <div className="bg-slate-50 border border-slate-100 rounded-xl p-4 space-y-1">
+              <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                {language === 'rw' ? 'Igihe' : language === 'fr' ? 'Durée' : 'Duration'}
+              </div>
+              <div className="text-xl font-bold text-slate-900">{settings.durationMinutes} {language === 'rw' ? 'iminota' : language === 'fr' ? 'minutes' : 'minutes'}</div>
+            </div>
+            <div className="bg-slate-50 border border-slate-100 rounded-xl p-4 space-y-1">
+              <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                {language === 'rw' ? 'Amanota yo gutsinda' : language === 'fr' ? 'Note de passage' : 'Passing Score'}
+              </div>
+              <div className="text-xl font-bold text-slate-900">{settings.passMark} / {settings.numQuestions}</div>
+            </div>
+          </div>
 
-              {/* Options Selection */}
-              <div className="space-y-3">
-                {locOpts.isFallback && (
-                  <div className="flex items-center gap-2 text-xs text-amber-700 bg-amber-50/70 px-3 py-1.5 rounded-lg border border-amber-200/60 mb-1">
-                    <NotTranslatedBadge />
-                    <span>Options in English (translation pending)</span>
-                  </div>
-                )}
-                {locOpts.options.map((option, idx) => {
-                  const isSelected = userAnswers[currentIndex] === idx;
-                  return (
-                    <button
-                      key={idx}
-                      onClick={() => handleSelectOption(idx)}
-                      className={`w-full min-h-[44px] p-4 text-left rounded-[10px] border transition-all text-sm flex items-center justify-between gap-3 ${
-                        isSelected
-                          ? 'border-blue-600 bg-blue-50/70 font-semibold text-blue-900 ring-2 ring-blue-600/20'
-                          : 'border-slate-200 hover:border-blue-300 hover:bg-slate-50/60 text-slate-700'
-                      }`}
-                    >
-                      <div className="flex items-center gap-3">
-                        <span className={`w-7 h-7 rounded-lg text-xs font-bold flex items-center justify-center shrink-0 ${
-                          isSelected ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-700'
-                        }`}>
-                          {String.fromCharCode(65 + idx)}
+          <div className="bg-blue-50/60 border border-blue-100 rounded-xl p-5 space-y-3">
+            <h3 className="text-sm font-bold text-blue-900">
+              {language === 'rw' ? 'Amategeko y\'Iizamini' : language === 'fr' ? 'Règles de l\'examen' : 'Exam Rules & Instructions'}
+            </h3>
+            <ul className="text-xs text-blue-800 space-y-1.5 list-disc list-inside">
+              <li>{language === 'rw' ? 'Ntugomba gusohoka mu isiramu y\'iizamini.' : language === 'fr' ? 'Ne quittez pas la page de l\'examen.' : 'Do not refresh or leave the page during the exam.'}</li>
+              <li>{language === 'rw' ? 'Iyo igihe kirangiye, iizamini ryoherezwa ryonyine.' : language === 'fr' ? 'Le temps écoulé soumettra automatiquement l\'examen.' : 'Unsubmitted answers are automatically scored when the timer expires.'}</li>
+              <li>{language === 'rw' ? 'Ushobora gusubira inyuma ugahindura ibisubizo.' : language === 'fr' ? 'Vous pouvez naviguer entre les questions.' : 'You can navigate back and forth between questions before submitting.'}</li>
+            </ul>
+          </div>
+
+          <div className="pt-2 flex justify-end">
+            <button
+              onClick={handleStartExam}
+              disabled={loading}
+              className="min-h-[48px] px-8 py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl shadow-md transition-all flex items-center gap-2"
+            >
+              <Play className="w-5 h-5 fill-current" />
+              <span>{language === 'rw' ? 'Tangira Iizamini' : language === 'fr' ? 'Commencer l\'Examen' : 'Start Exam'}</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* RUNNING STATE */}
+      {examState === 'running' && examQuestions.length > 0 && (
+        <div className="space-y-6">
+          {/* Header Progress & Timer */}
+          <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-6 shadow-sm flex flex-col sm:flex-row items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <span className="text-sm font-bold text-slate-700">
+                {language === 'rw' ? 'Ikibazo' : language === 'fr' ? 'Question' : 'Question'} {currentIndex + 1} / {examQuestions.length}
+              </span>
+              {isResumed && (
+                <span className="text-[10px] bg-amber-100 text-amber-800 font-bold px-2 py-0.5 rounded-full">
+                  {language === 'rw' ? 'Byongeye Gukomeza (Resumed)' : language === 'fr' ? 'Repris' : 'Attempt Resumed'}
+                </span>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2 bg-slate-100 px-4 py-2 rounded-xl text-slate-800 font-mono font-bold text-sm">
+              <Clock className="w-4 h-4 text-blue-600 animate-pulse" />
+              <span>{formatTime(timeLeft)}</span>
+            </div>
+          </div>
+
+          {/* Question Card */}
+          <div className="bg-white rounded-2xl border border-slate-200 p-6 sm:p-10 shadow-sm space-y-6">
+            <div className="space-y-2">
+              <div className="inline-block text-[11px] font-bold uppercase tracking-wider text-blue-600 bg-blue-50 px-2.5 py-1 rounded-md">
+                {examQuestions[currentIndex].category}
+              </div>
+              <h2 className="text-lg sm:text-xl font-bold text-slate-900 leading-relaxed flex items-center flex-wrap gap-2">
+                <span>{getLocalizedQuestionText(examQuestions[currentIndex], language).text}</span>
+                {getLocalizedQuestionText(examQuestions[currentIndex], language).isFallback && <NotTranslatedBadge />}
+              </h2>
+            </div>
+
+            <div className="space-y-3 pt-2">
+              {getLocalizedQuestionOptions(examQuestions[currentIndex], language).options.map((opt, idx) => {
+                const isSelected = userAnswers[examQuestions[currentIndex].id] === idx;
+                return (
+                  <button
+                    key={idx}
+                    onClick={() => setUserAnswers({ ...userAnswers, [examQuestions[currentIndex].id]: idx })}
+                    className={`w-full text-left p-4 rounded-xl border transition-all flex items-center gap-3.5 ${
+                      isSelected
+                        ? 'border-blue-600 bg-blue-50/50 text-blue-900 font-semibold ring-2 ring-blue-600/20'
+                        : 'border-slate-200 hover:border-slate-300 text-slate-700 bg-white'
+                    }`}
+                  >
+                    <div className={`w-6 h-6 rounded-full border flex items-center justify-center shrink-0 text-xs font-bold ${
+                      isSelected ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-300 text-slate-500'
+                    }`}>
+                      {String.fromCharCode(65 + idx)}
+                    </div>
+                    <span className="text-sm sm:text-base leading-normal">{opt}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Navigation footer */}
+            <div className="flex items-center justify-between pt-6 border-t border-slate-100">
+              <button
+                onClick={() => setCurrentIndex(prev => Math.max(0, prev - 1))}
+                disabled={currentIndex === 0}
+                className="px-5 py-2.5 rounded-xl border border-slate-200 text-slate-600 font-semibold text-sm hover:bg-slate-50 disabled:opacity-40 transition-colors flex items-center gap-2"
+              >
+                <ChevronLeft className="w-4 h-4" />
+                <span>{language === 'rw' ? 'Ibanze' : language === 'fr' ? 'Précédent' : 'Previous'}</span>
+              </button>
+
+              {currentIndex < examQuestions.length - 1 ? (
+                <button
+                  onClick={() => setCurrentIndex(prev => Math.min(examQuestions.length - 1, prev + 1))}
+                  className="px-6 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm transition-colors flex items-center gap-2"
+                >
+                  <span>{language === 'rw' ? 'Ibikurikira' : language === 'fr' ? 'Suivant' : 'Next'}</span>
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              ) : (
+                <button
+                  onClick={handleSubmitExam}
+                  disabled={submitting}
+                  className="px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm shadow-md transition-colors flex items-center gap-2"
+                >
+                  <span>{language === 'rw' ? 'Ohereza Iizamini' : language === 'fr' ? 'Soumettre' : 'Submit Exam'}</span>
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SUBMITTED / RESULTS STATE */}
+      {examState === 'submitted' && serverResult && (
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden p-6 sm:p-10 space-y-8">
+          <div className="text-center space-y-3">
+            <div className={`w-20 h-20 rounded-full flex items-center justify-center mx-auto shadow-sm ${
+              serverResult.passed ? 'bg-emerald-100 text-emerald-600' : 'bg-rose-100 text-rose-600'
+            }`}>
+              {serverResult.passed ? <CheckCircle2 className="w-10 h-10" /> : <XCircle className="w-10 h-10" />}
+            </div>
+
+            <h2 className="text-2xl font-extrabold text-slate-900">
+              {serverResult.passed 
+                ? (language === 'rw' ? 'Watsinze Iizamini!' : language === 'fr' ? 'Examen réussi !' : 'Exam Passed!')
+                : (language === 'rw' ? 'Ntibashije Gutsinda' : language === 'fr' ? 'Examen échoué' : 'Exam Not Passed')}
+            </h2>
+
+            <p className="text-sm text-slate-600 max-w-md mx-auto">
+              {language === 'rw' ? 'Amanota yawe y\'ingenzi hamwe n\'isesurwa ry\'ibisubizo:' : language === 'fr' ? 'Vos résultats détaillés :' : 'Here is your detailed performance breakdown:'}
+            </p>
+
+            <div className="inline-flex items-center gap-6 bg-slate-50 border border-slate-100 px-6 py-3 rounded-2xl text-slate-800 font-bold">
+              <div>
+                <span className="text-xs text-slate-500 block">{language === 'rw' ? 'Amanota' : language === 'fr' ? 'Score' : 'Score'}</span>
+                <span className="text-xl text-blue-600">{serverResult.score} / {serverResult.total}</span>
+              </div>
+              <div className="w-px h-8 bg-slate-200"></div>
+              <div>
+                <span className="text-xs text-slate-500 block">{language === 'rw' ? 'Bisabwa' : language === 'fr' ? 'Requis' : 'Required'}</span>
+                <span className="text-xl text-slate-800">{serverResult.passMark}</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-4 pt-4 border-t border-slate-100">
+            <h3 className="font-bold text-slate-900 text-lg">
+              {language === 'rw' ? 'Isesurwa ry\'Ibibazo' : language === 'fr' ? 'Révision des questions' : 'Question Review'}
+            </h3>
+
+            <div className="space-y-4">
+              {serverResult.results.map((r, i) => {
+                const q = examQuestions.find(item => item.id === r.questionId);
+                const explData = getLocalizedQuestionExplanation(q || { id: r.questionId, text: { en: '', rw: '', fr: '' }, options: { en: [], rw: [], fr: [] }, correctIndex: r.correctIndex, explanation: r.explanation, category: '', isPublished: true }, language);
+
+                return (
+                  <div key={r.questionId} className={`p-5 rounded-2xl border ${r.isCorrect ? 'border-emerald-200 bg-emerald-50/30' : 'border-rose-200 bg-rose-50/30'} space-y-3`}>
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-center gap-2 font-bold text-slate-900 text-sm">
+                        <span className="w-6 h-6 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center text-xs">{i + 1}</span>
+                        <span className="flex items-center flex-wrap gap-2">
+                          <span>{q ? getLocalizedQuestionText(q, language).text : r.questionId}</span>
+                          {q && getLocalizedQuestionText(q, language).isFallback && <NotTranslatedBadge />}
                         </span>
-                        <span>{option}</span>
                       </div>
-                      {isSelected && <CheckCircle2 className="w-5 h-5 text-blue-600 shrink-0" />}
-                    </button>
-                  );
-                })}
-              </div>
-            </>
-          );
-        })()}
+                      {r.isCorrect ? (
+                        <span className="inline-flex items-center gap-1 bg-emerald-100 text-emerald-800 text-xs font-bold px-2.5 py-1 rounded-full shrink-0">
+                          <CheckCircle2 className="w-3.5 h-3.5" /> Correct
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 bg-rose-100 text-rose-800 text-xs font-bold px-2.5 py-1 rounded-full shrink-0">
+                          <XCircle className="w-3.5 h-3.5" /> Incorrect
+                        </span>
+                      )}
+                    </div>
 
-        {/* Footer Navigation */}
-        <div className="flex items-center justify-between pt-4 border-t border-slate-100">
-          <button
-            disabled={currentIndex === 0}
-            onClick={() => setCurrentIndex(i => i - 1)}
-            className="min-h-[44px] px-4 py-2 text-sm font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-[10px] transition-colors disabled:opacity-30"
-          >
-            ← Previous
-          </button>
+                    <div className="text-xs text-slate-600 space-y-1 pl-8">
+                      <div>Your answer: <span className="font-semibold text-slate-900">{r.userAnswer !== undefined && r.userAnswer >= 0 ? String.fromCharCode(65 + r.userAnswer) : 'None'}</span></div>
+                      {!r.isCorrect && <div>Correct answer: <span className="font-semibold text-emerald-700">{String.fromCharCode(65 + r.correctIndex)}</span></div>}
+                    </div>
 
-          <div className="flex items-center gap-3">
-            {currentIndex < examQuestions.length - 1 ? (
-              <button
-                onClick={() => setCurrentIndex(i => i + 1)}
-                className="min-h-[44px] px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-[10px] text-sm shadow-sm transition-colors"
-              >
-                Next →
-              </button>
-            ) : (
-              <button
-                disabled={submitting}
-                onClick={handleSubmitExam}
-                className="min-h-[44px] px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-[10px] text-sm shadow-sm transition-colors disabled:opacity-50"
-              >
-                {submitting ? "Submitting..." : "Submit National Exam"}
-              </button>
-            )}
+                    <div className="mt-2 pl-8 pt-2 border-t border-slate-200/60 text-xs text-slate-700 space-y-1">
+                      <div className="flex items-center gap-2 font-semibold">
+                        <span>Explanation:</span>
+                        {explData.isFallback && <NotTranslatedBadge />}
+                      </div>
+                      <p className="leading-relaxed">{explData.explanation}</p>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="flex justify-end pt-4">
+            <button
+              onClick={onBack}
+              className="px-6 py-3 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl text-sm transition-colors"
+            >
+              {language === 'rw' ? 'Subira ku Itangiriro' : language === 'fr' ? 'Terminer' : 'Finish & Exit'}
+            </button>
           </div>
         </div>
-      </div>
+      )}
+      <SubscriptionModal 
+        isOpen={isSubModalOpen} 
+        onClose={() => setIsSubModalOpen(false)} 
+        onSubscribed={() => { setIsSubModalOpen(false); initData(); }} 
+      />
     </div>
   );
 };

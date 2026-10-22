@@ -23,18 +23,20 @@ export function getBestPromotion(planId: string, basePrice: number, promotions: 
     if (now >= start && now <= end) {
       let candPrice = basePrice;
       let candDiscount = 0;
+      let candBadge = '';
       if (p.discountType === 'percent') {
         candDiscount = Math.round(basePrice * (Number(p.discountValue) / 100));
-        discountBadge = `-${p.discountValue}%`;
+        candBadge = `-${p.discountValue}%`;
       } else {
         candDiscount = Number(p.discountValue);
-        discountBadge = `-RWF ${candDiscount.toLocaleString()}`;
+        candBadge = `-RWF ${candDiscount.toLocaleString()}`;
       }
-      candPrice = Math.max(100, basePrice - candDiscount);
+      candPrice = Math.max(0, basePrice - candDiscount);
       if (candPrice < bestPrice) {
         bestPrice = candPrice;
         activePromo = p;
         discountAmount = basePrice - bestPrice;
+        discountBadge = candBadge;
       }
     }
   });

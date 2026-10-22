@@ -306,6 +306,8 @@ export const HomePage: React.FC = () => {
         </div>
       ))}
 
+
+
       {/* MAIN SECTIONS FROM FIRESTORE */}
       <main className="flex-1">
         {sections.map((section) => {
@@ -535,6 +537,11 @@ export const HomePage: React.FC = () => {
                                         {getText(homepageT.recommended, language)}
                                     </div>
                                 )}
+                                {promoInfo.hasPromotion && (
+                                    <div className="absolute -top-3 right-4 bg-rose-600 text-white text-[11px] font-extrabold px-3 py-1 rounded-full uppercase tracking-wider shadow-sm flex items-center gap-1">
+                                        <span>🔥 {promoInfo.discountBadge} OFF</span>
+                                    </div>
+                                )}
                                 <div className="space-y-4">
                                     <h3 className="text-xl font-black text-slate-900">{plan.name[language] || plan.name.en}</h3>
                                     {plan.description && getText(plan.description, language) && (
@@ -554,9 +561,10 @@ export const HomePage: React.FC = () => {
                                             {plan.durationDays === 1 ? getText(homepageT.daysSingular, language).replace('{n}', '1') : getText(homepageT.daysPlural, language).replace('{n}', plan.durationDays?.toString() || '30')}
                                         </div>
                                         {promoInfo.hasPromotion && promoInfo.activePromo && (
-                                            <div className="pt-2 flex flex-wrap items-center gap-2 text-xs">
-                                                <span className="font-bold text-rose-600">{getText(homepageT.discount, language)}: {promoInfo.discountBadge}</span>
-                                                <span className="text-slate-500">{getText(homepageT.endsIn, language)}: {formatCountdown(promoInfo.activePromo.endAt)}</span>
+                                            <div className="pt-1">
+                                                <span className="inline-block bg-rose-50 text-rose-700 text-xs font-bold px-2.5 py-1 rounded-lg border border-rose-200">
+                                                    Special Promo Active ({promoInfo.discountBadge})
+                                                </span>
                                             </div>
                                         )}
                                     </div>

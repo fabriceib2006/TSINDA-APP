@@ -41,6 +41,26 @@ export const learnerDashboardT: Record<string, Record<Language, string>> = {
     rw: "Gufunze",
     fr: "Verrouillé"
   },
+  student: {
+    en: "Student",
+    rw: "Umunyeshuri",
+    fr: "Étudiant"
+  },
+  noExpiry: {
+    en: "No Expiration",
+    rw: "Nta gihe ntarengwa",
+    fr: "Sans expiration"
+  },
+  plan: {
+    en: "Plan",
+    rw: "Gahunda",
+    fr: "Forfait"
+  },
+  examsLeft: {
+    en: "exams left",
+    rw: "bisigaye",
+    fr: "restants"
+  },
   trafficLessons: {
     en: "Traffic Lessons",
     rw: "Inyigisho z'umuhanda",
@@ -129,8 +149,7 @@ export const t = {
     loginWithGoogle: "Sign in with Google",
     demoQuickLogin: "Quick Demo Login",
     selectRoleTitle: "Select Your Account Role",
-    selectRoleDesc: "Choose how you will use TSINDA platform.",
-    roleLearner: "Learner (Driver Student)",
+    roleLearner: "Student",
     roleSchool: "Driving School",
     roleAdmin: "Administrator",
     fullName: "Full Name",
@@ -145,7 +164,7 @@ export const t = {
     exams: "Exams",
     adminPanel: "Admin Control Center",
     welcomeBack: "Welcome back",
-    learnerPortal: "Learner Exam Prep Portal",
+    learnerPortal: "Student Exam Prep Portal",
     schoolPortal: "Driving School Management Portal",
     settings: "Settings",
     language: "Language",
@@ -171,7 +190,7 @@ export const t = {
     demoQuickLogin: "Kwinjira vuba (Demo)",
     selectRoleTitle: "Hitamo Urwego rwawe",
     selectRoleDesc: "Hitamo uburyo uzakoresha urubuga rwa TSINDA.",
-    roleLearner: "Umunyeshuri (Wiga Gutwara)",
+    roleLearner: "Umunyeshuri",
     roleSchool: "Ishuri ry'Ubugenzuzi (Driving School)",
     roleAdmin: "Umuyobozi Mukuru (Admin)",
     fullName: "Amazina Yose",
@@ -186,7 +205,7 @@ export const t = {
     exams: "Ibizamini",
     adminPanel: "Ikigo cy'Ubuyobozi",
     welcomeBack: "Murakaza neza",
-    learnerPortal: "Urubuga rw'Abanyeshuri",
+    learnerPortal: "Urubuga rw'Umunyeshuri",
     schoolPortal: "Urubuga rw'Amashuri y'Ubugenzuzi",
     settings: "Igenamiterere",
     language: "Ururimi",
@@ -212,7 +231,7 @@ export const t = {
     demoQuickLogin: "Connexion Rapide Démo",
     selectRoleTitle: "Sélectionnez votre rôle",
     selectRoleDesc: "Choisissez comment vous utiliserez la plateforme TSINDA.",
-    roleLearner: "Apprenant (Élève Conducteur)",
+    roleLearner: "Étudiant",
     roleSchool: "Auto-École",
     roleAdmin: "Administrateur",
     fullName: "Nom complet",
@@ -227,7 +246,7 @@ export const t = {
     exams: "Examens",
     adminPanel: "Centre de Contrôle Admin",
     welcomeBack: "Bienvenue",
-    learnerPortal: "Portail d'Apprentissage",
+    learnerPortal: "Portail Étudiant",
     schoolPortal: "Portail Auto-École",
     settings: "Paramètres",
     language: "Langue",

@@ -1,7 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { db, functions } from '../../lib/firebase';
+import { db, auth } from '../../lib/firebase';
 import { collection, query, orderBy, onSnapshot } from 'firebase/firestore';
-import { httpsCallable } from 'firebase/functions';
 import { Payment } from '../../types';
 import {
   CreditCard,
@@ -67,6 +66,65 @@ export const PaymentsManager: React.FC = () => {
   const [testingConnection, setTestingConnection] = useState(false);
   const [testResult, setTestResult] = useState<TestResult | null>(null);
   const [showTestModal, setShowTestModal] = useState(false);
+  const [approvingPaymentId, setApprovingPaymentId] = useState<string | null>(null);
+  const [checkingPaymentId, setCheckingPaymentId] = useState<string | null>(null);
+
+  const handleAdminApprove = async (paymentId: string) => {
+    setApprovingPaymentId(paymentId);
+    try {
+      const idToken = await auth.currentUser?.getIdToken();
+      const res = await fetch('/api/payments/admin-approve', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${idToken}`,
+        },
+        body: JSON.stringify({ paymentId }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data.error || 'Failed to approve payment');
+        return;
+      }
+      setSelectedPayment(null);
+      setSyncFeedback('Payment verified and plan activated successfully!');
+      setTimeout(() => setSyncFeedback(null), 5000);
+    } catch (err: any) {
+      alert(err.message || 'Error approving payment');
+    } finally {
+      setApprovingPaymentId(null);
+    }
+  };
+
+  const handleCheckPaymentStatus = async (paymentId: string) => {
+    setCheckingPaymentId(paymentId);
+    try {
+      const res = await fetch(`/api/payments/${paymentId}/check-status`, {
+        method: 'POST',
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data.error || 'Failed to check status with Paypack');
+        return;
+      }
+      const paypackStatus = data.paypackStatus || 'unknown';
+      const appStatus = data.status;
+      setSyncFeedback(`Live status: App (${appStatus}) | Paypack (${paypackStatus})`);
+      setTimeout(() => setSyncFeedback(null), 6000);
+
+      // If viewing in details modal, update selected payment
+      if (selectedPayment && selectedPayment.id === paymentId && data.payment) {
+        setSelectedPayment({
+          ...selectedPayment,
+          ...data.payment,
+        });
+      }
+    } catch (err: any) {
+      alert(err.message || 'Error checking payment status');
+    } finally {
+      setCheckingPaymentId(null);
+    }
+  };
 
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
@@ -103,9 +161,12 @@ export const PaymentsManager: React.FC = () => {
             network: data.network || 'MTN',
             kind: data.kind || 'cashin',
             status: data.status || 'pending',
+            paypackStatus: data.paypackStatus || (data.isSandbox ? 'sandbox' : null),
+            isSandbox: Boolean(data.isSandbox),
             failureReason: data.failureReason || null,
             subscriptionId: data.subscriptionId || null,
             reference: data.reference || data.paypackRef || d.id,
+            lastPaypackCheckAt: data.lastPaypackCheckAt,
             createdAt: createdAtStr,
             updatedAt: data.updatedAt,
           } as Payment;
@@ -122,6 +183,24 @@ export const PaymentsManager: React.FC = () => {
 
     return () => unsubscribe();
   }, []);
+
+  // Periodic lightweight check for pending payments
+  useEffect(() => {
+    const hasPending = payments.some(
+      (p) => p.status === 'pending' && p.paypackRef && !p.paypackRef.startsWith('TEST_MOMO_')
+    );
+    if (!hasPending) return;
+
+    const interval = setInterval(async () => {
+      try {
+        await fetch('/api/paypack/sync', { method: 'POST' });
+      } catch (e) {
+        // quiet sync
+      }
+    }, 12000);
+
+    return () => clearInterval(interval);
+  }, [payments]);
 
   // Summary statistics
   const stats = useMemo(() => {
@@ -164,13 +243,7 @@ export const PaymentsManager: React.FC = () => {
         return;
       }
 
-      // Fallback to Cloud Function callable
-      const syncFn = httpsCallable<void, { success: boolean; totalFetched: number; updatedCount: number }>(
-        functions,
-        'syncPaypack'
-      );
-      const res = await syncFn();
-      setSyncFeedback(`Sync complete: ${res.data.updatedCount} payment(s) updated out of ${res.data.totalFetched} fetched.`);
+      setSyncFeedback(`Sync completed directly.`);
       setTimeout(() => setSyncFeedback(null), 5000);
     } catch (err: any) {
       console.error('Sync error:', err);
@@ -188,18 +261,14 @@ export const PaymentsManager: React.FC = () => {
     setTestResult(null);
 
     try {
-      // Try local server route first
+      // Try local server route
       const serverRes = await fetch('/api/paypack/test-connection', { method: 'POST' }).catch(() => null);
       if (serverRes && serverRes.ok) {
         const data: TestResult = await serverRes.json();
         setTestResult(data);
         return;
       }
-
-      // Fallback to Cloud Function callable
-      const testFn = httpsCallable<void, TestResult>(functions, 'testPaypackConnection');
-      const res = await testFn();
-      setTestResult(res.data);
+      throw new Error("Unable to reach Paypack test endpoint on server.");
     } catch (err: any) {
       console.error('Error testing connection:', err);
       setTestResult({
@@ -629,27 +698,69 @@ export const PaymentsManager: React.FC = () => {
                           RWF {p.amount?.toLocaleString()}
                         </td>
                         <td className="py-3.5 px-4 whitespace-nowrap">
-                          <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold ${
-                            isSuccess ? 'bg-emerald-50 text-emerald-700' :
-                            isPending ? 'bg-amber-50 text-amber-700' : 'bg-red-50 text-red-700'
-                          }`}>
-                            {isSuccess && <CheckCircle2 className="w-3 h-3" />}
-                            {isPending && <Clock className="w-3 h-3" />}
-                            {isFailed && <XCircle className="w-3 h-3" />}
-                            <span className="capitalize">{p.status}</span>
-                          </span>
+                          <div className="flex flex-col gap-1 items-start">
+                            <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold ${
+                              isSuccess ? 'bg-emerald-50 text-emerald-700' :
+                              isPending ? 'bg-amber-50 text-amber-700' : 'bg-red-50 text-red-700'
+                            }`}>
+                              {isSuccess && <CheckCircle2 className="w-3 h-3" />}
+                              {isPending && <Clock className="w-3 h-3" />}
+                              {isFailed && <XCircle className="w-3 h-3" />}
+                              <span className="capitalize">{p.status}</span>
+                            </span>
+                            {p.paypackStatus && (
+                              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold border ${
+                                p.paypackStatus === 'successful' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
+                                p.paypackStatus === 'failed' ? 'bg-red-50 text-red-700 border-red-200' :
+                                p.paypackStatus === 'pending' ? 'bg-amber-50 text-amber-700 border-amber-200' :
+                                'bg-slate-100 text-slate-600 border-slate-200'
+                              }`}>
+                                Paypack: {p.paypackStatus}
+                              </span>
+                            )}
+                          </div>
                         </td>
                         <td className="py-3.5 px-4 text-right whitespace-nowrap">
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSelectedPayment(p);
-                            }}
-                            className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                            title="View Transaction Details"
-                          >
-                            <Eye className="w-4 h-4" />
-                          </button>
+                          <div className="flex items-center justify-end gap-1.5">
+                            {p.paypackRef && !p.paypackRef.startsWith('TEST_MOMO_') && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleCheckPaymentStatus(p.id);
+                                }}
+                                disabled={checkingPaymentId === p.id}
+                                className="px-2 py-1 text-[11px] font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg transition-colors flex items-center gap-1"
+                                title="Check status with Paypack"
+                              >
+                                <RefreshCw className={`w-3 h-3 ${checkingPaymentId === p.id ? 'animate-spin' : ''}`} />
+                                <span>{checkingPaymentId === p.id ? '...' : 'Check'}</span>
+                              </button>
+                            )}
+                            {isPending && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleAdminApprove(p.id);
+                                }}
+                                disabled={approvingPaymentId === p.id}
+                                className="px-2.5 py-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition-colors flex items-center gap-1 shadow-2xs"
+                                title="Approve & Activate Subscription"
+                              >
+                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                                <span>{approvingPaymentId === p.id ? '...' : 'Approve'}</span>
+                              </button>
+                            )}
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedPayment(p);
+                              }}
+                              className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                              title="View Transaction Details"
+                            >
+                              <Eye className="w-4 h-4" />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     );
@@ -855,13 +966,37 @@ export const PaymentsManager: React.FC = () => {
                 </div>
 
                 {selectedPayment.subscriptionId && (
-                  <div className="flex justify-between items-center py-1">
+                  <div className="flex justify-between items-center py-1 border-b border-slate-200/60">
                     <span className="text-slate-500 font-semibold">Linked Subscription:</span>
                     <span className="font-mono text-xs font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded">
                       #{selectedPayment.subscriptionId}
                     </span>
                   </div>
                 )}
+
+                <div className="flex justify-between items-center py-1">
+                  <span className="text-slate-500 font-semibold">Paypack Live Status:</span>
+                  <div className="flex items-center gap-2">
+                    <span className={`px-2 py-0.5 rounded text-xs font-bold border ${
+                      selectedPayment.paypackStatus === 'successful' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
+                      selectedPayment.paypackStatus === 'failed' ? 'bg-red-50 text-red-700 border-red-200' :
+                      selectedPayment.paypackStatus === 'pending' ? 'bg-amber-50 text-amber-700 border-amber-200' :
+                      'bg-slate-100 text-slate-600 border-slate-200'
+                    }`}>
+                      {selectedPayment.paypackStatus || 'Unchecked / Test'}
+                    </span>
+                    {selectedPayment.paypackRef && !selectedPayment.paypackRef.startsWith('TEST_MOMO_') && (
+                      <button
+                        onClick={() => handleCheckPaymentStatus(selectedPayment.id)}
+                        disabled={checkingPaymentId === selectedPayment.id}
+                        className="px-2.5 py-1 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg flex items-center gap-1"
+                      >
+                        <RefreshCw className={`w-3 h-3 ${checkingPaymentId === selectedPayment.id ? 'animate-spin' : ''}`} />
+                        <span>Check Live</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
 
                 {selectedPayment.failureReason && (
                   <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-xs space-y-1">
@@ -872,13 +1007,23 @@ export const PaymentsManager: React.FC = () => {
               </div>
             </div>
 
-            <div className="flex justify-end pt-2">
+            <div className="flex flex-col-reverse sm:flex-row justify-end gap-2 pt-2">
               <button
                 onClick={() => setSelectedPayment(null)}
-                className="min-h-[44px] px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-semibold rounded-xl text-xs sm:text-sm transition-colors"
+                className="min-h-[44px] px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-xl text-xs sm:text-sm transition-colors"
               >
                 Close Details
               </button>
+              {selectedPayment.status === 'pending' && (
+                <button
+                  disabled={approvingPaymentId === selectedPayment.id}
+                  onClick={() => handleAdminApprove(selectedPayment.id)}
+                  className="min-h-[44px] px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-semibold rounded-xl text-xs sm:text-sm transition-colors shadow-sm flex items-center justify-center gap-1.5"
+                >
+                  <CheckCircle2 className="w-4 h-4" />
+                  <span>{approvingPaymentId === selectedPayment.id ? 'Approving...' : 'Approve & Activate Subscription'}</span>
+                </button>
+              )}
             </div>
           </div>
         </div>

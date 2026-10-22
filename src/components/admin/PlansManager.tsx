@@ -123,7 +123,9 @@ export const PlansManager: React.FC = () => {
     return subscriptions.filter(s => 
       s.planId === planId && 
       s.status === 'active' && 
-      new Date(s.endDate) > now
+      (!s.endDate || new Date(s.endDate) > now) &&
+      (!s.examLimit || (s.examsUsed ?? 0) < s.examLimit) &&
+      users.some(u => u.uid === s.userId)
     ).length;
   };
 
@@ -158,12 +160,13 @@ export const PlansManager: React.FC = () => {
     setDescRw(plan.description.rw || '');
     setDescFr(plan.description.fr || '');
     setPrice(plan.price);
-    setDurationDays(plan.durationDays);
+    const isStudy = Boolean(plan.access.trafficRules || plan.access.lessonVideos);
+    setDurationDays(isStudy ? (plan.durationDays || 30) : 0);
     setAccessVideos(plan.access.lessonVideos);
     setAccessRules(plan.access.trafficRules);
     setAccessExams(plan.access.exams);
-    setIsExamUnlimited(plan.examLimit === null);
-    setExamLimitVal(plan.examLimit !== null ? plan.examLimit : 20);
+    setIsExamUnlimited(isStudy ? true : (plan.examLimit === null));
+    setExamLimitVal(plan.examLimit !== null && plan.examLimit !== undefined ? plan.examLimit : 5);
     setIsActive(plan.isActive);
     setIsRecommended(plan.isRecommended);
     setSortOrder(plan.sortOrder);
@@ -197,6 +200,21 @@ export const PlansManager: React.FC = () => {
     setIsPromoModalOpen(true);
   };
 
+  const handleCleanDatabasePlans = async () => {
+    try {
+      const res = await fetch('/api/admin/clean-plans-and-subs', { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        alert(`Database plans and subscriptions audited successfully! Updated: ${data.summary?.plansUpdated || 0} plans, ${data.summary?.subsUpdated || 0} subscriptions.`);
+        fetchData();
+      } else {
+        alert('Failed to audit database plans');
+      }
+    } catch (e: any) {
+      alert(e.message || 'Error auditing plans');
+    }
+  };
+
   const handleSavePlan = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError(null);
@@ -206,23 +224,34 @@ export const PlansManager: React.FC = () => {
       return;
     }
 
+    const isStudy = Boolean(accessRules || accessVideos);
+    if (isStudy && (!durationDays || durationDays < 1)) {
+      setFormError('Duration in days is required for plans containing traffic rules or video lessons.');
+      return;
+    }
+    if (!isStudy && accessExams && (!examLimitVal || examLimitVal < 1)) {
+      setFormError('Number of exams allowed is required for exam-only plans.');
+      return;
+    }
+
     setSaving(true);
     try {
       const planData = {
         name: { rw: nameRw || nameEn, en: nameEn, fr: nameFr || nameEn },
         description: { rw: descRw || descEn, en: descEn, fr: descFr || descEn },
         price: Number(price),
-        durationDays: Number(durationDays),
+        durationDays: isStudy ? Number(durationDays) : 0,
         access: {
           trafficRules: accessRules,
           lessonVideos: accessVideos,
           exams: accessExams,
         },
-        examLimit: accessExams ? (isExamUnlimited ? null : Number(examLimitVal)) : null,
+        examLimit: isStudy ? null : (accessExams ? Number(examLimitVal) : null),
         isActive,
         isRecommended,
         sortOrder: Number(sortOrder),
-        createdAt: new Date().toISOString()
+        createdAt: editingPlan ? (editingPlan.createdAt || new Date().toISOString()) : new Date().toISOString(),
+        updatedAt: new Date().toISOString()
       };
 
       if (editingPlan) {
@@ -344,15 +373,28 @@ export const PlansManager: React.FC = () => {
 
       {activeMainTab === 'plans' ? (
         <div className="space-y-6">
-          <div className="flex justify-between items-center">
-            <h3 className="text-base font-bold text-slate-900">All Subscription Plans</h3>
-            <button
-              onClick={openCreateModal}
-              className="min-h-[44px] px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl text-xs sm:text-sm flex items-center gap-2 transition-colors shadow-sm"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Add Plan</span>
-            </button>
+          <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3">
+            <div>
+              <h3 className="text-base font-bold text-slate-900">All Subscription Plans</h3>
+              <p className="text-xs text-slate-500">Duration is required for study plans; number of exams is required for exam packs.</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleCleanDatabasePlans}
+                className="min-h-[44px] px-3.5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-xl text-xs sm:text-sm flex items-center gap-2 transition-colors border border-slate-200"
+                title="Normalize existing plans and subscriptions in database"
+              >
+                <Check className="w-4 h-4 text-emerald-600" />
+                <span>Audit & Sync Database</span>
+              </button>
+              <button
+                onClick={openCreateModal}
+                className="min-h-[44px] px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl text-xs sm:text-sm flex items-center gap-2 transition-colors shadow-sm"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Add Plan</span>
+              </button>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -568,17 +610,26 @@ export const PlansManager: React.FC = () => {
                     className="w-full min-h-[44px] px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs sm:text-sm"
                   />
                 </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">Duration (Days) *</label>
-                  <input
-                    type="number"
-                    min="1"
-                    required
-                    value={durationDays}
-                    onChange={(e) => setDurationDays(Number(e.target.value))}
-                    className="w-full min-h-[44px] px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs sm:text-sm"
-                  />
-                </div>
+                {(accessRules || accessVideos) ? (
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">Duration (Days) *</label>
+                    <input
+                      type="number"
+                      min="1"
+                      required
+                      value={durationDays}
+                      onChange={(e) => setDurationDays(Number(e.target.value))}
+                      className="w-full min-h-[44px] px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs sm:text-sm"
+                    />
+                    <p className="text-[10px] text-slate-400 mt-1">Study passes expire after this period.</p>
+                  </div>
+                ) : (
+                  <div className="flex items-center">
+                    <div className="p-3 bg-slate-50 text-slate-700 rounded-xl text-xs font-semibold border border-slate-200 w-full">
+                      ✓ Exam-only plan: No time duration. Credits remain valid until used.
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="space-y-2 pt-2 border-t border-slate-100">
@@ -601,22 +652,25 @@ export const PlansManager: React.FC = () => {
 
               {accessExams && (
                 <div className="space-y-3 pt-2">
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs font-semibold text-slate-700 uppercase">Exam Limit</label>
-                    <label className="flex items-center gap-2 text-xs font-medium cursor-pointer">
-                      <input type="checkbox" checked={isExamUnlimited} onChange={(e) => setIsExamUnlimited(e.target.checked)} className="w-4 h-4 rounded text-blue-600" />
-                      <span>Unlimited Exams (null limit)</span>
-                    </label>
-                  </div>
-                  {!isExamUnlimited && (
-                    <input
-                      type="number"
-                      min="1"
-                      value={examLimitVal}
-                      onChange={(e) => setExamLimitVal(Number(e.target.value))}
-                      placeholder="Max exam attempts"
-                      className="w-full min-h-[44px] px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs sm:text-sm"
-                    />
+                  {(accessRules || accessVideos) ? (
+                    <div className="p-3 bg-blue-50 text-blue-800 rounded-xl text-xs font-semibold border border-blue-200 flex items-center gap-2">
+                      <Check className="w-4 h-4 text-blue-600 shrink-0" />
+                      <span>Unlimited mock exam attempts are included for this study pass throughout its duration (no exam count needed).</span>
+                    </div>
+                  ) : (
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">Number of Exams Allowed *</label>
+                      <input
+                        type="number"
+                        min="1"
+                        required
+                        value={examLimitVal}
+                        onChange={(e) => setExamLimitVal(Number(e.target.value))}
+                        placeholder="e.g. 5, 10, 20"
+                        className="w-full min-h-[44px] px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs sm:text-sm font-semibold"
+                      />
+                      <p className="text-[10px] text-slate-400 mt-1">Student gets exactly this many exam attempts. No expiry date.</p>
+                    </div>
                   )}
                 </div>
               )}
@@ -805,7 +859,7 @@ export const PlansManager: React.FC = () => {
               {getActiveSubscriberCount(selectedPlanForSubscribers.id) === 0 && (
                 <p className="text-sm text-slate-500 py-4 text-center">No active subscribers for this plan.</p>
               )}
-              {subscriptions.filter(s => s.planId === selectedPlanForSubscribers.id && s.status === 'active' && new Date(s.endDate) > new Date()).map(sub => {
+              {subscriptions.filter(s => s.planId === selectedPlanForSubscribers.id && s.status === 'active' && (!s.endDate || new Date(s.endDate) > new Date()) && users.some(u => u.uid === s.userId)).map(sub => {
                 const user = users.find(u => u.uid === sub.userId);
                 return (
                   <div key={sub.id} className="flex justify-between items-center p-3.5 border border-slate-100 rounded-xl bg-slate-50/50">
@@ -814,7 +868,7 @@ export const PlansManager: React.FC = () => {
                       <p className="text-xs text-slate-500">{user?.phone || '-'}</p>
                     </div>
                     <div className="text-right text-xs">
-                      <p className="font-semibold text-slate-800">Expires: {new Date(sub.endDate).toLocaleDateString()}</p>
+                      <p className="font-semibold text-slate-800">Expires: {sub.endDate ? new Date(sub.endDate).toLocaleDateString() : 'No expiry (Exams only)'}</p>
                       <p className="text-slate-500">Exams: {sub.examsUsed} / {sub.examLimit || '∞'}</p>
                     </div>
                   </div>

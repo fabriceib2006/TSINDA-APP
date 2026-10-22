@@ -30,11 +30,11 @@ import { Language } from '../../types';
 import { seedSystemSettingsIfNeeded } from '../../lib/seedSystemSettings';
 
 export const SystemSettingsManager: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'general' | 'sections' | 'announcements' | 'footer' | 'media'>('general');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'general' | 'sections' | 'announcements' | 'footer' | 'media' | 'referral'>('general');
 
   // General settings state
   const [settings, setSettings] = useState({
@@ -48,6 +48,13 @@ export const SystemSettingsManager: React.FC = () => {
     contact: { phone: '', whatsapp: '', email: '', address: '' },
     seo: { title: '', description: '' },
     maintenanceMode: false
+  });
+
+  const [referralSettings, setReferralSettings] = useState({
+    active: false,
+    baseDomain: 'https://tsinda.app',
+    pointsPercent: 10,
+    pointValueRwf: 100
   });
 
   // Homepage sections & items
@@ -111,7 +118,7 @@ export const SystemSettingsManager: React.FC = () => {
     try {
       await seedSystemSettingsIfNeeded().catch(err => console.log('Seed note:', err));
 
-      const [setSnap, secSnap, itemSnap, annSnap, fgSnap, flSnap, socSnap, medSnap, slotSnap] = await Promise.all([
+      const [setSnap, secSnap, itemSnap, annSnap, fgSnap, flSnap, socSnap, medSnap, slotSnap, refSnap] = await Promise.all([
         getDoc(doc(db, 'siteSettings', 'config')),
         getDocs(collection(db, 'homepageSections')),
         getDocs(collection(db, 'homepageItems')),
@@ -121,10 +128,14 @@ export const SystemSettingsManager: React.FC = () => {
         getDocs(collection(db, 'socialLinks')),
         getDocs(collection(db, 'siteMedia')),
         getDocs(collection(db, 'imageSlots')),
+        getDoc(doc(db, 'siteSettings', 'referral')),
       ]);
 
       if (setSnap.exists()) {
         setSettings(prev => ({ ...prev, ...setSnap.data() }));
+      }
+      if (refSnap.exists()) {
+        setReferralSettings(refSnap.data() as any);
       }
       if (secSnap) {
         const list = secSnap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -175,6 +186,23 @@ export const SystemSettingsManager: React.FC = () => {
     } catch (err: any) {
       console.error('Error saving settings:', err);
       setError(err.message || 'Failed to save settings.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleSaveReferral = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    setError(null);
+    setSuccessMsg(null);
+    try {
+      await setDoc(doc(db, 'siteSettings', 'referral'), referralSettings);
+      await logAdminAction('UPDATE_REFERRAL_SETTINGS', 'Updated referral system configuration');
+      setSuccessMsg('Referral settings saved successfully.');
+    } catch (err: any) {
+      console.error('Error saving referral settings:', err);
+      setError(err.message || 'Failed to save referral settings.');
     } finally {
       setSaving(false);
     }
@@ -458,6 +486,7 @@ export const SystemSettingsManager: React.FC = () => {
           { id: 'announcements', label: 'Announcements', icon: Megaphone },
           { id: 'footer', label: 'Footer & Social', icon: Menu },
           { id: 'media', label: 'Media Library', icon: ImageIcon },
+          { id: 'referral', label: 'Referral System', icon: Globe },
         ].map((tab) => {
           const Icon = tab.icon;
           const isActive = activeTab === tab.id;
@@ -1302,6 +1331,29 @@ export const SystemSettingsManager: React.FC = () => {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Referral Settings */}
+      {activeTab === 'referral' && (
+        <form onSubmit={handleSaveReferral} className="space-y-4 max-w-lg bg-white p-6 rounded-2xl border border-slate-200">
+          <div className="flex items-center gap-3">
+            <input type="checkbox" checked={referralSettings.active} onChange={e => setReferralSettings(p => ({...p, active: e.target.checked}))} className="w-5 h-5" />
+            <label className="font-bold">Active Referral System</label>
+          </div>
+          <div>
+            <label className="block text-sm font-medium">Base Domain</label>
+            <input type="text" value={referralSettings.baseDomain} onChange={e => setReferralSettings(p => ({...p, baseDomain: e.target.value}))} className="w-full border p-2 rounded" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium">Points Percent (of payment)</label>
+            <input type="number" value={referralSettings.pointsPercent} onChange={e => setReferralSettings(p => ({...p, pointsPercent: Number(e.target.value)}))} className="w-full border p-2 rounded" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium">Point Value (RWF per point)</label>
+            <input type="number" value={referralSettings.pointValueRwf} onChange={e => setReferralSettings(p => ({...p, pointValueRwf: Number(e.target.value)}))} className="w-full border p-2 rounded" />
+          </div>
+          <button type="submit" disabled={saving} className="bg-blue-600 text-white px-4 py-2 rounded">Save Referral Settings</button>
+        </form>
       )}
 
       {/* Confirmation Modal */}

@@ -196,7 +196,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                     {userProfile.role === 'admin' ? (
                       <span className="text-blue-600 font-bold">Admin</span>
                     ) : (
-                      <span>Learner</span>
+                      <span>{language === 'rw' ? 'Umunyeshuri' : language === 'fr' ? 'Étudiant' : 'Student'}</span>
                     )}
                   </span>
                 </div>
@@ -226,7 +226,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                             : 'bg-emerald-50 text-emerald-700 border border-emerald-200/60'
                         }`}>
                           <ShieldCheck className="w-3 h-3" />
-                          <span className="capitalize">{userProfile.role}</span>
+                          <span className="capitalize">{userProfile.role === 'admin' ? 'Admin' : (language === 'rw' ? 'Umunyeshuri' : language === 'fr' ? 'Étudiant' : 'Student')}</span>
                         </span>
                       </div>
                     </div>
