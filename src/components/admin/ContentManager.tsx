@@ -7,14 +7,18 @@ import {
   updateDoc,
   deleteDoc,
   doc,
+  setDoc,
   serverTimestamp,
   query,
-  orderBy
+  orderBy,
+  writeBatch
 } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { handleFirestoreError, OperationType } from '../../lib/firestoreUtils';
 import { Lesson, VideoLesson, CategoryItem } from '../../types';
+import { compressImage } from '../../lib/imageUtils';
 import Papa from 'papaparse';
+import JSZip from 'jszip';
 import {
   BookOpen,
   Video,
@@ -116,7 +120,8 @@ export const ContentManager: React.FC = () => {
   // Bulk Import Modal (Lessons)
   const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
   const [bulkCsvFile, setBulkCsvFile] = useState<File | null>(null);
-  const [bulkImageFiles, setBulkImageFiles] = useState<FileList | null>(null);
+  const [bulkImagesArray, setBulkImagesArray] = useState<File[]>([]);
+  const [importProgress, setImportProgress] = useState<string>('');
   const [parsedPreview, setParsedPreview] = useState<any[]>([]);
   const [validationReport, setValidationReport] = useState<{
     validCount: number;
@@ -127,8 +132,12 @@ export const ContentManager: React.FC = () => {
     existingIds: { id: string; row: number }[];
   } | null>(null);
   const [bulkImporting, setBulkImporting] = useState(false);
-  const [updateExisting, setUpdateExisting] = useState(false);
+  const [updateExisting, setUpdateExisting] = useState(true);
   const [bulkError, setBulkError] = useState<string | null>(null);
+
+  const fileToDataUrl = (file: File): Promise<string> => {
+    return compressImage(file);
+  };
 
   // Fetch all content
   const fetchData = async () => {
@@ -148,7 +157,6 @@ export const ContentManager: React.FC = () => {
         catList.sort((a, b) => (a.order || 0) - (b.order || 0));
         setCategories(catList);
       } else {
-        // Seed default categories if none exist in Firestore
         const seeded: CategoryItem[] = [];
         for (let i = 0; i < DEFAULT_CATEGORIES.length; i++) {
           const name = DEFAULT_CATEGORIES[i];
@@ -237,10 +245,8 @@ export const ContentManager: React.FC = () => {
       const urls: string[] = [];
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
-        const storageRef = ref(storage, `lessons_images/${Date.now()}_${file.name}`);
-        await uploadBytes(storageRef, file);
-        const url = await getDownloadURL(storageRef);
-        urls.push(url);
+        const dataUrl = await fileToDataUrl(file);
+        urls.push(dataUrl);
       }
       setLessonImages((prev) => [...prev, ...urls]);
     } catch (err) {
@@ -507,7 +513,7 @@ export const ContentManager: React.FC = () => {
           return;
         }
         setParsedPreview(results.data as any[]);
-        validateLessonsImport(results.data as any[]);
+        validateLessonsImport(results.data as any[], bulkImagesArray);
       },
       error: (err) => {
         setBulkError(`CSV Parse Error: ${err.message}`);
@@ -515,55 +521,145 @@ export const ContentManager: React.FC = () => {
     });
   };
 
-  const validateLessonsImport = (rows: any[]) => {
+  const handleBulkImagesChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files) return;
+    const files = Array.from(e.target.files);
+    const imageMap = new Map<string, File>();
+
+    for (const file of files) {
+      if (file.name.toLowerCase().endsWith('.zip') || file.type.includes('zip')) {
+        try {
+          const zip = new JSZip();
+          const zipContent = await zip.loadAsync(file);
+          for (const [relativePath, zipEntry] of Object.entries(zipContent.files)) {
+            if (!zipEntry.dir) {
+              const filename = relativePath.split('/').pop() || relativePath;
+              const blob = await zipEntry.async('blob');
+              const imgFile = new File([blob], filename, { type: 'image/png' });
+              imageMap.set(filename.toLowerCase(), imgFile);
+            }
+          }
+        } catch (err) {
+          console.error("Error unzipping file:", err);
+        }
+      } else {
+        imageMap.set(file.name.toLowerCase(), file);
+      }
+    }
+
+    const allFiles = Array.from(imageMap.values());
+    setBulkImagesArray(allFiles);
+    if (parsedPreview.length > 0) {
+      validateLessonsImport(parsedPreview, allFiles);
+    }
+  };
+
+  const getRowLessonIdentifier = (row: any): string => {
+    return (
+      row.lesson_id ||
+      row.article_id ||
+      row.id ||
+      row.article ||
+      row.Article ||
+      row.Article_id ||
+      row.Lesson_id ||
+      row.lessonId ||
+      row.articleId ||
+      ''
+    ).toString().trim();
+  };
+
+  const findMatchingLesson = (row: any, allLessons: Lesson[]): Lesson | undefined => {
+    const rawId = getRowLessonIdentifier(row);
+    const rowOrder = Number(row.order || row.Order || row.article_number);
+    const titleEn = (row.title_en || row.title || row.Title || '').trim().toLowerCase();
+    const titleRw = (row.title_rw || '').trim().toLowerCase();
+
+    // 1. Direct exact or case-insensitive ID match
+    if (rawId) {
+      const directMatch = allLessons.find(l => l.id.toLowerCase() === rawId.toLowerCase());
+      if (directMatch) return directMatch;
+
+      // Try normalized ART format e.g. "1" -> "ART001", "ART1" -> "ART001", "art-1" -> "ART001"
+      const digitsOnly = rawId.replace(/\D/g, '');
+      if (digitsOnly) {
+        const artPadded = `art${digitsOnly.padStart(3, '0')}`;
+        const artMatch = allLessons.find(l => l.id.toLowerCase() === artPadded);
+        if (artMatch) return artMatch;
+      }
+    }
+
+    // 2. Order match (if valid positive order)
+    if (!isNaN(rowOrder) && rowOrder > 0) {
+      const orderMatch = allLessons.find(l => l.order === rowOrder);
+      if (orderMatch) return orderMatch;
+    }
+
+    // 3. Title match
+    if (titleEn || titleRw) {
+      const titleMatch = allLessons.find(l => {
+        const lTitleEn = (l.title?.en || '').trim().toLowerCase();
+        const lTitleRw = (l.title?.rw || '').trim().toLowerCase();
+        if (titleEn && lTitleEn && (lTitleEn === titleEn || lTitleEn.includes(titleEn) || titleEn.includes(lTitleEn))) {
+          return true;
+        }
+        if (titleRw && lTitleRw && (lTitleRw === titleRw || lTitleRw.includes(titleRw) || titleRw.includes(lTitleRw))) {
+          return true;
+        }
+        return false;
+      });
+      if (titleMatch) return titleMatch;
+    }
+
+    return undefined;
+  };
+
+  const validateLessonsImport = (rows: any[], images: File[] = bulkImagesArray) => {
     const errors: { row: number; message: string }[] = [];
-    const imageNamesSet = new Set(bulkImageFiles ? Array.from(bulkImageFiles).map(img => img.name.toLowerCase()) : []);
-    const seenImageNames = new Set<string>();
-    const duplicateImages = new Set<string>();
+    const imageNamesSet = new Set(images.map(img => img.name.toLowerCase()));
     const existingIds: { id: string; row: number }[] = [];
     const matchedImagesInRows = new Set<string>();
 
     rows.forEach((row, index) => {
       const rowNum = index + 1;
-      if (!row.title_en && !row.title_rw && !row.title) {
-        errors.push({ row: rowNum, message: "Missing title." });
+      const rawId = getRowLessonIdentifier(row);
+      const rowOrder = Number(row.order || row.Order || row.article_number);
+      const titleRw = (row.title_rw || '').trim();
+      const titleEn = (row.title_en || row.title || row.Title || '').trim();
+      const titleFr = (row.title_fr || '').trim();
+
+      if (!rawId && isNaN(rowOrder) && !titleRw && !titleEn && !titleFr) {
+        errors.push({ row: rowNum, message: "Missing lesson identifier: requires lesson_id, article_id, order, or title." });
       }
-      if (row.id && lessons.some(l => l.id === row.id)) {
-        existingIds.push({ id: row.id, row: rowNum });
+
+      const existingLesson = findMatchingLesson(row, lessons);
+      if (existingLesson) {
+        existingIds.push({ id: existingLesson.id, row: rowNum });
       }
-      const rowImageNames = (row.images || row.image_names || row.image || '')
-          .split(/[,;|]/)
-          .map((s: string) => s.trim().toLowerCase())
-          .filter(Boolean);
-      
+
+      const rowImageNames = (row.image_names || row.images || row.image_name || row.image || '')
+        .split('|')
+        .map((s: string) => s.trim().toLowerCase())
+        .filter(Boolean);
+
       rowImageNames.forEach((imgName: string) => {
-        if (seenImageNames.has(imgName)) {
-            duplicateImages.add(imgName);
-        }
-        seenImageNames.add(imgName);
-        if (imageNamesSet.has(imgName)) {
-            matchedImagesInRows.add(imgName);
+        matchedImagesInRows.add(imgName);
+        if (images.length > 0 && !imageNamesSet.has(imgName)) {
+          errors.push({ row: rowNum, message: `Missing image: ${imgName}` });
         }
       });
     });
 
-    const missingImages = rows
-      .map(r => r.images || r.image_names || r.image || '')
-      .map(s => s.split(/[,;|]/).map((x: string) => x.trim().toLowerCase()))
-      .flat()
-      .filter(Boolean)
-      .filter(imgName => !imageNamesSet.has(imgName));
-
-    const unusedImages = bulkImageFiles 
-        ? Array.from(bulkImageFiles).map(img => img.name.toLowerCase()).filter(imgName => !matchedImagesInRows.has(imgName))
-        : [];
+    const unusedImages = images
+      .map(img => img.name)
+      .filter(imgName => !matchedImagesInRows.has(imgName.toLowerCase()));
 
     setValidationReport({
-      validCount: rows.length - errors.length,
+      validCount: Math.max(0, rows.length - errors.length),
       errors,
-      missingImages: Array.from(new Set(missingImages)),
+      missingImages: [],
       unusedImages,
-      duplicateImages: Array.from(duplicateImages),
+      duplicateImages: [],
       existingIds
     });
   };
@@ -574,79 +670,139 @@ export const ContentManager: React.FC = () => {
     setBulkError(null);
 
     try {
-      // 1. Upload images if provided and map by file name
-      const imageMap: Record<string, string> = {};
-      if (bulkImageFiles && bulkImageFiles.length > 0) {
-        for (let i = 0; i < bulkImageFiles.length; i++) {
-          const img = bulkImageFiles[i];
-          const storageRef = ref(storage, `lessons_images/${Date.now()}_${img.name}`);
-          await uploadBytes(storageRef, img);
-          const url = await getDownloadURL(storageRef);
-          imageMap[img.name.toLowerCase()] = url;
+      setImportProgress(`Reading images (0/${bulkImagesArray.length})...`);
+      const imageMap = new Map<string, string>();
+      for (let i = 0; i < bulkImagesArray.length; i++) {
+        const img = bulkImagesArray[i];
+        if (i % 10 === 0 || i === bulkImagesArray.length - 1) {
+          setImportProgress(`Reading images (${i + 1}/${bulkImagesArray.length})`);
         }
+        const dataUrl = await fileToDataUrl(img);
+        imageMap.set(img.name.toLowerCase(), dataUrl);
       }
 
-      // 2. Iterate and create documents in Firestore
       let addedCount = 0;
-      for (const [index, row] of parsedPreview.entries()) {
-        const isExisting = validationReport?.existingIds.some(e => e.id === row.id);
-        if (isExisting && !updateExisting) continue;
+      let batch = writeBatch(db);
+      let batchSize = 0;
+      const processedTargetIds = new Set<string>();
 
-        const titleEn = row.title_en || row.title || row.Title || 'Lesson';
-        const titleRw = row.title_rw || row.Title_rw || titleEn;
-        const titleFr = row.title_fr || row.Title_fr || titleEn;
+      for (let i = 0; i < parsedPreview.length; i++) {
+        const row = parsedPreview[i];
+        const rawId = getRowLessonIdentifier(row);
+        const rowOrder = Number(row.order || row.Order || row.article_number);
 
-        const bodyEn = row.body_en || row.body || row.content || '';
-        const bodyRw = row.body_rw || bodyEn;
-        const bodyFr = row.body_fr || bodyEn;
+        const existingLesson = findMatchingLesson(row, lessons);
+        let targetDocId = '';
+        if (existingLesson) {
+          targetDocId = existingLesson.id;
+        } else if (rawId) {
+          const digitsOnly = rawId.replace(/\D/g, '');
+          if (digitsOnly && (rawId === digitsOnly || rawId.toLowerCase().startsWith('art'))) {
+            targetDocId = `ART${digitsOnly.padStart(3, '0')}`;
+          } else {
+            targetDocId = rawId;
+          }
+        } else if (!isNaN(rowOrder) && rowOrder > 0) {
+          targetDocId = `ART${String(rowOrder).padStart(3, '0')}`;
+        } else {
+          targetDocId = `ART${String(addedCount + 1).padStart(3, '0')}`;
+        }
 
-        const category = row.category || row.Category || categoryOptions[0] || 'Traffic Rules';
-        const gazetteRef = row.gazetteReference || row.gazette_ref || row.gazetteRef || null;
-        const orderNum = Number(row.order) || (lessons.length + addedCount + 1);
-        const isPub = row.isPublished !== undefined ? String(row.isPublished).toLowerCase() === 'true' : true;
+        if (i % 20 === 0 || i === parsedPreview.length - 1) {
+          setImportProgress(`Saving lessons (${i + 1}/${parsedPreview.length})`);
+        }
 
-        const rowImageNames = (row.images || row.image_names || row.image || '')
-          .split(/[,;|]/)
-          .map((s: string) => s.trim().toLowerCase())
+        const titleRw = (row.title_rw || '').trim();
+        const titleEn = (row.title_en || row.title || row.Title || titleRw || '').trim();
+        const titleFr = (row.title_fr || '').trim();
+
+        const contentRw = (row.content_rw || row.body_rw || row.body || row.content || '').trim();
+        const contentEn = (row.content_en || row.body_en || row.body || row.content || contentRw || '').trim();
+        const contentFr = (row.content_fr || row.body_fr || '').trim();
+
+        const rowImageNames = (row.image_names || row.images || row.image_name || row.image || '')
+          .split('|')
+          .map((s: string) => s.trim())
           .filter(Boolean);
 
         const matchedUrls: string[] = [];
         rowImageNames.forEach((name: string) => {
-          if (imageMap[name]) {
-            matchedUrls.push(imageMap[name]);
+          const url = imageMap.get(name.toLowerCase());
+          if (url) {
+            matchedUrls.push(url);
           }
         });
 
-        const newDoc = {
-          title: { en: titleEn, rw: titleRw, fr: titleFr },
-          body: { en: bodyEn, rw: bodyRw, fr: bodyFr },
-          category,
-          gazetteReference: gazetteRef,
-          images: matchedUrls,
-          order: orderNum,
-          isPublished: isPub,
-          isFreePreview: false,
+        const lessonData: any = {
+          title: {
+            rw: titleRw || existingLesson?.title?.rw || '',
+            en: titleEn || titleRw || existingLesson?.title?.en || '',
+            fr: titleFr || existingLesson?.title?.fr || ''
+          },
+          body: {
+            rw: contentRw || existingLesson?.body?.rw || '',
+            en: contentEn || contentRw || existingLesson?.body?.en || '',
+            fr: contentFr || existingLesson?.body?.fr || ''
+          },
+          order: !isNaN(rowOrder) && rowOrder > 0 ? rowOrder : (existingLesson?.order || (addedCount + 1)),
+          group_id: row.group_id || existingLesson?.category || 'G01',
+          part_rw: row.part_rw || (existingLesson as any)?.part_rw || '',
+          chapter_rw: row.chapter_rw || (existingLesson as any)?.chapter_rw || '',
+          section_rw: row.section_rw || (existingLesson as any)?.section_rw || '',
+          part_en: row.part_en || (existingLesson as any)?.part_en || '',
+          chapter_en: row.chapter_en || (existingLesson as any)?.chapter_en || '',
+          images: matchedUrls.length > 0 ? matchedUrls : (existingLesson?.images || []),
+          imageNames: rowImageNames.length > 0 ? rowImageNames : ((existingLesson as any)?.imageNames || []),
+          quiz_questions_direct: (row.quiz_questions_direct || '').split('|').map((s: string) => s.trim()).filter(Boolean),
+          quiz_questions_fallback: (row.quiz_questions_fallback || '').split('|').map((s: string) => s.trim()).filter(Boolean),
+          category: row.group_id || row.category || existingLesson?.category || 'Traffic Rules',
+          isPublished: true,
           updatedAt: serverTimestamp(),
         };
 
-        if (isExisting) {
-            await updateDoc(doc(db, 'lessons', row.id), newDoc);
-        } else {
-            await addDoc(collection(db, 'lessons'), { ...newDoc, createdAt: serverTimestamp() });
+        const gazetteRef = (row.gazetteReference || row.gazette_ref || row.gazette_reference || existingLesson?.gazetteReference || '').trim();
+        if (gazetteRef) {
+          lessonData.gazetteReference = gazetteRef;
         }
+
+        if (!existingLesson) {
+          lessonData.createdAt = serverTimestamp();
+        }
+
+        const docStringSize = new TextEncoder().encode(JSON.stringify(lessonData)).length;
+        if (docStringSize > 900 * 1024) {
+          throw new Error(`Lesson ${targetDocId} exceeds 900 KB limit (${Math.round(docStringSize / 1024)} KB)`);
+        }
+
+        batch.set(doc(db, 'lessons', targetDocId), lessonData, { merge: true });
+        processedTargetIds.add(targetDocId);
+        batchSize++;
         addedCount++;
+
+        if (batchSize === 500) {
+          await batch.commit();
+          batch = writeBatch(db);
+          batchSize = 0;
+        }
       }
 
+      if (batchSize > 0) {
+        await batch.commit();
+      }
+
+      alert(`Successfully imported/updated ${addedCount} lessons!`);
       setIsBulkModalOpen(false);
       setParsedPreview([]);
       setBulkCsvFile(null);
-      setBulkImageFiles(null);
+      setBulkImagesArray([]);
+      setValidationReport(null);
       fetchData();
     } catch (err: any) {
       console.error('Error during bulk import:', err);
       setBulkError(err.message || 'Failed to import lessons.');
     } finally {
       setBulkImporting(false);
+      setImportProgress('');
     }
   };
 
@@ -699,6 +855,10 @@ export const ContentManager: React.FC = () => {
   };
 
   // Filtered lists
+  const [lessonPage, setLessonPage] = useState(1);
+  const [videoPage, setVideoPage] = useState(1);
+  const ITEMS_PER_PAGE = 15;
+
   const filteredLessons = lessons.filter((l) => {
     const matchCat = categoryFilter === 'all' || l.category === categoryFilter;
     const matchSearch =
@@ -719,6 +879,18 @@ export const ContentManager: React.FC = () => {
       (v.category || '').toLowerCase().includes(searchQuery.toLowerCase());
     return matchCat && matchSearch;
   });
+
+  const totalLessonPages = Math.ceil(filteredLessons.length / ITEMS_PER_PAGE);
+  const paginatedLessons = filteredLessons.slice((lessonPage - 1) * ITEMS_PER_PAGE, lessonPage * ITEMS_PER_PAGE);
+  
+  const totalVideoPages = Math.ceil(filteredVideos.length / ITEMS_PER_PAGE);
+  const paginatedVideos = filteredVideos.slice((videoPage - 1) * ITEMS_PER_PAGE, videoPage * ITEMS_PER_PAGE);
+
+  // Reset to page 1 when filtering
+  useEffect(() => {
+    setLessonPage(1);
+    setVideoPage(1);
+  }, [searchQuery, categoryFilter]);
 
   return (
     <div className="space-y-6">
@@ -850,7 +1022,8 @@ export const ContentManager: React.FC = () => {
               </p>
             </div>
           ) : (
-            <div className="overflow-x-auto">
+            <>
+              <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="bg-slate-50/80 border-b border-slate-200 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
@@ -863,90 +1036,117 @@ export const ContentManager: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-xs">
-                  {filteredLessons.map((l, lIdx) => (
-                    <tr key={l.id} className="hover:bg-slate-50/70 transition-colors">
-                      <td className="py-3.5 px-4 font-mono font-bold text-slate-500">#{l.order}</td>
-                      <td className="py-3.5 px-4">
-                        <div className="font-bold text-slate-900 text-sm">{l.title?.en || l.title?.rw || 'Lesson'}</div>
-                        {l.title?.rw && l.title?.rw !== l.title?.en && (
-                          <div className="text-[11px] text-slate-500">{l.title.rw}</div>
-                        )}
-                        {l.gazetteReference && (
-                          <div className="text-[10px] font-semibold text-blue-700 bg-blue-50 px-2 py-0.5 rounded inline-block mt-1">
-                            Ref: {l.gazetteReference}
-                          </div>
-                        )}
-                      </td>
-                      <td className="py-3.5 px-4">
-                        <span className="bg-slate-100 text-slate-700 px-2.5 py-1 rounded-md text-[11px] font-medium">
-                          {l.category}
-                        </span>
-                      </td>
-                      <td className="py-3.5 px-4">
-                        {l.images && l.images.length > 0 ? (
-                          <div className="flex items-center gap-1 text-slate-600">
-                            <ImageIcon className="w-3.5 h-3.5 text-blue-600" />
-                            <span className="font-semibold">{l.images.length}</span>
-                          </div>
-                        ) : (
-                          <span className="text-slate-400">—</span>
-                        )}
-                      </td>
-                      <td className="py-3.5 px-4">
-                        <button
-                          onClick={() => handleToggleLessonPublished(l)}
-                          className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold transition-colors ${
-                            l.isPublished
-                              ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
-                              : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
-                          }`}
-                        >
-                          {l.isPublished ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
-                          <span>{l.isPublished ? 'Published' : 'Draft'}</span>
-                        </button>
-                      </td>
-                      <td className="py-3.5 px-4 text-right">
-                        <div className="flex items-center justify-end gap-1">
-                          <button
-                            onClick={() => handleMoveLesson(lIdx, 'up')}
-                            disabled={lIdx === 0}
-                            className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors disabled:opacity-20 disabled:hover:bg-transparent"
-                            title="Move Up"
-                          >
-                            <ArrowUp className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            onClick={() => handleMoveLesson(lIdx, 'down')}
-                            disabled={lIdx === filteredLessons.length - 1}
-                            className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors disabled:opacity-20 disabled:hover:bg-transparent"
-                            title="Move Down"
-                          >
-                            <ArrowDown className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            onClick={() => handleOpenEditLesson(l)}
-                            className="p-1.5 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                            title="Edit Lesson"
-                          >
-                            <Edit2 className="w-4 h-4" />
-                          </button>
-                          <button
-                            onClick={() => setLessonToDelete(l)}
-                            className="p-1.5 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                            title="Delete Lesson"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                  {paginatedLessons.map((l, lIdx) => {
+                      const actualIdx = (lessonPage - 1) * ITEMS_PER_PAGE + lIdx;
+                      return (
+                        <tr key={l.id} className="hover:bg-slate-50/70 transition-colors">
+                          <td className="py-3.5 px-4 font-mono font-bold text-slate-500">#{l.order}</td>
+                          <td className="py-3.5 px-4">
+                            <div className="font-bold text-slate-900 text-sm">{l.title?.en || l.title?.rw || 'Lesson'}</div>
+                            {l.title?.rw && l.title?.rw !== l.title?.en && (
+                              <div className="text-[11px] text-slate-500">{l.title.rw}</div>
+                            )}
+                            {l.gazetteReference && (
+                              <div className="text-[10px] font-semibold text-blue-700 bg-blue-50 px-2 py-0.5 rounded inline-block mt-1">
+                                Ref: {l.gazetteReference}
+                              </div>
+                            )}
+                          </td>
+                          <td className="py-3.5 px-4">
+                            <span className="bg-slate-100 text-slate-700 px-2.5 py-1 rounded-md text-[11px] font-medium">
+                              {l.category}
+                            </span>
+                          </td>
+                          <td className="py-3.5 px-4">
+                            {l.images && l.images.length > 0 ? (
+                              <div className="flex items-center gap-1 text-slate-600">
+                                <ImageIcon className="w-3.5 h-3.5 text-blue-600" />
+                                <span className="font-semibold">{l.images.length}</span>
+                              </div>
+                            ) : (
+                              <span className="text-slate-400">—</span>
+                            )}
+                          </td>
+                          <td className="py-3.5 px-4">
+                            <button
+                              onClick={() => handleToggleLessonPublished(l)}
+                              className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold transition-colors ${
+                                l.isPublished
+                                  ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                                  : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                              }`}
+                            >
+                              {l.isPublished ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
+                              <span>{l.isPublished ? 'Published' : 'Draft'}</span>
+                            </button>
+                          </td>
+                          <td className="py-3.5 px-4 text-right">
+                            <div className="flex items-center justify-end gap-1">
+                              <button
+                                onClick={() => handleMoveLesson(actualIdx, 'up')}
+                                disabled={actualIdx === 0}
+                                className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors disabled:opacity-20 disabled:hover:bg-transparent"
+                                title="Move Up"
+                              >
+                                <ArrowUp className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                onClick={() => handleMoveLesson(actualIdx, 'down')}
+                                disabled={actualIdx === filteredLessons.length - 1}
+                                className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors disabled:opacity-20 disabled:hover:bg-transparent"
+                                title="Move Down"
+                              >
+                                <ArrowDown className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                onClick={() => handleOpenEditLesson(l)}
+                                className="p-1.5 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                                title="Edit Lesson"
+                              >
+                                <Edit2 className="w-4 h-4" />
+                              </button>
+                              <button
+                                onClick={() => setLessonToDelete(l)}
+                                className="p-1.5 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                                title="Delete Lesson"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
                 </tbody>
               </table>
             </div>
-          )}
-        </div>
-      )}
+            {totalLessonPages > 1 && (
+              <div className="flex items-center justify-between p-4 border-t border-slate-200">
+                <span className="text-sm text-slate-500">
+                  Showing {(lessonPage - 1) * ITEMS_PER_PAGE + 1} - {Math.min(lessonPage * ITEMS_PER_PAGE, filteredLessons.length)} of {filteredLessons.length} lessons
+                </span>
+                <div className="flex gap-2">
+                  <button
+                    disabled={lessonPage === 1}
+                    onClick={() => setLessonPage(p => p - 1)}
+                    className="px-3 py-1 bg-white border border-slate-300 rounded-md text-sm font-medium hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    Previous
+                  </button>
+                  <button
+                    disabled={lessonPage === totalLessonPages}
+                    onClick={() => setLessonPage(p => p + 1)}
+                    className="px-3 py-1 bg-white border border-slate-300 rounded-md text-sm font-medium hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    )}
 
       {/* TAB 2: VIDEOS */}
       {activeTab === 'videos' && (
@@ -981,157 +1181,185 @@ export const ContentManager: React.FC = () => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 text-xs">
-                    {filteredVideos.map((v, vIdx) => (
-                      <tr key={v.id} className="hover:bg-slate-50/70 transition-colors">
-                        <td className="py-3.5 px-4 font-mono font-bold text-slate-500">#{v.order}</td>
-                        <td className="py-3.5 px-4">
-                          <div className="relative w-24 h-14 bg-slate-900 rounded-lg overflow-hidden group shadow-xs">
-                            <img
-                              src={v.thumbnail}
-                              alt={v.title?.en || 'Video thumbnail'}
-                              className="w-full h-full object-cover"
-                            />
-                            <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                              <Play className="w-5 h-5 text-white fill-white" />
+                    {paginatedVideos.map((v, vIdx) => {
+                      const actualIdx = (videoPage - 1) * ITEMS_PER_PAGE + vIdx;
+                      return (
+                        <tr key={v.id} className="hover:bg-slate-50/70 transition-colors">
+                          <td className="py-3.5 px-4 font-mono font-bold text-slate-500">#{v.order}</td>
+                          <td className="py-3.5 px-4">
+                            <div className="relative w-24 h-14 bg-slate-900 rounded-lg overflow-hidden group shadow-xs">
+                              <img
+                                src={v.thumbnail}
+                                alt={v.title?.en || 'Video thumbnail'}
+                                className="w-full h-full object-cover"
+                              />
+                              <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                                <Play className="w-5 h-5 text-white fill-white" />
+                              </div>
                             </div>
-                          </div>
-                        </td>
-                        <td className="py-3.5 px-4">
-                          <div className="font-bold text-slate-900 text-sm">{v.title?.en || v.title?.rw}</div>
-                          {v.title?.rw && v.title.rw !== v.title.en && (
-                            <div className="text-[11px] text-slate-500">{v.title.rw}</div>
-                          )}
-                          <a
-                            href={v.youtubeUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="inline-flex items-center gap-1 text-[11px] text-blue-600 hover:underline mt-1 font-mono"
-                          >
-                            <span>ID: {v.youtubeVideoId}</span>
-                            <ExternalLink className="w-3 h-3" />
-                          </a>
-                        </td>
-                        <td className="py-3.5 px-4">
-                          <span className="bg-slate-100 text-slate-700 px-2.5 py-1 rounded-md text-[11px] font-medium">
-                            {v.category}
-                          </span>
-                        </td>
-                        <td className="py-3.5 px-4">
-                          <button
-                            onClick={() => handleToggleVideoPublished(v)}
-                            className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold transition-colors ${
-                              v.isPublished
-                                ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
-                                : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
-                            }`}
-                          >
-                            {v.isPublished ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
-                            <span>{v.isPublished ? 'Published' : 'Draft'}</span>
-                          </button>
-                        </td>
-                        <td className="py-3.5 px-4 text-right">
-                          <div className="flex items-center justify-end gap-1">
-                            <button
-                              onClick={() => handleMoveVideo(vIdx, 'up')}
-                              disabled={vIdx === 0}
-                              className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors disabled:opacity-20 disabled:hover:bg-transparent"
-                              title="Move Up"
+                          </td>
+                          <td className="py-3.5 px-4">
+                            <div className="font-bold text-slate-900 text-sm">{v.title?.en || v.title?.rw}</div>
+                            {v.title?.rw && v.title.rw !== v.title.en && (
+                              <div className="text-[11px] text-slate-500">{v.title.rw}</div>
+                            )}
+                            <a
+                              href={v.youtubeUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-1 text-[11px] text-blue-600 hover:underline mt-1 font-mono"
                             >
-                              <ArrowUp className="w-3.5 h-3.5" />
-                            </button>
+                              <span>ID: {v.youtubeVideoId}</span>
+                              <ExternalLink className="w-3 h-3" />
+                            </a>
+                          </td>
+                          <td className="py-3.5 px-4">
+                            <span className="bg-slate-100 text-slate-700 px-2.5 py-1 rounded-md text-[11px] font-medium">
+                              {v.category}
+                            </span>
+                          </td>
+                          <td className="py-3.5 px-4">
                             <button
-                              onClick={() => handleMoveVideo(vIdx, 'down')}
-                              disabled={vIdx === filteredVideos.length - 1}
-                              className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors disabled:opacity-20 disabled:hover:bg-transparent"
-                              title="Move Down"
+                              onClick={() => handleToggleVideoPublished(v)}
+                              className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold transition-colors ${
+                                v.isPublished
+                                  ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                                  : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                              }`}
                             >
-                              <ArrowDown className="w-3.5 h-3.5" />
+                              {v.isPublished ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
+                              <span>{v.isPublished ? 'Published' : 'Draft'}</span>
                             </button>
-                            <button
-                              onClick={() => handleOpenEditVideo(v)}
-                              className="p-1.5 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                              title="Edit Video"
-                            >
-                              <Edit2 className="w-4 h-4" />
-                            </button>
-                            <button
-                              onClick={() => setVideoToDelete(v)}
-                              className="p-1.5 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                              title="Delete Video"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
+                          </td>
+                          <td className="py-3.5 px-4 text-right">
+                            <div className="flex items-center justify-end gap-1">
+                              <button
+                                onClick={() => handleMoveVideo(actualIdx, 'up')}
+                                disabled={actualIdx === 0}
+                                className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors disabled:opacity-20 disabled:hover:bg-transparent"
+                                title="Move Up"
+                              >
+                                <ArrowUp className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                onClick={() => handleMoveVideo(actualIdx, 'down')}
+                                disabled={actualIdx === filteredVideos.length - 1}
+                                className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors disabled:opacity-20 disabled:hover:bg-transparent"
+                                title="Move Down"
+                              >
+                                <ArrowDown className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                onClick={() => handleOpenEditVideo(v)}
+                                className="p-1.5 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                                title="Edit Video"
+                              >
+                                <Edit2 className="w-4 h-4" />
+                              </button>
+                              <button
+                                onClick={() => setVideoToDelete(v)}
+                                className="p-1.5 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                                title="Delete Video"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
-
+              {totalVideoPages > 1 ? 
+                <div className="flex items-center justify-between p-4 border-t border-slate-200">
+                  <span className="text-sm text-slate-500">
+                    Showing {(videoPage - 1) * ITEMS_PER_PAGE + 1} - {Math.min(videoPage * ITEMS_PER_PAGE, filteredVideos.length)} of {filteredVideos.length} videos
+                  </span>
+                  <div className="flex gap-2">
+                    <button
+                      disabled={videoPage === 1}
+                      onClick={() => setVideoPage(p => p - 1)}
+                      className="px-3 py-1 bg-white border border-slate-300 rounded-md text-sm font-medium hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      Previous
+                    </button>
+                    <button
+                      disabled={videoPage === totalVideoPages}
+                      onClick={() => setVideoPage(p => p + 1)}
+                      className="px-3 py-1 bg-white border border-slate-300 rounded-md text-sm font-medium hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
+               : null}
               {/* Mobile Cards View */}
               <div className="block md:hidden divide-y divide-slate-100">
-                {filteredVideos.map((v, vIdx) => (
-                  <div key={v.id} className="p-4 space-y-3">
-                    <div className="flex gap-3">
-                      <div className="w-24 h-16 bg-slate-900 rounded-lg overflow-hidden shrink-0 relative">
-                        <img src={v.thumbnail} alt="" className="w-full h-full object-cover" />
-                        <div className="absolute inset-0 bg-black/30 flex items-center justify-center">
-                          <Play className="w-4 h-4 text-white fill-white" />
+                {paginatedVideos.map((v, vIdx) => {
+                  const actualIdx = (videoPage - 1) * ITEMS_PER_PAGE + vIdx;
+                  return (
+                    <div key={v.id} className="p-4 space-y-3">
+                      <div className="flex gap-3">
+                        <div className="w-24 h-16 bg-slate-900 rounded-lg overflow-hidden shrink-0 relative">
+                          <img src={v.thumbnail} alt="" className="w-full h-full object-cover" />
+                          <div className="absolute inset-0 bg-black/30 flex items-center justify-center">
+                            <Play className="w-4 h-4 text-white fill-white" />
+                          </div>
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="font-bold text-slate-900 text-sm truncate">{v.title?.en || v.title?.rw}</div>
+                          <div className="text-[11px] text-slate-500">{v.category}</div>
+                          <div className="text-[10px] text-slate-400 font-mono mt-0.5">#{v.order}</div>
                         </div>
                       </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="font-bold text-slate-900 text-sm truncate">{v.title?.en || v.title?.rw}</div>
-                        <div className="text-[11px] text-slate-500">{v.category}</div>
-                        <div className="text-[10px] text-slate-400 font-mono mt-0.5">#{v.order}</div>
+
+                      <div className="flex items-center justify-between pt-1">
+                        <button
+                          onClick={() => handleToggleVideoPublished(v)}
+                          className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold ${
+                            v.isPublished ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'
+                          }`}
+                        >
+                          {v.isPublished ? 'Published' : 'Draft'}
+                        </button>
+
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => handleMoveVideo(actualIdx, 'up')}
+                            disabled={actualIdx === 0}
+                            className="p-1.5 text-slate-400 hover:text-slate-700 disabled:opacity-20"
+                            title="Move Up"
+                          >
+                            <ArrowUp className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => handleMoveVideo(actualIdx, 'down')}
+                            disabled={actualIdx === filteredVideos.length - 1}
+                            className="p-1.5 text-slate-400 hover:text-slate-700 disabled:opacity-20"
+                            title="Move Down"
+                          >
+                            <ArrowDown className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => handleOpenEditVideo(v)}
+                            className="p-1.5 text-slate-600 hover:text-blue-600"
+                            title="Edit Video"
+                          >
+                            <Edit2 className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => setVideoToDelete(v)}
+                            className="p-1.5 text-slate-600 hover:text-red-600"
+                            title="Delete Video"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
                       </div>
                     </div>
-
-                    <div className="flex items-center justify-between pt-1">
-                      <button
-                        onClick={() => handleToggleVideoPublished(v)}
-                        className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold ${
-                          v.isPublished ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'
-                        }`}
-                      >
-                        {v.isPublished ? 'Published' : 'Draft'}
-                      </button>
-
-                      <div className="flex items-center gap-1">
-                        <button
-                          onClick={() => handleMoveVideo(vIdx, 'up')}
-                          disabled={vIdx === 0}
-                          className="p-1.5 text-slate-400 hover:text-slate-700 disabled:opacity-20"
-                          title="Move Up"
-                        >
-                          <ArrowUp className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          onClick={() => handleMoveVideo(vIdx, 'down')}
-                          disabled={vIdx === filteredVideos.length - 1}
-                          className="p-1.5 text-slate-400 hover:text-slate-700 disabled:opacity-20"
-                          title="Move Down"
-                        >
-                          <ArrowDown className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          onClick={() => handleOpenEditVideo(v)}
-                          className="p-1.5 text-slate-600 hover:text-blue-600"
-                          title="Edit Video"
-                        >
-                          <Edit2 className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={() => setVideoToDelete(v)}
-                          className="p-1.5 text-slate-600 hover:text-red-600"
-                          title="Delete Video"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </>
           )}
@@ -1565,10 +1793,10 @@ export const ContentManager: React.FC = () => {
 
             <div className="space-y-4">
               <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-800 leading-relaxed">
-                <p className="font-bold mb-1">Expected CSV Column Headers:</p>
-                <code>title_en, title_rw, title_fr, body_en, body_rw, body_fr, category, gazetteReference, order, images</code>
+                <p className="font-bold mb-1">Supported CSV Column Headers:</p>
+                <code>lesson_id (or article_id), order, title_en, title_rw, title_fr, body_en (or content_en), body_rw, body_fr, category, gazetteReference, images</code>
                 <p className="mt-1 text-[11px] text-blue-700">
-                  You can also upload diagram images at the same time. The file names in the <code>images</code> column will be automatically matched to the uploaded images.
+                  Existing lessons matching by Article ID, Order, or Title will be automatically updated in-place with new text and images without creating duplicate records.
                 </p>
               </div>
 
@@ -1590,24 +1818,79 @@ export const ContentManager: React.FC = () => {
                     onChange={handleBulkFileChange}
                     className="w-full text-xs text-slate-600 file:mr-3 file:py-2 file:px-4 file:rounded-[8px] file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer"
                   />
+                  {bulkCsvFile && (
+                    <p className="text-xs text-emerald-600 mt-1 font-medium">Loaded CSV: {bulkCsvFile.name} ({parsedPreview.length} rows)</p>
+                  )}
                 </div>
 
                 <div>
                   <label className="block text-xs font-bold text-slate-700 uppercase mb-1.5">
-                    2. Upload Accompanying Images
+                    2. Upload Accompanying Images or ZIP
                   </label>
                   <input
                     type="file"
                     multiple
-                    accept="image/*"
-                    onChange={(e) => setBulkImageFiles(e.target.files)}
+                    accept="image/*,.zip"
+                    onChange={handleBulkImagesChange}
                     className="w-full text-xs text-slate-600 file:mr-3 file:py-2 file:px-4 file:rounded-[8px] file:border-0 file:text-xs file:font-semibold file:bg-slate-100 file:text-slate-700 hover:file:bg-slate-200 cursor-pointer"
                   />
                   <span className="text-[11px] text-slate-400 mt-1 block">
-                    {bulkImageFiles ? `${bulkImageFiles.length} image file(s) selected` : 'Optional'}
+                    {bulkImagesArray.length > 0 ? `${bulkImagesArray.length} image file(s) loaded` : 'Optional (multiple images or .zip)'}
                   </span>
                 </div>
               </div>
+
+              {/* Validation Summary Cards */}
+              {validationReport && (
+                <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs font-medium">
+                    <div className="p-2.5 bg-white rounded-lg border">
+                      <span className="text-slate-500 block">Total Rows:</span>
+                      <span className="text-base font-bold text-slate-900">{parsedPreview.length}</span>
+                    </div>
+                    <div className="p-2.5 bg-white rounded-lg border">
+                      <span className="text-slate-500 block">Valid:</span>
+                      <span className="text-base font-bold text-emerald-600">{validationReport.validCount}</span>
+                    </div>
+                    <div className="p-2.5 bg-white rounded-lg border">
+                      <span className="text-slate-500 block">Will Update:</span>
+                      <span className="text-base font-bold text-blue-600">{validationReport.existingIds.length}</span>
+                    </div>
+                    <div className="p-2.5 bg-white rounded-lg border">
+                      <span className="text-slate-500 block">Errors:</span>
+                      <span className={`text-base font-bold ${validationReport.errors.length > 0 ? 'text-red-600' : 'text-emerald-600'}`}>
+                        {validationReport.errors.length}
+                      </span>
+                    </div>
+                  </div>
+
+                  {validationReport.existingIds.length > 0 && (
+                    <div className="p-2.5 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-800">
+                      ℹ️ <strong>{validationReport.existingIds.length}</strong> lesson(s) already exist in the database and will be updated in-place with new data and images (no duplicate records).
+                    </div>
+                  )}
+
+                  {validationReport.errors.length > 0 && (
+                    <div className="space-y-1">
+                      <span className="text-xs font-bold text-red-700">Row Errors:</span>
+                      <ul className="text-xs text-red-600 space-y-0.5 max-h-24 overflow-y-auto bg-white p-2.5 rounded-lg border font-mono">
+                        {validationReport.errors.slice(0, 10).map((err, idx) => (
+                          <li key={idx}>Row {err.row}: {err.message}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {validationReport.unusedImages.length > 0 && (
+                    <div className="space-y-1">
+                      <span className="text-xs font-bold text-slate-700">Unused Uploaded Images (Warning):</span>
+                      <p className="text-xs text-slate-600 bg-white p-2 rounded-lg border max-h-16 overflow-y-auto">
+                        {validationReport.unusedImages.join(', ')}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Validation Preview Table */}
               {parsedPreview.length > 0 && (
@@ -1623,7 +1906,7 @@ export const ContentManager: React.FC = () => {
                         <tr>
                           <th className="py-2 px-3">Title (EN)</th>
                           <th className="py-2 px-3">Category</th>
-                          <th className="py-2 px-3">Gazette Ref</th>
+                          <th className="py-2 px-3">Order</th>
                           <th className="py-2 px-3">Images</th>
                         </tr>
                       </thead>
@@ -1635,9 +1918,9 @@ export const ContentManager: React.FC = () => {
                             </td>
                             <td className="py-2 px-3 text-slate-600">{row.category || row.Category || 'General'}</td>
                             <td className="py-2 px-3 text-slate-500 font-mono text-[10px]">
-                              {row.gazetteReference || row.gazette_ref || '—'}
+                              {row.order || row.Order || idx + 1}
                             </td>
-                            <td className="py-2 px-3 text-slate-500 text-[10px]">{row.images || '—'}</td>
+                            <td className="py-2 px-3 text-slate-500 text-[10px]">{row.image_names || row.images || row.image_name || '—'}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -1667,7 +1950,7 @@ export const ContentManager: React.FC = () => {
                   className="min-h-[44px] px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-[10px] text-xs sm:text-sm shadow-sm transition-colors disabled:opacity-50 flex items-center gap-2"
                 >
                   <CheckCircle className="w-4 h-4" />
-                  <span>{bulkImporting ? 'Importing to Firestore...' : `Save ${parsedPreview.length} Lessons`}</span>
+                  <span>{bulkImporting ? (importProgress || 'Importing to Firestore...') : `Confirm Import & Update (${parsedPreview.length} Lessons)`}</span>
                 </button>
               </div>
             </div>
@@ -1776,131 +2059,6 @@ export const ContentManager: React.FC = () => {
                 Done
               </button>
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* Bulk Import Modal */}
-      {isBulkModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs overflow-y-auto">
-          <div className="w-full max-w-2xl bg-white rounded-xl shadow-xl p-8 my-8 space-y-6">
-            <div className="flex justify-between items-center pb-4 border-b border-slate-100">
-              <h3 className="text-lg font-bold text-slate-900">Bulk Import Lessons</h3>
-              <button onClick={() => setIsBulkModalOpen(false)} className="p-2 text-slate-400 hover:text-slate-600 rounded-full"><X className="w-5 h-5"/></button>
-            </div>
-            
-            <div className="space-y-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">
-                  Step 1: Upload Lessons File (.csv)
-                </label>
-                <input
-                  type="file"
-                  accept=".csv"
-                  onChange={handleBulkFileChange}
-                  className="w-full min-h-[44px] text-base sm:text-sm text-slate-500 file:mr-4 file:py-2.5 file:px-4 file:rounded-[10px] file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 border border-slate-200 rounded-[10px] p-2"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">
-                  Step 2: Upload Images (Optional)
-                </label>
-                <input
-                  type="file"
-                  multiple
-                  accept="image/*"
-                  onChange={(e) => setBulkImageFiles(e.target.files)}
-                  className="w-full min-h-[44px] text-base sm:text-sm text-slate-500 file:mr-4 file:py-2.5 file:px-4 file:rounded-[10px] file:border-0 file:text-xs file:font-semibold file:bg-purple-50 file:text-purple-700 border border-slate-200 rounded-[10px] p-2"
-                />
-              </div>
-            </div>
-
-            {validationReport && (
-              <div className="p-6 bg-white rounded-xl border border-slate-200 shadow-sm space-y-4">
-                <h4 className="font-bold text-slate-900 text-sm">Validation Preview Report</h4>
-                
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-xs font-medium">
-                  <div className="p-3 bg-slate-50 rounded-[10px] border">
-                    <span className="text-slate-500 block">Valid Rows:</span>
-                    <span className="text-lg font-bold text-emerald-600">{validationReport.validCount}</span>
-                  </div>
-                  <div className="p-3 bg-slate-50 rounded-[10px] border">
-                    <span className="text-slate-500 block">Errors:</span>
-                    <span className={`text-lg font-bold ${validationReport.errors.length > 0 ? 'text-red-600' : 'text-emerald-600'}`}>
-                      {validationReport.errors.length}
-                    </span>
-                  </div>
-                  <div className="p-3 bg-slate-50 rounded-[10px] border">
-                    <span className="text-slate-500 block">Conflicts:</span>
-                    <span className={`text-lg font-bold ${validationReport.existingIds.length > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>
-                      {validationReport.existingIds.length}
-                    </span>
-                  </div>
-                </div>
-
-                {validationReport.errors.length > 0 && (
-                  <div className="space-y-1">
-                    <span className="text-xs font-bold text-red-700">Row Errors:</span>
-                    <ul className="text-xs text-red-600 space-y-1 max-h-32 overflow-y-auto bg-slate-50 p-3 rounded-[10px] border">
-                      {validationReport.errors.map((err, idx) => (
-                        <li key={idx}>Row {err.row}: {err.message}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-
-                {validationReport.duplicateImages.length > 0 && (
-                  <div className="space-y-1">
-                    <span className="text-xs font-bold text-red-700">Duplicate Image References:</span>
-                    <p className="text-xs text-red-600 bg-slate-50 p-3 rounded-[10px] border">
-                      {validationReport.duplicateImages.join(', ')}
-                    </p>
-                  </div>
-                )}
-
-                {validationReport.missingImages.length > 0 && (
-                  <div className="space-y-1">
-                    <span className="text-xs font-bold text-amber-700">Missing Uploaded Images:</span>
-                    <p className="text-xs text-amber-800 bg-slate-50 p-3 rounded-[10px] border">
-                      {validationReport.missingImages.join(', ')}
-                    </p>
-                  </div>
-                )}
-
-                {validationReport.unusedImages.length > 0 && (
-                  <div className="space-y-1">
-                    <span className="text-xs font-bold text-slate-700">Unused Uploaded Images:</span>
-                    <p className="text-xs text-slate-600 bg-slate-50 p-3 rounded-[10px] border">
-                      {validationReport.unusedImages.join(', ')}
-                    </p>
-                  </div>
-                )}
-
-                {validationReport.existingIds.length > 0 && (
-                  <div className="flex items-center gap-2 pt-2">
-                    <input
-                      type="checkbox"
-                      id="updateExisting"
-                      checked={updateExisting}
-                      onChange={(e) => setUpdateExisting(e.target.checked)}
-                      className="w-4 h-4 text-blue-600 rounded border-slate-300"
-                    />
-                    <label htmlFor="updateExisting" className="text-xs font-bold text-slate-700">
-                      Update existing lesson IDs (Skip if unchecked)
-                    </label>
-                  </div>
-                )}
-
-                <button
-                  onClick={handleExecuteBulkImport}
-                  disabled={bulkImporting || validationReport.validCount === 0}
-                  className="w-full min-h-[44px] py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-[10px] text-sm shadow-sm transition-colors disabled:opacity-50"
-                >
-                  {bulkImporting ? "Importing..." : `Confirm Import (${validationReport.validCount} Valid Rows)`}
-                </button>
-              </div>
-            )}
           </div>
         </div>
       )}

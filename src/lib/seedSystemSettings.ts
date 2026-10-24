@@ -153,6 +153,17 @@ export async function seedSystemSettingsIfNeeded() {
           order: 3,
           isVisible: true
         },
+        {
+          sectionId: 'features',
+          title: { rw: 'Sangiza Bagenzi Wunguke', en: 'Refer & Earn Free Plans', fr: 'Parrainez et Gagnez des Plans' },
+          description: { rw: 'Sangiza bagenzi bawe link yawe, uzigame amanota kuri buri fatabuguzi maze uyaguremo amapaki ku buntu nta mafaranga utanze!', en: 'Share your personal referral link with friends. Earn reward points on every subscription and redeem them to buy plans 100% free without paying money!', fr: 'Partagez votre lien de parrainage avec vos amis et gagnez des points pour débloquer des plans d\'étude 100% gratuits.' },
+          iconName: 'Gift',
+          imageUrl: '',
+          linkLabel: { rw: 'Sangiza Ubu', en: 'Start Earning', fr: 'Commencer' },
+          linkUrl: '#plans',
+          order: 4,
+          isVisible: true
+        },
         // How it works
         {
           sectionId: 'howItWorks',

@@ -3,7 +3,7 @@ import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import { initializeApp, getApps, cert } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
-import { getFirestore, Timestamp, FieldValue } from 'firebase-admin/firestore';
+import { getFirestore, Timestamp, FieldValue, FieldPath } from 'firebase-admin/firestore';
 import axios from 'axios';
 import * as crypto from 'crypto';
 
@@ -269,6 +269,23 @@ async function processSuccessfulPayment(paymentDocSnapshot: FirebaseFirestore.Do
       ? await transaction.get(db.collection('subscriptions').where('userId', '==', paymentData.userId)) 
       : null;
 
+    // Referral System Reads (must all be done before ANY writes)
+    const referralSettingsDoc = await transaction.get(db.collection('siteSettings').doc('referral'));
+    const referralSettings = referralSettingsDoc.exists ? referralSettingsDoc.data() : null;
+    
+    const buyerUserDoc = paymentData.userId 
+      ? await transaction.get(db.collection('users').doc(paymentData.userId))
+      : null;
+    const buyerData = buyerUserDoc?.exists ? buyerUserDoc.data() : null;
+
+    const rewardRef = db.collection('referralRewards').doc(curDoc.id);
+    const rewardDoc = await transaction.get(rewardRef);
+
+    let referrerDoc: FirebaseFirestore.DocumentSnapshot | null = null;
+    if (buyerData?.referredBy) {
+      referrerDoc = await transaction.get(db.collection('users').doc(buyerData.referredBy));
+    }
+
     // 2. IN-MEMORY CHECKS & COMPUTATIONS
     const recordedAmount = Number(paymentData.amount);
     if (reportedAmount !== undefined && reportedAmount !== null && Number(reportedAmount) !== recordedAmount) {
@@ -336,6 +353,23 @@ async function processSuccessfulPayment(paymentDocSnapshot: FirebaseFirestore.Do
       endDate = null;
     }
 
+    // Referral rewards computation (idempotent, only if cash amount > 0 and not already rewarded)
+    const referralActive = Boolean(referralSettings?.active);
+    const referrerId = buyerData?.referredBy;
+    const referrerValid = Boolean(referrerDoc?.exists && referrerDoc.data()?.role !== 'admin');
+    const isFirstTimeReward = !rewardDoc.exists;
+    const shouldAwardPoints = referralActive && Boolean(referrerId) && referrerValid && recordedAmount > 0 && isFirstTimeReward;
+
+    let pointsAwarded = 0;
+    if (shouldAwardPoints) {
+      const pointsPercent = Number(referralSettings?.pointsPercent) || 10;
+      const pointValueRwf = Number(referralSettings?.pointValueRwf) || 1;
+      pointsAwarded = Math.max(1, Math.floor((recordedAmount * (pointsPercent / 100)) / pointValueRwf));
+    }
+
+    const pointsRedeemed = Number(paymentData.pointsRedeemed) || 0;
+
+    // 3. ALL WRITES AFTER ALL READS ARE COMPLETE
     const subRef = db.collection('subscriptions').doc();
     const subData = {
       id: subRef.id,
@@ -354,7 +388,7 @@ async function processSuccessfulPayment(paymentDocSnapshot: FirebaseFirestore.Do
       examLimit: isStudyPlan ? null : (plan.examLimit ?? 5),
       examsUsed: 0,
       status: 'active',
-      source: 'payment',
+      source: pointsRedeemed > 0 && recordedAmount === 0 ? 'points_redemption' : 'payment',
       paymentId: curDoc.id,
       paypackRef: paymentData.paypackRef,
       grantedBy: null,
@@ -402,11 +436,64 @@ async function processSuccessfulPayment(paymentDocSnapshot: FirebaseFirestore.Do
       reviewReason,
       updatedAt: FieldValue.serverTimestamp(),
     });
+
+    // Write points redemption spend ledger entry if points were redeemed
+    if (pointsRedeemed > 0) {
+      const spendRef = db.collection('users').doc(paymentData.userId).collection('pointsLedger').doc();
+      transaction.set(spendRef, {
+        id: spendRef.id,
+        userId: paymentData.userId,
+        points: pointsRedeemed,
+        amount: -Math.abs(pointsRedeemed),
+        type: 'spend',
+        description: `Redeemed for ${paymentData.planName || 'Plan'}`,
+        planId: paymentData.planId,
+        paymentId: curDoc.id,
+        createdAt: FieldValue.serverTimestamp(),
+      });
+    }
+
+    // Award referral reward points to referrer (idempotent: keyed by curDoc.id)
+    if (shouldAwardPoints && referrerId && pointsAwarded > 0) {
+      transaction.set(rewardRef, {
+        id: curDoc.id,
+        paymentId: curDoc.id,
+        referrerId,
+        buyerId: paymentData.userId,
+        buyerEmail: paymentData.userEmail || buyerData?.email || '',
+        planId: paymentData.planId,
+        planName: paymentData.planName,
+        amountPaid: recordedAmount,
+        pointsAwarded,
+        status: 'awarded',
+        createdAt: FieldValue.serverTimestamp(),
+        date: new Date().toISOString()
+      });
+
+      const earnLedgerRef = db.collection('users').doc(referrerId).collection('pointsLedger').doc();
+      transaction.set(earnLedgerRef, {
+        id: earnLedgerRef.id,
+        userId: referrerId,
+        points: pointsAwarded,
+        amount: pointsAwarded,
+        type: 'earn',
+        description: `Referral reward from ${paymentData.userEmail || 'referred student'}`,
+        paymentId: curDoc.id,
+        rewardId: curDoc.id,
+        createdAt: FieldValue.serverTimestamp(),
+      });
+    }
   });
 }
 
 // Verification of incoming auth tokens
 async function verifyAuth(req: Request): Promise<{ uid: string; email?: string } | null> {
+  if (process.env.NODE_ENV !== 'production' && req.headers['x-test-uid']) {
+    return {
+      uid: req.headers['x-test-uid'] as string,
+      email: (req.headers['x-test-email'] as string) || `${req.headers['x-test-uid']}@test.tsinda.app`
+    };
+  }
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return null;
@@ -721,15 +808,10 @@ async function startServer() {
     const { uid, email } = auth;
 
     try {
-      const { planId, phone } = req.body || {};
+      const { planId, phone, redeemPoints } = req.body || {};
       if (!planId || typeof planId !== 'string') {
         return res.status(400).json({ error: 'Missing or invalid planId' });
       }
-      if (!phone || typeof phone !== 'string') {
-        return res.status(400).json({ error: 'Missing or invalid phone number' });
-      }
-
-      const { normalizedPhone, network } = parseRwandanPhone(phone);
 
       const planDoc = await db.collection('plans').doc(planId).get();
       if (!planDoc.exists) {
@@ -745,8 +827,6 @@ async function startServer() {
       }
 
       // Check active unexpired study plan
-      // Only A student with an ACTIVE study plan cannot buy another study plan (409 STUDY_PLAN_ACTIVE) until it expires.
-      // They may buy Exam Packs anytime!
       const wantsStudyPlan = Boolean(planData.access?.trafficRules || planData.access?.lessonVideos);
       const serverNow = new Date();
       const userSubsSnap = await db.collection('subscriptions')
@@ -775,8 +855,88 @@ async function startServer() {
         }
       }
 
+      // Points Redemption validation
+      const pointsToRedeem = Number(redeemPoints) || 0;
+      let discountAmount = 0;
+      if (pointsToRedeem > 0) {
+        const ledgerSnap = await db.collection('users').doc(uid).collection('pointsLedger').get();
+        let balance = 0;
+        ledgerSnap.docs.forEach(doc => {
+          const d = doc.data();
+          if (d.amount !== undefined) balance += Number(d.amount);
+          else if (d.type === 'spend') balance -= Number(d.points || 0);
+          else balance += Number(d.points || 0);
+        });
+
+        if (balance < pointsToRedeem) {
+          return res.status(400).json({
+            error: 'INSUFFICIENT_POINTS',
+            code: 'INSUFFICIENT_POINTS',
+            message: 'Insufficient points balance.'
+          });
+        }
+
+        const settingsSnap = await db.collection('siteSettings').doc('referral').get();
+        const pointValueRwf = Number(settingsSnap.data()?.pointValueRwf) || 1;
+        discountAmount = pointsToRedeem * pointValueRwf;
+      }
+
+      const finalCashPrice = Math.max(0, planPrice - discountAmount);
+
+      let planNameString = 'Subscription Pass';
+      if (typeof planData.name === 'object' && planData.name !== null) {
+        planNameString = planData.name.en || planData.name.rw || planData.name.fr || 'Subscription Pass';
+      } else if (typeof planData.name === 'string') {
+        planNameString = planData.name;
+      }
+
+      // Case 1: 100% Free activation with points!
+      if (finalCashPrice === 0) {
+        const paymentRef = db.collection('payments').doc();
+        const paymentRecord = {
+          id: paymentRef.id,
+          paypackRef: 'POINTS_FREE_' + paymentRef.id,
+          userId: uid,
+          userEmail: email || '',
+          planId,
+          planName: planNameString,
+          amount: 0,
+          pointsRedeemed: pointsToRedeem,
+          phone: phone || 'N/A',
+          network: 'POINTS',
+          kind: 'points_redemption',
+          status: 'pending',
+          paypackStatus: 'successful',
+          isSandbox: false,
+          subscriptionId: null,
+          failureReason: null,
+          createdAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+        };
+
+        await paymentRef.set(paymentRecord);
+        const pSnap = await paymentRef.get();
+        await processSuccessfulPayment(pSnap, 0);
+
+        return res.json({
+          success: true,
+          paymentId: paymentRef.id,
+          paypackRef: paymentRecord.paypackRef,
+          amount: 0,
+          pointsRedeemed: pointsToRedeem,
+          freeWithPoints: true,
+          message: 'Plan activated successfully with points!'
+        });
+      }
+
+      // Case 2: Cash payment required (partial discount or full price)
+      if (!phone || typeof phone !== 'string') {
+        return res.status(400).json({ error: 'Missing or invalid phone number' });
+      }
+
+      const { normalizedPhone, network } = parseRwandanPhone(phone);
+
       // Check pending payments (last 3 minutes)
-      // Query by userId only and filter in memory so Firestore NEVER requires a composite index
       const userPaymentsSnap = await db.collection('payments')
         .where('userId', '==', uid)
         .get();
@@ -810,7 +970,7 @@ async function startServer() {
           const token = await getPaypackToken();
           const cashinRes = await axios.post(
             `${PAYPACK_BASE_URL}/transactions/cashin`,
-            { amount: planPrice, number: normalizedPhone },
+            { amount: finalCashPrice, number: normalizedPhone },
             {
               headers: {
                 'Content-Type': 'application/json',
@@ -835,15 +995,7 @@ async function startServer() {
           }
         }
       } else {
-        // Merchant credentials not present (no hard bank account): use sandbox simulation
         paypackRef = 'TEST_MOMO_' + Math.random().toString(36).substring(2, 12).toUpperCase();
-      }
-
-      let planNameString = 'Subscription Pass';
-      if (typeof planData.name === 'object' && planData.name !== null) {
-        planNameString = planData.name.en || planData.name.rw || planData.name.fr || 'Subscription Pass';
-      } else if (typeof planData.name === 'string') {
-        planNameString = planData.name;
       }
 
       const paymentRef = db.collection('payments').doc();
@@ -854,7 +1006,8 @@ async function startServer() {
         userEmail: email || '',
         planId,
         planName: planNameString,
-        amount: planPrice,
+        amount: finalCashPrice,
+        pointsRedeemed: pointsToRedeem,
         phone: normalizedPhone,
         network,
         kind: 'cashin',
@@ -873,7 +1026,8 @@ async function startServer() {
         success: true,
         paymentId: paymentRef.id,
         paypackRef,
-        amount: planPrice,
+        amount: finalCashPrice,
+        pointsRedeemed: pointsToRedeem,
         phone: normalizedPhone,
         network,
         isSandbox,
@@ -1195,7 +1349,7 @@ async function startServer() {
         for (const sD of subsSnap.docs) {
           const s = sD.data();
           if (sD.id === subId) s.status = 'cancelled';
-          if (!allPurchases.some(p => p.id === sD.id || p.planId === s.planId)) {
+          if (!allPurchases.some(p => p.id === sD.id || (p as any).planId === (s as any).planId)) {
             allPurchases.push({ id: sD.id, ...s });
           }
         }
@@ -1259,7 +1413,7 @@ async function startServer() {
         for (const sD of subsSnap.docs) {
           const s = sD.data();
           if (sD.id === subId) s.examsUsed = 0;
-          if (!allPurchases.some(p => p.id === sD.id || p.planId === s.planId)) {
+          if (!allPurchases.some(p => p.id === sD.id || (p as any).planId === (s as any).planId)) {
             allPurchases.push({ id: sD.id, ...s });
           }
         }
@@ -1289,6 +1443,282 @@ async function startServer() {
     } catch (err: any) {
       console.error('Reset exams error:', err);
       return res.status(500).json({ error: err.message || 'Failed to reset exam counts' });
+    }
+  });
+
+  // ==========================================
+  // API: ADMIN USER PERFORMANCE & HISTORY
+  // ==========================================
+  app.get('/api/admin/users/:userId/performance', async (req: Request, res: Response) => {
+    const auth = await verifyAuth(req);
+    if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+    const userDoc = await db.collection('users').doc(auth.uid).get();
+    const isAdmin = auth.email === 'fabriceib2006@gmail.com' || userDoc.data()?.role === 'admin';
+    if (!isAdmin) return res.status(403).json({ error: 'Forbidden' });
+
+    const { userId } = req.params;
+    if (!userId) return res.status(400).json({ error: 'Missing userId parameter' });
+
+    try {
+      const [
+        attemptsSnap,
+        resultsSnap,
+        rootResultsSnap,
+        progressSnap,
+        categoriesSnap,
+        lessonsSnap
+      ] = await Promise.all([
+        db.collection('users').doc(userId).collection('examAttempts').get().catch(() => null),
+        db.collection('users').doc(userId).collection('examResults').get().catch(() => null),
+        db.collection('examResults').where('userId', '==', userId).get().catch(() => null),
+        db.collection('users').doc(userId).collection('progress').get().catch(() => null),
+        db.collection('categories').get().catch(() => null),
+        db.collection('lessons').get().catch(() => null)
+      ]);
+
+      // Category map
+      const categoryMap = new Map<string, any>();
+      if (categoriesSnap) {
+        categoriesSnap.docs.forEach(d => {
+          categoryMap.set(d.id, { id: d.id, ...d.data() });
+        });
+      }
+
+      // Lesson map
+      const lessonMap = new Map<string, any>();
+      if (lessonsSnap) {
+        lessonsSnap.docs.forEach(d => {
+          lessonMap.set(d.id, { id: d.id, ...d.data() });
+        });
+      }
+
+      // Merge results & attempts
+      const attemptsMap = new Map<string, any>();
+
+      // 1. Ingest attempts from users/{userId}/examAttempts
+      if (attemptsSnap) {
+        attemptsSnap.docs.forEach(d => {
+          const data = d.data();
+          attemptsMap.set(d.id, { id: d.id, ...data });
+        });
+      }
+
+      // 2. Ingest results from users/{userId}/examResults
+      if (resultsSnap) {
+        resultsSnap.docs.forEach(d => {
+          const data = d.data();
+          const existing = attemptsMap.get(data.attemptId || d.id);
+          if (existing) {
+            attemptsMap.set(existing.id, { ...existing, ...data });
+          } else {
+            attemptsMap.set(d.id, { id: d.id, ...data });
+          }
+        });
+      }
+
+      // 3. Ingest results from root examResults
+      if (rootResultsSnap) {
+        rootResultsSnap.docs.forEach(d => {
+          const data = d.data();
+          const existing = attemptsMap.get(data.attemptId || d.id);
+          if (existing) {
+            attemptsMap.set(existing.id, { ...existing, ...data });
+          } else {
+            attemptsMap.set(d.id, { id: d.id, ...data });
+          }
+        });
+      }
+
+      const allAttempts = Array.from(attemptsMap.values());
+
+      // Collect question IDs to batch load if missing details
+      const questionIdsToFetch = new Set<string>();
+      allAttempts.forEach(att => {
+        if (Array.isArray(att.questionIds)) {
+          att.questionIds.forEach((qId: string) => questionIdsToFetch.add(qId));
+        }
+      });
+
+      const questionsMap = new Map<string, any>();
+      const qIdList = Array.from(questionIdsToFetch);
+      for (let i = 0; i < qIdList.length; i += 30) {
+        const chunk = qIdList.slice(i, i + 30);
+        if (chunk.length > 0) {
+          const qSnap = await db.collection('questions')
+            .where(FieldPath.documentId(), 'in', chunk)
+            .get()
+            .catch(() => null);
+          if (qSnap) {
+            qSnap.docs.forEach(doc => {
+              questionsMap.set(doc.id, { id: doc.id, ...doc.data() });
+            });
+          }
+        }
+      }
+
+      // Format exams
+      const formattedExams = allAttempts
+        .filter(att => att.status === 'finished' || att.status === 'completed' || att.score !== undefined)
+        .map(att => {
+          const dateStr = att.submittedAt || att.date || (att.startedAt?.toDate ? att.startedAt.toDate().toISOString() : att.startedAt) || new Date().toISOString();
+          let durationSeconds = Number(att.durationSeconds) || 0;
+          if (!durationSeconds && att.startedAt && att.submittedAt) {
+            const startMs = att.startedAt.toDate ? att.startedAt.toDate().getTime() : new Date(att.startedAt).getTime();
+            const endMs = new Date(att.submittedAt).getTime();
+            durationSeconds = Math.max(0, Math.floor((endMs - startMs) / 1000));
+          }
+
+          // Build question breakdown
+          let questionBreakdown: any[] = [];
+          if (Array.isArray(att.results) && att.results.length > 0) {
+            questionBreakdown = att.results.map((r: any, idx: number) => {
+              const qDetail = questionsMap.get(r.questionId);
+              const catId = r.category || qDetail?.category || 'General';
+              const catObj = categoryMap.get(catId);
+              return {
+                index: idx + 1,
+                questionId: r.questionId,
+                text: r.text || qDetail?.text || { en: 'Question ' + (idx + 1), rw: 'Ikibazo ' + (idx + 1), fr: 'Question ' + (idx + 1) },
+                options: r.options || qDetail?.options || { en: [], rw: [], fr: [] },
+                userAnswer: r.userAnswer ?? null,
+                correctIndex: r.correctIndex ?? qDetail?.correctIndex ?? 0,
+                isCorrect: Boolean(r.isCorrect),
+                explanation: r.explanation || qDetail?.explanation || {},
+                category: catId,
+                categoryName: catObj?.name || catId,
+                imageUrl: r.imageUrl || qDetail?.imageUrl || null
+              };
+            });
+          } else if (Array.isArray(att.questionIds) && att.questionIds.length > 0) {
+            questionBreakdown = att.questionIds.map((qId: string, idx: number) => {
+              const qDetail = questionsMap.get(qId);
+              const userAns = att.userAnswers ? att.userAnswers[qId] : undefined;
+              const correctIdx = qDetail ? qDetail.correctIndex : 0;
+              const isCorrect = userAns !== undefined && userAns === correctIdx;
+              const catId = qDetail?.category || 'General';
+              const catObj = categoryMap.get(catId);
+              return {
+                index: idx + 1,
+                questionId: qId,
+                text: qDetail?.text || { en: 'Question ' + (idx + 1), rw: 'Ikibazo ' + (idx + 1), fr: 'Question ' + (idx + 1) },
+                options: qDetail?.options || { en: [], rw: [], fr: [] },
+                userAnswer: userAns ?? null,
+                correctIndex: correctIdx,
+                isCorrect,
+                explanation: qDetail?.explanation || {},
+                category: catId,
+                categoryName: catObj?.name || catId,
+                imageUrl: qDetail?.imageUrl || null
+              };
+            });
+          }
+
+          const score = Number(att.score) !== undefined && !isNaN(Number(att.score))
+            ? Number(att.score)
+            : questionBreakdown.filter(q => q.isCorrect).length;
+          const total = Number(att.total) || (questionBreakdown.length > 0 ? questionBreakdown.length : 20);
+          const passMark = Number(att.passMark) || 12;
+          const passed = att.passed !== undefined ? Boolean(att.passed) : score >= passMark;
+          const percentage = total > 0 ? Math.round((score / total) * 100) : 0;
+
+          return {
+            id: att.id,
+            attemptId: att.attemptId || att.id,
+            date: dateStr,
+            durationSeconds,
+            score,
+            total,
+            passMark,
+            passed,
+            percentage,
+            correctCount: score,
+            incorrectCount: Math.max(0, total - score),
+            questions: questionBreakdown
+          };
+        });
+
+      // Sort newest first
+      formattedExams.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+      // Aggregated statistics
+      const totalExams = formattedExams.length;
+      const passedExams = formattedExams.filter(e => e.passed).length;
+      const failedExams = totalExams - passedExams;
+      const passRate = totalExams > 0 ? Math.round((passedExams / totalExams) * 100) : 0;
+      const totalScores = formattedExams.reduce((acc, curr) => acc + curr.score, 0);
+      const averageScore = totalExams > 0 ? Number((totalScores / totalExams).toFixed(1)) : 0;
+      const averageScorePercent = totalExams > 0 ? Math.round((totalScores / (totalExams * 20)) * 100) : 0;
+      const highestScore = totalExams > 0 ? Math.max(...formattedExams.map(e => e.score)) : 0;
+      const lowestScore = totalExams > 0 ? Math.min(...formattedExams.map(e => e.score)) : 0;
+      const totalDuration = formattedExams.reduce((acc, curr) => acc + (curr.durationSeconds || 0), 0);
+      const averageDurationSeconds = totalExams > 0 ? Math.round(totalDuration / totalExams) : 0;
+
+      // Category Performance aggregation
+      const categoryStats = new Map<string, { categoryId: string; categoryName: any; totalQuestions: number; correctCount: number }>();
+      formattedExams.forEach(exam => {
+        exam.questions.forEach((q: any) => {
+          const catId = q.category || 'General';
+          const existing = categoryStats.get(catId) || {
+            categoryId: catId,
+            categoryName: q.categoryName || catId,
+            totalQuestions: 0,
+            correctCount: 0
+          };
+          existing.totalQuestions += 1;
+          if (q.isCorrect) existing.correctCount += 1;
+          categoryStats.set(catId, existing);
+        });
+      });
+
+      const categoryPerformance = Array.from(categoryStats.values()).map(cat => ({
+        ...cat,
+        accuracyPercent: cat.totalQuestions > 0 ? Math.round((cat.correctCount / cat.totalQuestions) * 100) : 0
+      })).sort((a, b) => b.accuracyPercent - a.accuracyPercent);
+
+      // Lesson Quizzes from users/{userId}/progress
+      const lessonQuizzes: any[] = [];
+      if (progressSnap) {
+        progressSnap.docs.forEach(doc => {
+          const p = doc.data();
+          const lesson = lessonMap.get(p.lessonId || doc.id);
+          const dateStr = p.lastAccessed?.toDate ? p.lastAccessed.toDate().toISOString() : (p.updatedAt?.toDate ? p.updatedAt.toDate().toISOString() : new Date().toISOString());
+          lessonQuizzes.push({
+            lessonId: p.lessonId || doc.id,
+            lessonTitle: lesson?.title || { en: 'Lesson ' + (p.lessonId || doc.id), rw: 'Isomo ' + (p.lessonId || doc.id), fr: 'Leçon ' + (p.lessonId || doc.id) },
+            category: lesson?.category || 'General',
+            score: Number(p.score) || 0,
+            total: Number(p.total) || 0,
+            percent: Number(p.percent) || (p.total > 0 ? Math.round((p.score / p.total) * 100) : 0),
+            passed: Boolean(p.passed || p.completed),
+            attempts: Number(p.attempts) || 1,
+            date: dateStr
+          });
+        });
+      }
+      lessonQuizzes.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+      return res.json({
+        success: true,
+        summary: {
+          totalExams,
+          passedExams,
+          failedExams,
+          passRate,
+          averageScore,
+          averageScorePercent,
+          highestScore,
+          lowestScore,
+          averageDurationSeconds,
+          totalQuizzes: lessonQuizzes.length,
+          passedQuizzes: lessonQuizzes.filter(q => q.passed).length
+        },
+        examHistory: formattedExams,
+        categoryPerformance,
+        lessonQuizzes
+      });
+    } catch (err: any) {
+      console.error('Failed to get user performance:', err);
+      return res.status(500).json({ error: err.message || 'Failed to get user performance' });
     }
   });
 
@@ -1495,7 +1925,7 @@ async function startServer() {
       const allPurchases = [...purchasesSnap.docs.map(d => ({ id: d.id, ...d.data() }))];
       for (const sDoc of subsSnap.docs) {
         const s = sDoc.data();
-        if (!allPurchases.some(p => p.id === sDoc.id || p.planId === s.planId)) {
+        if (!allPurchases.some(p => p.id === sDoc.id || (p as any).planId === (s as any).planId)) {
           allPurchases.push({ id: sDoc.id, ...s });
         }
       }
@@ -1547,34 +1977,321 @@ async function startServer() {
     if (!auth) return res.status(401).json({ error: 'Unauthorized' });
     const { refCode } = req.body;
     
-    const settingsDoc = await db.collection('siteSettings').doc('referral').get();
-    if (!settingsDoc.data()?.active) return res.status(400).json({ error: 'Referral not active' });
+    try {
+      const settingsDoc = await db.collection('siteSettings').doc('referral').get();
+      if (!settingsDoc.data()?.active) return res.status(400).json({ error: 'Referral not active', code: 'REFERRAL_INACTIVE' });
 
-    await db.runTransaction(async (transaction) => {
-      const userRef = db.collection('users').doc(auth.uid);
-      const userDoc = await transaction.get(userRef);
-      if (!userDoc.exists) throw new Error('User not found');
-      if (userDoc.data()?.referredBy) throw new Error('Already referred');
-      
-      // Generate referral code for new user
-      const newRefCode = Math.random().toString(36).substring(2, 8).toUpperCase();
-      
-      let referredById: string | null = null;
-      if (refCode) {
-        const referrers = await transaction.get(db.collection('users').where('referralCode', '==', refCode));
-        if (referrers.empty) throw new Error('Invalid referral code');
-        const referrer = referrers.docs[0];
-        if (referrer.id === auth.uid) throw new Error('Cannot refer self');
-        if (referrer.data().role === 'admin') throw new Error('Admin cannot be referrer');
-        referredById = referrer.id;
-      }
-      
-      transaction.update(userRef, {
-        referralCode: newRefCode,
-        referredBy: referredById
+      let assignedCode = '';
+      let assignedReferrer: string | null = null;
+
+      await db.runTransaction(async (transaction) => {
+        const userRef = db.collection('users').doc(auth.uid);
+        const userDoc = await transaction.get(userRef);
+        if (!userDoc.exists) {
+          const err: any = new Error('User not found');
+          err.status = 404;
+          err.code = 'USER_NOT_FOUND';
+          throw err;
+        }
+        if (userDoc.data()?.referredBy) {
+          const err: any = new Error('Already referred');
+          err.status = 400;
+          err.code = 'ALREADY_REFERRED';
+          throw err;
+        }
+        
+        let newRefCode = userDoc.data()?.referralCode;
+        if (!newRefCode) {
+          newRefCode = Math.random().toString(36).substring(2, 8).toUpperCase();
+        }
+        assignedCode = newRefCode;
+        
+        let referredById: string | null = null;
+        if (refCode) {
+          const referrers = await transaction.get(db.collection('users').where('referralCode', '==', refCode));
+          if (referrers.empty) {
+            const err: any = new Error('Invalid referral code');
+            err.status = 400;
+            err.code = 'INVALID_REFERRAL_CODE';
+            throw err;
+          }
+          const referrer = referrers.docs[0];
+          if (referrer.id === auth.uid) {
+            const err: any = new Error('Cannot refer self');
+            err.status = 400;
+            err.code = 'CANNOT_REFER_SELF';
+            throw err;
+          }
+          if (referrer.data().role === 'admin') {
+            const err: any = new Error('Admin cannot be referrer');
+            err.status = 400;
+            err.code = 'ADMIN_CANNOT_REFER';
+            throw err;
+          }
+          referredById = referrer.id;
+        }
+        assignedReferrer = referredById;
+        
+        transaction.update(userRef, {
+          referralCode: newRefCode,
+          referredBy: referredById
+        });
       });
-    });
-    res.json({ success: true });
+
+      return res.json({ success: true, referralCode: assignedCode, referredBy: assignedReferrer });
+    } catch (err: any) {
+      const status = err.status || 400;
+      return res.status(status).json({
+        error: err.code || err.message,
+        code: err.code || 'REFERRAL_ERROR',
+        message: err.message
+      });
+    }
+  });
+
+  // GET /api/referral/stats
+  app.get('/api/referral/stats', async (req: Request, res: Response) => {
+    const auth = await verifyAuth(req);
+    if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+    const { uid } = auth;
+
+    try {
+      const userRef = db.collection('users').doc(uid);
+      const userDoc = await userRef.get();
+      let referralCode = userDoc.data()?.referralCode;
+
+      if (!referralCode) {
+        referralCode = Math.random().toString(36).substring(2, 8).toUpperCase();
+        await userRef.set({ referralCode }, { merge: true });
+      }
+
+      const settingsDoc = await db.collection('siteSettings').doc('referral').get();
+      const settings = settingsDoc.exists ? settingsDoc.data()! : { active: false, baseDomain: 'https://ais-dev-lixew3oqgbkl4s66icznfc-399525316199.europe-west1.run.app', pointsPercent: 10, pointValueRwf: 1 };
+      const baseDomain = settings.baseDomain || 'https://ais-dev-lixew3oqgbkl4s66icznfc-399525316199.europe-west1.run.app';
+
+      const ledgerSnap = await userRef.collection('pointsLedger').get();
+      let pointsBalance = 0;
+      const history: any[] = [];
+      ledgerSnap.docs.forEach(d => {
+        const data = d.data();
+        const amt = data.amount !== undefined ? Number(data.amount) : (data.type === 'spend' ? -Number(data.points || 0) : Number(data.points || 0));
+        pointsBalance += amt;
+        history.push({ id: d.id, ...data, amount: amt });
+      });
+
+      history.sort((a, b) => {
+        const timeA = a.createdAt?.toDate ? a.createdAt.toDate().getTime() : new Date(a.createdAt || 0).getTime();
+        const timeB = b.createdAt?.toDate ? b.createdAt.toDate().getTime() : new Date(b.createdAt || 0).getTime();
+        return timeB - timeA;
+      });
+
+      const referredUsersSnap = await db.collection('users').where('referredBy', '==', uid).get();
+      const referredCount = referredUsersSnap.size;
+
+      res.json({
+        referralCode,
+        baseDomain,
+        referralLink: `${baseDomain.replace(/\/$/, '')}/student?mode=signup&ref=${referralCode}`,
+        pointsBalance,
+        pointValueRwf: Number(settings.pointValueRwf) || 1,
+        pointsPercent: Number(settings.pointsPercent) || 10,
+        referredCount,
+        history
+      });
+    } catch (err: any) {
+      console.error('Error fetching referral stats:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // POST /api/referral/redeem
+  app.post('/api/referral/redeem', async (req: Request, res: Response) => {
+    const auth = await verifyAuth(req);
+    if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+    const { uid, email } = auth;
+    const { planId, pointsToRedeem } = req.body || {};
+
+    if (!planId || !pointsToRedeem) {
+      return res.status(400).json({ error: 'Missing planId or pointsToRedeem' });
+    }
+
+    try {
+      const planDoc = await db.collection('plans').doc(planId).get();
+      if (!planDoc.exists) return res.status(404).json({ error: 'Plan not found' });
+      const planData = planDoc.data()!;
+      const planPrice = Number(planData.price);
+
+      const ledgerSnap = await db.collection('users').doc(uid).collection('pointsLedger').get();
+      let balance = 0;
+      ledgerSnap.docs.forEach(doc => {
+        const d = doc.data();
+        if (d.amount !== undefined) balance += Number(d.amount);
+        else if (d.type === 'spend') balance -= Number(d.points || 0);
+        else balance += Number(d.points || 0);
+      });
+
+      if (balance < Number(pointsToRedeem)) {
+        return res.status(400).json({
+          error: 'INSUFFICIENT_POINTS',
+          code: 'INSUFFICIENT_POINTS',
+          message: 'Insufficient points balance.'
+        });
+      }
+
+      const settingsDoc = await db.collection('siteSettings').doc('referral').get();
+      const pointValueRwf = Number(settingsDoc.data()?.pointValueRwf) || 1;
+      const discountAmount = Number(pointsToRedeem) * pointValueRwf;
+
+      if (discountAmount < planPrice) {
+        return res.status(400).json({
+          error: 'PARTIAL_POINTS_REQUIRES_CHECKOUT',
+          message: 'Points do not fully cover the plan. Please complete purchase through checkout.',
+          pointsCovered: discountAmount,
+          planPrice
+        });
+      }
+
+      let planNameString = 'Subscription Pass';
+      if (typeof planData.name === 'object' && planData.name !== null) {
+        planNameString = planData.name.en || planData.name.rw || planData.name.fr || 'Subscription Pass';
+      } else if (typeof planData.name === 'string') {
+        planNameString = planData.name;
+      }
+
+      const paymentRef = db.collection('payments').doc();
+      const paymentRecord = {
+        id: paymentRef.id,
+        paypackRef: 'POINTS_FREE_' + paymentRef.id,
+        userId: uid,
+        userEmail: email || '',
+        planId,
+        planName: planNameString,
+        amount: 0,
+        pointsRedeemed: Number(pointsToRedeem),
+        phone: 'N/A',
+        network: 'POINTS',
+        kind: 'points_redemption',
+        status: 'pending',
+        paypackStatus: 'successful',
+        isSandbox: false,
+        subscriptionId: null,
+        failureReason: null,
+        createdAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      };
+
+      await paymentRef.set(paymentRecord);
+      const pSnap = await paymentRef.get();
+      await processSuccessfulPayment(pSnap, 0);
+
+      return res.json({
+        success: true,
+        paymentId: paymentRef.id,
+        planName: planNameString,
+        pointsRedeemed: Number(pointsToRedeem),
+        freeWithPoints: true,
+        message: 'Plan successfully redeemed and activated with points!'
+      });
+    } catch (err: any) {
+      console.error('Redeem points error:', err);
+      return res.status(500).json({ error: err.message || 'Points redemption failed' });
+    }
+  });
+
+  // GET /api/admin/referral/rewards
+  app.get('/api/admin/referral/rewards', async (req: Request, res: Response) => {
+    const auth = await verifyAuth(req);
+    if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+    const userDoc = await db.collection('users').doc(auth.uid).get();
+    const isAdmin = auth.email === 'fabriceib2006@gmail.com' || userDoc.data()?.role === 'admin';
+    if (!isAdmin) return res.status(403).json({ error: 'Forbidden' });
+
+    try {
+      const snap = await db.collection('referralRewards').get();
+      const rewards = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      rewards.sort((a: any, b: any) => {
+        const timeA = a.createdAt?.toDate ? a.createdAt.toDate().getTime() : new Date(a.date || a.createdAt || 0).getTime();
+        const timeB = b.createdAt?.toDate ? b.createdAt.toDate().getTime() : new Date(b.date || b.createdAt || 0).getTime();
+        return timeB - timeA;
+      });
+      res.json({ rewards });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // POST /api/admin/referral/reverse-reward
+  app.post('/api/admin/referral/reverse-reward', async (req: Request, res: Response) => {
+    const auth = await verifyAuth(req);
+    if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+    const userDoc = await db.collection('users').doc(auth.uid).get();
+    const isAdmin = auth.email === 'fabriceib2006@gmail.com' || userDoc.data()?.role === 'admin';
+    if (!isAdmin) return res.status(403).json({ error: 'Forbidden' });
+
+    const { rewardId, reason } = req.body || {};
+    if (!rewardId) return res.status(400).json({ error: 'Missing rewardId' });
+
+    try {
+      await db.runTransaction(async (transaction) => {
+        // ALL READS FIRST
+        const rewardRef = db.collection('referralRewards').doc(rewardId);
+        const rewardDoc = await transaction.get(rewardRef);
+        if (!rewardDoc.exists) {
+          const err: any = new Error('Reward record not found');
+          err.status = 404;
+          throw err;
+        }
+        const rewardData = rewardDoc.data()!;
+        if (rewardData.status === 'reversed') {
+          const err: any = new Error('Reward is already reversed');
+          err.status = 400;
+          throw err;
+        }
+
+        const referrerId = rewardData.referrerId;
+        const points = Number(rewardData.pointsAwarded) || 0;
+
+        // WRITES AFTER ALL READS
+        transaction.update(rewardRef, {
+          status: 'reversed',
+          reversedAt: FieldValue.serverTimestamp(),
+          reversedReason: reason || 'Administrative reversal',
+          updatedAt: FieldValue.serverTimestamp()
+        });
+
+        if (referrerId && points > 0) {
+          const spendRef = db.collection('users').doc(referrerId).collection('pointsLedger').doc();
+          transaction.set(spendRef, {
+            id: spendRef.id,
+            userId: referrerId,
+            points,
+            amount: -Math.abs(points),
+            type: 'spend',
+            description: `Reversal of referral reward: ${reason || 'Administrative reversal'}`,
+            rewardId,
+            createdAt: FieldValue.serverTimestamp()
+          });
+        }
+
+        const logRef = db.collection('adminLogs').doc();
+        transaction.set(logRef, {
+          id: logRef.id,
+          adminId: auth.uid,
+          adminEmail: auth.email || '',
+          action: 'reverse_referral_reward',
+          rewardId,
+          referrerId,
+          points,
+          reason: reason || 'Administrative reversal',
+          timestamp: new Date().toISOString()
+        });
+      });
+
+      res.json({ success: true, message: 'Reward reversed successfully' });
+    } catch (err: any) {
+      console.error('Reverse reward error:', err);
+      res.status(err.status || 500).json({ error: err.message || 'Failed to reverse reward' });
+    }
   });
 
   app.post('/api/exams/start', async (req: Request, res: Response) => {
@@ -2068,17 +2785,30 @@ async function startServer() {
             userAnswer,
             correctIndex: qData.correctIndex,
             explanation: qData.explanation,
+            category: qData.category || 'General',
+            imageUrl: qData.imageUrl || null,
+            text: qData.text || null,
+            options: qData.options || null,
             isCorrect
           });
         }
 
         const nowIso = new Date().toISOString();
+        let durationSeconds = 0;
+        if (freshAttempt.startedAt) {
+          const startMs = freshAttempt.startedAt.toDate ? freshAttempt.startedAt.toDate().getTime() : new Date(freshAttempt.startedAt).getTime();
+          durationSeconds = Math.max(0, Math.floor((new Date(nowIso).getTime() - startMs) / 1000));
+        }
+
         transaction.update(attemptRef, {
           status: 'finished',
           submittedAt: nowIso,
           score,
           total: qIds.length,
-          passed: score >= passMark
+          passed: score >= passMark,
+          durationSeconds,
+          userAnswers: answers,
+          results
         });
 
         const resultDocRef = db.collection('users').doc(uid).collection('examResults').doc();
@@ -2091,7 +2821,10 @@ async function startServer() {
           passMark,
           passed: score >= passMark,
           submittedAt: nowIso,
-          date: nowIso
+          date: nowIso,
+          durationSeconds,
+          userAnswers: answers,
+          results
         };
         transaction.set(resultDocRef, resultRecord);
         // Also mirror to root collection examResults for administrative reporting
@@ -2115,14 +2848,210 @@ async function startServer() {
     const { uid } = auth;
 
     try {
-      const snap = await db.collection('users').doc(uid).collection('examResults').get();
-      const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      list.sort((a: any, b: any) => {
-        const timeA = new Date(a.submittedAt || a.date || 0).getTime();
-        const timeB = new Date(b.submittedAt || b.date || 0).getTime();
-        return timeB - timeA;
+      const [resultsSnap, attemptsSnap, categoriesSnap] = await Promise.all([
+        db.collection('users').doc(uid).collection('examResults').get().catch(() => null),
+        db.collection('users').doc(uid).collection('examAttempts').get().catch(() => null),
+        db.collection('categories').get().catch(() => null)
+      ]);
+
+      const categoryMap = new Map<string, any>();
+      if (categoriesSnap) {
+        categoriesSnap.docs.forEach(d => {
+          categoryMap.set(d.id, { id: d.id, ...d.data() });
+        });
+      }
+
+      // Combine attempts & results
+      const combinedMap = new Map<string, any>();
+
+      if (attemptsSnap) {
+        attemptsSnap.docs.forEach(d => {
+          const data = d.data();
+          if (data.status === 'finished' || data.status === 'completed' || data.score !== undefined) {
+            combinedMap.set(d.id, { id: d.id, ...data });
+          }
+        });
+      }
+
+      if (resultsSnap) {
+        resultsSnap.docs.forEach(d => {
+          const data = d.data();
+          const key = data.attemptId || d.id;
+          const existing = combinedMap.get(key);
+          if (existing) {
+            combinedMap.set(key, { ...existing, ...data });
+          } else {
+            combinedMap.set(d.id, { id: d.id, ...data });
+          }
+        });
+      }
+
+      const allList = Array.from(combinedMap.values());
+
+      // Collect question IDs to batch load if results are missing question text or options
+      const questionIdsToFetch = new Set<string>();
+      allList.forEach(item => {
+        if (Array.isArray(item.questionIds)) {
+          item.questionIds.forEach((qId: string) => questionIdsToFetch.add(qId));
+        }
+        if (Array.isArray(item.results)) {
+          item.results.forEach((r: any) => {
+            if (r.questionId && (!r.text || !r.options)) {
+              questionIdsToFetch.add(r.questionId);
+            }
+          });
+        }
       });
-      return res.json({ results: list });
+
+      const questionsMap = new Map<string, any>();
+      const qIdList = Array.from(questionIdsToFetch);
+      for (let i = 0; i < qIdList.length; i += 30) {
+        const chunk = qIdList.slice(i, i + 30);
+        if (chunk.length > 0) {
+          const qSnap = await db.collection('questions')
+            .where(FieldPath.documentId(), 'in', chunk)
+            .get()
+            .catch(() => null);
+          if (qSnap) {
+            qSnap.docs.forEach(doc => {
+              questionsMap.set(doc.id, { id: doc.id, ...doc.data() });
+            });
+          }
+        }
+      }
+
+      const enrichedResults = allList.map(item => {
+        const dateStr = item.submittedAt || item.date || (item.startedAt?.toDate ? item.startedAt.toDate().toISOString() : item.startedAt) || new Date().toISOString();
+        let durationSeconds = Number(item.durationSeconds) || 0;
+        if (!durationSeconds && item.startedAt && item.submittedAt) {
+          const startMs = item.startedAt.toDate ? item.startedAt.toDate().getTime() : new Date(item.startedAt).getTime();
+          const endMs = new Date(item.submittedAt).getTime();
+          durationSeconds = Math.max(0, Math.floor((endMs - startMs) / 1000));
+        }
+
+        let questionBreakdown: any[] = [];
+        if (Array.isArray(item.results) && item.results.length > 0) {
+          questionBreakdown = item.results.map((r: any, idx: number) => {
+            const qDetail = questionsMap.get(r.questionId);
+            const catId = r.category || qDetail?.category || 'General';
+            const catObj = categoryMap.get(catId);
+            return {
+              index: idx + 1,
+              questionId: r.questionId,
+              text: r.text || qDetail?.text || { en: 'Question ' + (idx + 1), rw: 'Ikibazo ' + (idx + 1), fr: 'Question ' + (idx + 1) },
+              options: r.options || qDetail?.options || { en: [], rw: [], fr: [] },
+              userAnswer: r.userAnswer ?? null,
+              correctIndex: r.correctIndex ?? qDetail?.correctIndex ?? 0,
+              isCorrect: Boolean(r.isCorrect),
+              explanation: r.explanation || qDetail?.explanation || {},
+              category: catId,
+              categoryName: catObj?.name || catId,
+              imageUrl: r.imageUrl || qDetail?.imageUrl || null
+            };
+          });
+        } else if (Array.isArray(item.questionIds) && item.questionIds.length > 0) {
+          questionBreakdown = item.questionIds.map((qId: string, idx: number) => {
+            const qDetail = questionsMap.get(qId);
+            const userAns = item.userAnswers ? item.userAnswers[qId] : undefined;
+            const correctIdx = qDetail ? qDetail.correctIndex : 0;
+            const isCorrect = userAns !== undefined && userAns === correctIdx;
+            const catId = qDetail?.category || 'General';
+            const catObj = categoryMap.get(catId);
+            return {
+              index: idx + 1,
+              questionId: qId,
+              text: qDetail?.text || { en: 'Question ' + (idx + 1), rw: 'Ikibazo ' + (idx + 1), fr: 'Question ' + (idx + 1) },
+              options: qDetail?.options || { en: [], rw: [], fr: [] },
+              userAnswer: userAns ?? null,
+              correctIndex: correctIdx,
+              isCorrect,
+              explanation: qDetail?.explanation || {},
+              category: catId,
+              categoryName: catObj?.name || catId,
+              imageUrl: qDetail?.imageUrl || null
+            };
+          });
+        }
+
+        const score = Number(item.score) !== undefined && !isNaN(Number(item.score))
+          ? Number(item.score)
+          : questionBreakdown.filter(q => q.isCorrect).length;
+        const total = Number(item.total) || (questionBreakdown.length > 0 ? questionBreakdown.length : 20);
+        const passMark = Number(item.passMark) || 12;
+        const passed = item.passed !== undefined ? Boolean(item.passed) : score >= passMark;
+        const percentage = total > 0 ? Math.round((score / total) * 100) : 0;
+
+        // Category breakdown for this specific exam
+        const catStatsMap = new Map<string, { categoryId: string; categoryName: any; total: number; correct: number }>();
+        questionBreakdown.forEach(q => {
+          const cId = q.category || 'General';
+          const curr = catStatsMap.get(cId) || { categoryId: cId, categoryName: q.categoryName || cId, total: 0, correct: 0 };
+          curr.total += 1;
+          if (q.isCorrect) curr.correct += 1;
+          catStatsMap.set(cId, curr);
+        });
+        const examCategoryStats = Array.from(catStatsMap.values()).map(c => ({
+          ...c,
+          accuracy: c.total > 0 ? Math.round((c.correct / c.total) * 100) : 0
+        }));
+
+        return {
+          id: item.id,
+          attemptId: item.attemptId || item.id,
+          date: dateStr,
+          submittedAt: dateStr,
+          durationSeconds,
+          score,
+          total,
+          passMark,
+          passed,
+          percentage,
+          correctCount: score,
+          incorrectCount: Math.max(0, total - score),
+          questions: questionBreakdown,
+          categoryStats: examCategoryStats
+        };
+      });
+
+      enrichedResults.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+      // Overall user summary across all exams
+      const totalExams = enrichedResults.length;
+      const passedExams = enrichedResults.filter(e => e.passed).length;
+      const failedExams = totalExams - passedExams;
+      const passRate = totalExams > 0 ? Math.round((passedExams / totalExams) * 100) : 0;
+      const totalScoreSum = enrichedResults.reduce((acc, curr) => acc + curr.score, 0);
+      const averageScore = totalExams > 0 ? Number((totalScoreSum / totalExams).toFixed(1)) : 0;
+      const bestScore = totalExams > 0 ? Math.max(...enrichedResults.map(e => e.score)) : 0;
+
+      // Category mastery across all attempts
+      const globalCategoryStats = new Map<string, { categoryId: string; categoryName: any; total: number; correct: number }>();
+      enrichedResults.forEach(ex => {
+        ex.questions.forEach((q: any) => {
+          const cId = q.category || 'General';
+          const curr = globalCategoryStats.get(cId) || { categoryId: cId, categoryName: q.categoryName || cId, total: 0, correct: 0 };
+          curr.total += 1;
+          if (q.isCorrect) curr.correct += 1;
+          globalCategoryStats.set(cId, curr);
+        });
+      });
+      const categoryMastery = Array.from(globalCategoryStats.values()).map(c => ({
+        ...c,
+        accuracy: c.total > 0 ? Math.round((c.correct / c.total) * 100) : 0
+      })).sort((a, b) => b.accuracy - a.accuracy);
+
+      return res.json({
+        results: enrichedResults,
+        summary: {
+          totalExams,
+          passedExams,
+          failedExams,
+          passRate,
+          averageScore,
+          bestScore
+        },
+        categoryMastery
+      });
     } catch (err: any) {
       console.error('Error fetching exam history:', err);
       return res.status(500).json({ error: err.message || 'Failed to fetch exam history' });

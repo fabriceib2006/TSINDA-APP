@@ -12,33 +12,56 @@ interface LanguageContextType {
 const LanguageContext = createContext<LanguageContextType | undefined>(undefined);
 
 export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [language, setLanguageState] = useState<Language>('rw');
+  const [language, setLanguageState] = useState<Language>(() => {
+    // Check localStorage first
+    try {
+      const stored = localStorage.getItem('tsinda_lang') as Language;
+      if (stored && ['rw', 'en', 'fr'].includes(stored)) {
+        return stored;
+      }
+    } catch (e) {
+      // ignore
+    }
+    // Check cookie fallback
+    try {
+      const cookies = document.cookie.split(';');
+      const langCookie = cookies.find(c => c.trim().startsWith('lang='));
+      if (langCookie) {
+        const savedLang = langCookie.split('=')[1] as Language;
+        if (['rw', 'en', 'fr'].includes(savedLang)) {
+          return savedLang;
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
+    return 'rw';
+  });
 
   useEffect(() => {
-    // Read from cookie
-    const cookies = document.cookie.split(';');
-    const langCookie = cookies.find(c => c.trim().startsWith('lang='));
-    let initialLang: Language = 'rw';
-    if (langCookie) {
-      const savedLang = langCookie.split('=')[1] as Language;
-      if (['rw', 'en', 'fr'].includes(savedLang)) {
-        initialLang = savedLang;
-      }
-    }
-    setLanguageState(initialLang);
-
-    // Sync with user profile on login
+    // Sync with user profile on login, prioritizing local preference if set before login
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
         if (user) {
-            const userSnap = await getDoc(doc(db, 'users', user.uid));
-            if (userSnap.exists()) {
-                const data = userSnap.data();
-                if (data.language) {
-                    setLanguageState(data.language as Language);
-                } else {
-                    // Sync cookie to DB
-                    await updateDoc(doc(db, 'users', user.uid), { language: initialLang });
+            try {
+                const userSnap = await getDoc(doc(db, 'users', user.uid));
+                const localStored = localStorage.getItem('tsinda_lang') as Language;
+                
+                if (localStored && ['rw', 'en', 'fr'].includes(localStored)) {
+                    // User made a language selection (e.g. on homepage/login), sync it to DB
+                    setLanguageState(localStored);
+                    if (userSnap.exists()) {
+                        await updateDoc(doc(db, 'users', user.uid), { language: localStored });
+                    }
+                } else if (userSnap.exists()) {
+                    const data = userSnap.data();
+                    if (data.language && ['rw', 'en', 'fr'].includes(data.language)) {
+                        setLanguageState(data.language as Language);
+                        localStorage.setItem('tsinda_lang', data.language);
+                        document.cookie = `lang=${data.language};max-age=31536000;path=/`;
+                    }
                 }
+            } catch (err) {
+                console.warn("Error syncing language with user profile:", err);
             }
         }
     });
@@ -47,12 +70,26 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const setLanguage = async (lang: Language) => {
     setLanguageState(lang);
-    // Set cookie
-    document.cookie = `lang=${lang};max-age=31536000;path=/`;
+    // Save to localStorage
+    try {
+      localStorage.setItem('tsinda_lang', lang);
+    } catch (e) {
+      // ignore
+    }
+    // Save to cookie
+    try {
+      document.cookie = `lang=${lang};max-age=31536000;path=/`;
+    } catch (e) {
+      // ignore
+    }
     
     // Sync if logged in
     if (auth.currentUser) {
-      await updateDoc(doc(db, 'users', auth.currentUser.uid), { language: lang });
+      try {
+        await updateDoc(doc(db, 'users', auth.currentUser.uid), { language: lang });
+      } catch (err) {
+        console.warn("Error updating user language in Firestore:", err);
+      }
     }
   };
 
@@ -62,7 +99,6 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     </LanguageContext.Provider>
   );
 };
-
 
 export const useLanguage = () => {
   const context = useContext(LanguageContext);

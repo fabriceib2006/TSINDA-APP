@@ -52,7 +52,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           const userSnap = await getDoc(userDocRef);
           
           if (userSnap.exists()) {
-            const data = userSnap.data() as UserProfile;
+            let data = userSnap.data() as UserProfile;
+            if (!data.referralCode) {
+              const code = Math.random().toString(36).substring(2, 8).toUpperCase();
+              await updateDoc(userDocRef, { referralCode: code });
+              data = { ...data, referralCode: code };
+            }
             setUserProfile(data);
             if (data.role === 'admin' || fbUser.email === 'fabriceib2006@gmail.com') {
               const adminDocRef = doc(db, 'admins', fbUser.uid);
@@ -230,7 +235,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       email: realEmail ? realEmail.trim().toLowerCase() : '',
       role: 'student',
       status: 'active',
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      referralCode: Math.random().toString(36).substring(2, 8).toUpperCase()
     };
 
     try {

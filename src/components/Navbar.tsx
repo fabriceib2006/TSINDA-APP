@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import { t } from '../i18n/translations';
-import { Globe, LogOut, ShieldCheck, User as UserIcon, Menu, ChevronDown, Check } from 'lucide-react';
+import { Globe, LogOut, ShieldCheck, User as UserIcon, Menu, ChevronDown, Check, Home } from 'lucide-react';
 import { Language } from '../types';
 
 interface NavbarProps {
@@ -100,8 +100,16 @@ export const Navbar: React.FC<NavbarProps> = ({
           </a>
         </div>
 
-        {/* Right Section: Language Switcher + User Profile Dropdown */}
+        {/* Right Section: Home Link + Language Switcher + User Profile Dropdown */}
         <div className="flex items-center gap-2 sm:gap-3.5 shrink-0">
+          <a
+            href="/"
+            className="min-h-[40px] px-3 py-2 bg-slate-100 hover:bg-slate-200/80 border border-slate-200/70 text-slate-800 text-xs font-bold rounded-xl flex items-center gap-1.5 transition-colors shadow-2xs"
+            title="Return to Homepage"
+          >
+            <Home className="w-3.5 h-3.5 text-blue-600" />
+            <span className="hidden sm:inline">{language === 'rw' ? 'Ahabanza' : language === 'fr' ? 'Accueil' : 'Home'}</span>
+          </a>
           
           {/* Desktop Segmented Language Switcher (>= 1024px) */}
           <div className="hidden lg:flex items-center bg-slate-100/90 border border-slate-200/70 p-0.5 rounded-xl shadow-2xs">
@@ -243,7 +251,13 @@ export const Navbar: React.FC<NavbarProps> = ({
                         className="w-full min-h-[44px] px-3.5 py-2.5 text-left text-xs sm:text-sm font-semibold text-slate-700 hover:bg-slate-50 hover:text-blue-700 rounded-xl flex items-center gap-2.5 transition-colors"
                       >
                         <UserIcon className="w-4 h-4 text-slate-400 group-hover:text-blue-600" />
-                        <span>My Profile & Account</span>
+                        <span>
+                          {{
+                            en: "My Profile & Account",
+                            rw: "Porayili Yanjye na Konti",
+                            fr: "Mon Profil & Compte"
+                          }[language] || "My Profile & Account"}
+                        </span>
                       </button>
                     )}
 

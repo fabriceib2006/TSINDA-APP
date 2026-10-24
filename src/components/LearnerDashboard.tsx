@@ -27,6 +27,7 @@ export const LearnerDashboard: React.FC = () => {
   const [isSubModalOpen, setIsSubModalOpen] = useState<boolean>(false);
   const [points, setPoints] = useState<number>(0);
   const [domain, setDomain] = useState<string>('https://tsinda.app');
+  const [copied, setCopied] = useState<boolean>(false);
 
   useEffect(() => {
     if (!userProfile) return;
@@ -129,14 +130,23 @@ export const LearnerDashboard: React.FC = () => {
             <div className="bg-blue-50 p-6 rounded-2xl border border-blue-100 flex flex-col sm:flex-row justify-between items-center gap-4">
               <div>
                 <div className="flex items-center gap-2">
-                  <h3 className="font-bold text-blue-900">Invite Friends & Earn</h3>
-                  <span className="bg-amber-100 text-amber-800 text-xs font-extrabold px-2 py-0.5 rounded-full">🪙 {points} Coins</span>
+                  <h3 className="font-bold text-blue-900">{getText(learnerDashboardT.inviteFriends, language)}</h3>
+                  <span className="bg-amber-100 text-amber-800 text-xs font-extrabold px-2 py-0.5 rounded-full">🪙 {points} {getText(learnerDashboardT.coins, language)}</span>
                 </div>
-                <p className="text-sm text-blue-700">Share your referral link and earn points for every friend who joins!</p>
+                <p className="text-sm text-blue-700">{getText(learnerDashboardT.inviteDesc, language)}</p>
               </div>
               <div className="flex gap-2 w-full sm:w-auto">
                 <input type="text" readOnly value={`${domain.replace(/\/$/, '')}/student?mode=signup&ref=${userProfile?.referralCode || ''}`} className="bg-white border rounded px-3 py-2 text-sm font-mono flex-1 sm:w-72" />
-                <button onClick={() => navigator.clipboard.writeText(`${domain.replace(/\/$/, '')}/student?mode=signup&ref=${userProfile?.referralCode || ''}`)} className="bg-blue-600 text-white px-4 py-2 rounded text-sm font-bold shrink-0">Copy Link</button>
+                <button 
+                  onClick={() => {
+                    navigator.clipboard.writeText(`${domain.replace(/\/$/, '')}/student?mode=signup&ref=${userProfile?.referralCode || ''}`);
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 2000);
+                  }} 
+                  className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded text-sm font-bold shrink-0 transition-colors"
+                >
+                  {copied ? getText(learnerDashboardT.copied, language) : getText(learnerDashboardT.copyLink, language)}
+                </button>
               </div>
             </div>
 

@@ -21,10 +21,14 @@ import {
   ShieldCheck,
   CheckCircle2,
   XCircle,
-  RefreshCw
+  RefreshCw,
+  ChevronLeft,
+  Clock,
+  Award
 } from 'lucide-react';
 import { SubscriptionModal } from './SubscriptionModal';
 import { RichTextRenderer } from '../common/RichTextRenderer';
+import { getLocalizedQuestionOptions, getLocalizedQuestionExplanation } from '../../lib/i18n';
 
 export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' | 'videos' }> = ({
   onBack,
@@ -48,6 +52,8 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
   const [isSubModalOpen, setIsSubModalOpen] = useState(false);
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageSize = 8;
 
   // Lesson Quiz State
   const [quizState, setQuizState] = useState<'idle' | 'loading' | 'active' | 'submitted'>('idle');
@@ -150,6 +156,47 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
       (v.category || '').toLowerCase().includes(searchQuery.toLowerCase());
     return matchCat && matchSearch;
   });
+
+  // Pagination & metrics
+  const totalLessons = filteredLessons.length;
+  const totalLessonPages = Math.max(1, Math.ceil(totalLessons / pageSize));
+  const safeLessonPage = Math.min(Math.max(1, currentPage), totalLessonPages);
+  const startLessonIndex = totalLessons === 0 ? 0 : (safeLessonPage - 1) * pageSize;
+  const endLessonIndex = Math.min(startLessonIndex + pageSize, totalLessons);
+  const paginatedLessons = filteredLessons.slice(startLessonIndex, endLessonIndex);
+
+  const passedLessonsCount = lessons.filter(l => progressMap[l.id]?.passed).length;
+  const progressPercent = lessons.length > 0 ? Math.round((passedLessonsCount / lessons.length) * 100) : 0;
+
+  // Category counts map for interactive chips
+  const categoryCounts = lessons.reduce((acc, l) => {
+    if (l.category) {
+      acc[l.category] = (acc[l.category] || 0) + 1;
+    }
+    return acc;
+  }, {} as Record<string, number>);
+
+  const handleCategoryChange = (cat: string) => {
+    setCategoryFilter(cat);
+    setCurrentPage(1);
+  };
+
+  const handleSearchChange = (query: string) => {
+    setSearchQuery(query);
+    setCurrentPage(1);
+  };
+
+  const handleSectionChange = (section: 'lessons' | 'videos') => {
+    setActiveSection(section);
+    setSearchQuery('');
+    setCategoryFilter('all');
+    setCurrentPage(1);
+  };
+
+  const goToPage = (page: number) => {
+    setCurrentPage(page);
+    window.scrollTo({ top: 120, behavior: 'smooth' });
+  };
 
   const handleSelectLesson = (lesson: Lesson) => {
     setSelectedLesson(lesson);
@@ -399,31 +446,60 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
                             <span className="text-blue-600">#{idx + 1}</span>
                             <span>{q.text}</span>
                           </div>
-                          {q.imageUrl && (
-                            <div className="rounded-lg overflow-hidden border border-slate-200 max-w-xs bg-slate-50">
-                              <img src={q.imageUrl} alt="" className="w-full h-36 object-contain p-1" />
+                          {Array.isArray(q.images) && q.images.length > 0 ? (
+                            <div className="flex flex-wrap gap-2 pt-1">
+                              {q.images.map((imgUrl: string, i: number) => (
+                                <img
+                                  key={i}
+                                  src={imgUrl}
+                                  alt=""
+                                  onError={(e) => { (e.currentTarget as HTMLElement).style.display = 'none'; }}
+                                  className="max-h-36 rounded-lg border border-slate-200 bg-slate-50 object-contain p-1"
+                                />
+                              ))}
                             </div>
-                          )}
+                          ) : q.imageUrl ? (
+                            <div className="rounded-lg overflow-hidden border border-slate-200 max-w-xs bg-slate-50">
+                              <img
+                                src={q.imageUrl}
+                                alt=""
+                                onError={(e) => { (e.currentTarget as HTMLElement).style.display = 'none'; }}
+                                className="w-full h-36 object-contain p-1"
+                              />
+                            </div>
+                          ) : null}
                           <div className="grid grid-cols-1 gap-2 pt-2">
                             {(q.options || []).map((opt: string, optIdx: number) => {
                               const isSelected = quizAnswers[q.id] === optIdx;
+                              const optLetter = ['a', 'b', 'c', 'd'][optIdx];
+                              const optImg = q.optionImages?.[optLetter];
                               return (
                                 <button
                                   key={optIdx}
                                   type="button"
                                   onClick={() => handleQuizAnswer(q.id, optIdx)}
-                                  className={`w-full text-left p-3 rounded-lg border text-xs sm:text-sm font-medium transition-all flex items-center gap-3 ${
+                                  className={`w-full text-left p-3 rounded-lg border text-xs sm:text-sm font-medium transition-all flex items-start gap-3 ${
                                     isSelected
                                       ? 'bg-blue-50 border-blue-600 text-blue-900'
                                       : 'bg-white border-slate-200 hover:bg-slate-50 text-slate-800'
                                   }`}
                                 >
-                                  <span className={`w-6 h-6 rounded-full border flex items-center justify-center shrink-0 text-xs font-bold ${
+                                  <span className={`w-6 h-6 rounded-full border flex items-center justify-center shrink-0 text-xs font-bold mt-0.5 ${
                                     isSelected ? 'bg-blue-600 text-white border-blue-600' : 'border-slate-300 text-slate-500'
                                   }`}>
                                     {String.fromCharCode(65 + optIdx)}
                                   </span>
-                                  <span>{opt}</span>
+                                  <div className="flex-1 space-y-1">
+                                    {opt && <span>{opt}</span>}
+                                    {optImg && (
+                                      <img
+                                        src={optImg}
+                                        alt={`Option ${String.fromCharCode(65 + optIdx)} illustration`}
+                                        onError={(e) => { (e.currentTarget as HTMLElement).style.display = 'none'; }}
+                                        className="max-h-20 rounded-md border bg-slate-50 object-contain mt-1"
+                                      />
+                                    )}
+                                  </div>
                                 </button>
                               );
                             })}
@@ -466,25 +542,69 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
                       <h4 className="font-bold text-slate-900 text-sm">Detailed Review & Explanations</h4>
                       {quizResult.results.map((resItem: any, rIdx: number) => {
                         const qObj = quizQuestions.find(q => q.id === resItem.questionId);
+                        const optData = qObj ? getLocalizedQuestionOptions(qObj, language) : { options: [] };
+                        const explData = qObj ? getLocalizedQuestionExplanation(qObj, language) : { explanation: '' };
+
                         return (
-                          <div key={resItem.questionId} className={`p-4 rounded-xl border space-y-2 ${
-                            resItem.isCorrect ? 'bg-emerald-50/40 border-emerald-200' : 'bg-rose-50/40 border-rose-200'
-                          }`}>
-                            <div className="font-bold text-slate-900 text-xs sm:text-sm flex items-start gap-2">
-                              {resItem.isCorrect ? <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" /> : <XCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />}
-                              <span>#{rIdx + 1} {qObj?.text}</span>
+                          <div key={resItem.questionId} className={`p-5 rounded-2xl border ${resItem.isCorrect ? 'border-emerald-200 bg-emerald-50/30' : 'border-rose-200 bg-rose-50/30'} space-y-4`}>
+                            <div className="font-bold text-slate-900 text-sm flex gap-2">
+                              <span className="w-6 h-6 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center text-xs shrink-0">{rIdx + 1}</span>
+                              <span className="leading-relaxed">{qObj?.text}</span>
                             </div>
-                            <div className="text-xs space-y-1 pl-6">
-                              <div>Your Answer: <span className={resItem.isCorrect ? 'text-emerald-700 font-bold' : 'text-rose-700 font-bold'}>{qObj?.options?.[resItem.userAnswer] ?? 'None'}</span></div>
-                              {!resItem.isCorrect && (
-                                <div className="text-emerald-800 font-medium">Correct Answer: {qObj?.options?.[resItem.correctIndex]}</div>
-                              )}
-                              {resItem.explanation && (
-                                <div className="mt-2 p-3 bg-white/80 rounded-lg border border-slate-200 text-slate-700 text-xs">
-                                  <span className="font-semibold text-slate-900">Explanation:</span> {typeof resItem.explanation === 'object' ? (resItem.explanation[language] || resItem.explanation.en) : resItem.explanation}
-                                </div>
-                              )}
+                            {/* Question Images */}
+                            {Array.isArray(qObj?.images) && qObj.images.length > 0 && (
+                              <div className="flex flex-wrap gap-2 pl-8">
+                                {qObj.images.map((imgUrl: string, i: number) => <img key={i} src={imgUrl} alt="" className="max-h-36 rounded-lg border bg-slate-50 object-contain p-1" />)}
+                              </div>
+                            )}
+                            {/* Options */}
+                            <div className="grid grid-cols-1 gap-2 pl-8">
+                              {(qObj?.options || []).map((opt: string, optIdx: number) => {
+                                const isCorrect = optIdx === resItem.correctIndex;
+                                const isUserAnswer = optIdx === resItem.userAnswer;
+                                const optLetter = ['a', 'b', 'c', 'd'][optIdx];
+                                const optImg = qObj?.optionImages?.[optLetter];
+                                return (
+                                  <div key={optIdx} className={`p-3 rounded-lg border ${isCorrect ? 'border-emerald-500 bg-emerald-50' : isUserAnswer ? 'border-rose-500 bg-rose-50' : 'border-slate-200 bg-white'}`}>
+                                    <div className="flex items-start gap-3">
+                                      <span className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 text-xs font-bold ${isCorrect ? 'bg-emerald-500 text-white' : isUserAnswer ? 'bg-rose-500 text-white' : 'border border-slate-300 text-slate-500'}`}>
+                                        {String.fromCharCode(65 + optIdx)}
+                                      </span>
+                                      <div className="flex-1 space-y-1">
+                                        <span>{opt}</span>
+                                        {optImg && <img src={optImg} alt="" className="max-h-20 rounded-md border bg-slate-50 object-contain mt-1" />}
+                                      </div>
+                                      {isCorrect && <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />}
+                                      {isUserAnswer && !isCorrect && <XCircle className="w-5 h-5 text-rose-600 shrink-0" />}
+                                    </div>
+                                  </div>
+                                );
+                              })}
                             </div>
+                            {/* Explanation */}
+                            {explData.explanation && (
+                              <div className="pl-8 pt-2 border-t border-slate-200/50">
+                                <h4 className="text-xs font-bold text-slate-800 mb-1">
+                                  {language === 'rw' ? 'Ibisobanuro' : language === 'fr' ? 'Explication' : 'Explanation'}
+                                </h4>
+                                <p className="text-xs text-slate-700 leading-relaxed whitespace-pre-line">{explData.explanation}</p>
+                              </div>
+                            )}
+                            {/* Article Link */}
+                            {qObj?.article_id && (
+                              <div className="pl-8 pt-2">
+                                <button 
+                                  onClick={() => {
+                                    const lesson = lessons.find(l => l.id === qObj.article_id);
+                                    if (lesson) handleSelectLesson(lesson);
+                                  }}
+                                  className="text-xs font-bold text-blue-600 hover:text-blue-700 flex items-center gap-1"
+                                >
+                                  {language === 'rw' ? `Soma itegeko: Article ${qObj.article_id}` : language === 'fr' ? `Lire la règle: Article ${qObj.article_id}` : `Read the rule: Article ${qObj.article_id}`}
+                                  <ChevronRight className="w-3 h-3" />
+                                </button>
+                              </div>
+                            )}
                           </div>
                         );
                       })}
@@ -594,10 +714,7 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
           {/* Section Selector Tabs */}
           <div className="flex border-b border-slate-200 gap-8">
             <button
-              onClick={() => {
-                setActiveSection('lessons');
-                setSearchQuery('');
-              }}
+              onClick={() => handleSectionChange('lessons')}
               className={`flex items-center gap-2 pb-3 font-bold text-sm transition-all border-b-2 relative -mb-px ${
                 activeSection === 'lessons'
                   ? 'border-blue-600 text-blue-600'
@@ -605,14 +722,11 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
               }`}
             >
               <BookOpen className="w-4 h-4" />
-              <span>Gazette Lessons ({lessons.length})</span>
+              <span>{language === 'rw' ? "Amasomo y'Igazeti" : language === 'fr' ? "Leçons de la Gazette" : "Gazette Lessons"} ({lessons.length})</span>
             </button>
 
             <button
-              onClick={() => {
-                setActiveSection('videos');
-                setSearchQuery('');
-              }}
+              onClick={() => handleSectionChange('videos')}
               className={`flex items-center gap-2 pb-3 font-bold text-sm transition-all border-b-2 relative -mb-px ${
                 activeSection === 'videos'
                   ? 'border-blue-600 text-blue-600'
@@ -620,58 +734,194 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
               }`}
             >
               <Video className="w-4 h-4" />
-              <span>Instructional Videos ({videos.length})</span>
+              <span>{language === 'rw' ? "Amavidewo yo Kwiga" : language === 'fr' ? "Vidéos Pédagogiques" : "Instructional Videos"} ({videos.length})</span>
             </button>
           </div>
 
-          {/* Search & Filters */}
-          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs flex flex-col sm:flex-row gap-3 items-center justify-between">
-            <div className="relative w-full sm:w-72 min-h-[44px]">
-              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3.5" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder={`Search ${activeSection}...`}
-                className="w-full pl-9 pr-3 py-2.5 bg-slate-50 rounded-[10px] border border-slate-200 text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-600"
-              />
+          {/* Interactive Study Progress Header Banner */}
+          {activeSection === 'lessons' && (
+            <div className="bg-gradient-to-br from-blue-700 via-indigo-800 to-slate-900 rounded-2xl p-5 sm:p-6 text-white shadow-sm relative overflow-hidden">
+              <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-5">
+                <div className="space-y-1.5 max-w-xl">
+                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/15 backdrop-blur-xs text-[11px] font-bold tracking-wide uppercase text-blue-100">
+                    <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                    <span>{language === 'rw' ? "Amategeko y'Umuhanda yo mu Igazeti" : language === 'fr' ? "Code de la Route du Rwanda" : "Rwanda Official Traffic Code"}</span>
+                  </div>
+                  <h2 className="text-xl sm:text-2xl font-black tracking-tight text-white">
+                    {language === 'rw' ? "Amasomo y'Amategeko y'Umuhanda" : language === 'fr' ? "Leçons Officielles de la Gazette" : "Official Gazette Lessons"}
+                  </h2>
+                  <p className="text-xs sm:text-sm text-blue-100/90 leading-relaxed">
+                    {language === 'rw'
+                      ? "Amasomo magufi yateguwe ku buryo bworoshye. Buri somo ririmo ibisobanuro n'ikizamini cyo kwisuzuma."
+                      : language === 'fr'
+                      ? "Leçons concises structurées par article officiel. Chaque leçon comprend des explications claires et un quiz."
+                      : "Bite-sized official lessons organized for fast learning. Study each article and pass its self-assessment quiz."}
+                  </p>
+                </div>
+
+                {/* Progress Card */}
+                <div className="bg-white/10 backdrop-blur-md rounded-xl p-4 border border-white/15 min-w-[210px] shrink-0 space-y-2">
+                  <div className="flex items-center justify-between text-xs font-semibold text-blue-100">
+                    <span className="flex items-center gap-1.5">
+                      <Award className="w-4 h-4 text-amber-300" />
+                      <span>{language === 'rw' ? "Amasomo yatsinzwe" : language === 'fr' ? "Leçons validées" : "Completed"}</span>
+                    </span>
+                    <span className="font-mono text-white text-sm font-bold">{progressPercent}%</span>
+                  </div>
+                  <div className="flex items-baseline gap-1.5">
+                    <span className="text-2xl font-black font-mono text-white">{passedLessonsCount}</span>
+                    <span className="text-xs text-blue-200 font-medium">/ {lessons.length} {language === 'rw' ? "yose" : "total"}</span>
+                  </div>
+                  <div className="w-full bg-white/20 h-2 rounded-full overflow-hidden">
+                    <div
+                      className="bg-emerald-400 h-full rounded-full transition-all duration-500"
+                      style={{ width: `${Math.min(100, progressPercent)}%` }}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Search, Filter & Quick Category Chips */}
+          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-2xs space-y-3">
+            <div className="flex flex-col sm:flex-row gap-3 items-center justify-between">
+              <div className="relative w-full sm:w-80 min-h-[44px]">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => handleSearchChange(e.target.value)}
+                  placeholder={language === 'rw' ? "Shakisha isomo cyangwa ingingo..." : language === 'fr' ? "Rechercher une leçon..." : "Search lessons or articles..."}
+                  className="w-full pl-10 pr-3 py-2.5 bg-slate-50 rounded-xl border border-slate-200 text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-600 focus:bg-white transition-all"
+                />
+              </div>
+
+              <div className="flex items-center gap-2 w-full sm:w-auto">
+                <span className="text-xs font-semibold text-slate-500 uppercase whitespace-nowrap">
+                  {language === 'rw' ? "Icyiciro:" : language === 'fr' ? "Catégorie:" : "Category:"}
+                </span>
+                <select
+                  value={categoryFilter}
+                  onChange={(e) => handleCategoryChange(e.target.value)}
+                  className="w-full sm:w-60 min-h-[44px] px-3 py-2 bg-slate-50 rounded-xl border border-slate-200 text-xs sm:text-sm font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                >
+                  <option value="all">
+                    {language === 'rw' ? `Ibyiciro Byose (${lessons.length})` : language === 'fr' ? `Toutes les Catégories (${lessons.length})` : `All Categories (${lessons.length})`}
+                  </option>
+                  {allCategories.map((c) => (
+                    <option key={c} value={c}>
+                      {c} {categoryCounts[c] ? `(${categoryCounts[c]})` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
 
-            <div className="flex items-center gap-2 w-full sm:w-auto">
-              <span className="text-xs font-semibold text-slate-500 uppercase whitespace-nowrap">Category:</span>
-              <select
-                value={categoryFilter}
-                onChange={(e) => setCategoryFilter(e.target.value)}
-                className="w-full sm:w-60 min-h-[44px] px-3 py-2 bg-slate-50 rounded-[10px] border border-slate-200 text-xs sm:text-sm font-medium text-slate-900 focus:outline-none"
-              >
-                <option value="all">All Categories</option>
-                {allCategories.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))}
-              </select>
-            </div>
+            {/* Interactive Quick Category Pills (Horizontal Chips) */}
+            {activeSection === 'lessons' && allCategories.length > 0 && (
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 pt-1 no-scrollbar text-xs">
+                <button
+                  type="button"
+                  onClick={() => handleCategoryChange('all')}
+                  className={`min-h-[34px] px-3 py-1.5 rounded-lg font-semibold shrink-0 transition-all ${
+                    categoryFilter === 'all'
+                      ? 'bg-blue-600 text-white shadow-2xs'
+                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200/80'
+                  }`}
+                >
+                  {language === 'rw' ? 'Byose' : language === 'fr' ? 'Tous' : 'All'} ({lessons.length})
+                </button>
+
+                {allCategories.slice(0, 10).map((cat) => {
+                  const count = categoryCounts[cat] || 0;
+                  const isActive = categoryFilter === cat;
+                  return (
+                    <button
+                      key={cat}
+                      type="button"
+                      onClick={() => handleCategoryChange(cat)}
+                      className={`min-h-[34px] px-3 py-1.5 rounded-lg font-medium shrink-0 transition-all flex items-center gap-1.5 ${
+                        isActive
+                          ? 'bg-blue-600 text-white shadow-2xs font-bold'
+                          : 'bg-slate-100 text-slate-700 hover:bg-slate-200/80'
+                      }`}
+                    >
+                      <span>{cat}</span>
+                      {count > 0 && (
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-mono ${
+                          isActive ? 'bg-blue-700 text-blue-100' : 'bg-slate-200 text-slate-600'
+                        }`}>
+                          {count}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           {/* SECTION 1: GAZETTE LESSONS LIST */}
           {activeSection === 'lessons' && (
-            <div className="space-y-3">
+            <div className="space-y-4">
+              {/* Header Pager Strip */}
+              <div className="flex items-center justify-between text-xs text-slate-500 px-1">
+                <div>
+                  {language === 'rw'
+                    ? <>Kwerekana <strong className="text-slate-900 font-mono">{totalLessons === 0 ? 0 : startLessonIndex + 1}–{endLessonIndex}</strong> muri <strong className="text-slate-900 font-mono">{totalLessons}</strong></>
+                    : language === 'fr'
+                    ? <>Affichage de <strong className="text-slate-900 font-mono">{totalLessons === 0 ? 0 : startLessonIndex + 1}–{endLessonIndex}</strong> sur <strong className="text-slate-900 font-mono">{totalLessons}</strong></>
+                    : <>Showing <strong className="text-slate-900 font-mono">{totalLessons === 0 ? 0 : startLessonIndex + 1}–{endLessonIndex}</strong> of <strong className="text-slate-900 font-mono">{totalLessons}</strong> lessons</>}
+                </div>
+
+                {totalLessonPages > 1 && (
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-slate-600 font-medium hidden sm:inline">
+                      {language === 'rw' ? 'Ipaji' : language === 'fr' ? 'Page' : 'Page'} {safeLessonPage} / {totalLessonPages}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => goToPage(safeLessonPage - 1)}
+                      disabled={safeLessonPage <= 1}
+                      aria-label="Previous Page"
+                      className="w-8 h-8 rounded-lg border border-slate-200 bg-white flex items-center justify-center text-slate-700 hover:bg-slate-50 disabled:opacity-30 disabled:pointer-events-none transition-colors shadow-2xs"
+                    >
+                      <ChevronLeft className="w-4 h-4" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => goToPage(safeLessonPage + 1)}
+                      disabled={safeLessonPage >= totalLessonPages}
+                      aria-label="Next Page"
+                      className="w-8 h-8 rounded-lg border border-slate-200 bg-white flex items-center justify-center text-slate-700 hover:bg-slate-50 disabled:opacity-30 disabled:pointer-events-none transition-colors shadow-2xs"
+                    >
+                      <ChevronRight className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
+              </div>
+
               {loading ? (
-                <div className="space-y-3">
-                  {[1, 2, 3, 4].map((i) => (
-                    <div key={i} className="h-20 bg-white rounded-xl border border-slate-200 animate-pulse"></div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {[1, 2, 3, 4, 5, 6].map((i) => (
+                    <div key={i} className="h-36 bg-white rounded-2xl border border-slate-200 animate-pulse"></div>
                   ))}
                 </div>
               ) : filteredLessons.length === 0 ? (
-                <div className="p-12 text-center bg-white rounded-xl border border-slate-200 space-y-2">
+                <div className="p-12 text-center bg-white rounded-2xl border border-slate-200 space-y-2">
                   <BookOpen className="w-10 h-10 text-slate-300 mx-auto" />
-                  <h4 className="font-bold text-slate-900 text-base">No Lessons Found</h4>
-                  <p className="text-xs text-slate-500">Try selecting a different category or clearing your search.</p>
+                  <h4 className="font-bold text-slate-900 text-base">
+                    {language === 'rw' ? "Nta masomo yabonetse" : language === 'fr' ? "Aucune leçon trouvée" : "No Lessons Found"}
+                  </h4>
+                  <p className="text-xs text-slate-500">
+                    {language === 'rw' ? "Hindura icyiciro cyangwa usukure ibyo washakishije." : language === 'fr' ? "Essayez une autre catégorie ou effacez la recherche." : "Try selecting a different category or clearing your search."}
+                  </p>
                 </div>
               ) : (
-                <div className="grid grid-cols-1 gap-3">
-                  {filteredLessons.map((lesson) => {
+                /* Attractive 2-Column Responsive Card Grid (8 cards per page - NO endless scroll) */
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {paginatedLessons.map((lesson, idx) => {
                     const isLocked = !hasTrafficRulesAccess;
                     const localizedTitle =
                       lesson.title?.[language as Language] || lesson.title?.en || lesson.title?.rw || 'Lesson';
@@ -679,61 +929,139 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
 
                     return (
                       <div
-                        key={lesson.id}
+                        key={`${lesson.id}-${idx}`}
                         onClick={() => handleSelectLesson(lesson)}
-                        className={`p-4 rounded-xl border bg-white shadow-2xs transition-all cursor-pointer flex items-center justify-between gap-4 ${
+                        className={`group p-4 sm:p-5 rounded-2xl border bg-white shadow-2xs hover:shadow-md transition-all cursor-pointer flex flex-col justify-between gap-3.5 ${
                           isLocked
-                            ? 'opacity-85 border-slate-200 hover:border-amber-300'
-                            : 'hover:border-blue-300 hover:shadow-xs'
+                            ? 'border-slate-200 hover:border-amber-300'
+                            : hasPassed
+                            ? 'border-emerald-200 hover:border-emerald-400 bg-gradient-to-br from-white to-emerald-50/20'
+                            : 'border-slate-200 hover:border-blue-400'
                         }`}
                       >
-                        <div className="flex items-center gap-3.5 min-w-0">
-                          <div
-                            className={`w-11 h-11 rounded-[10px] flex items-center justify-center shrink-0 ${
-                              isLocked
-                                ? 'bg-amber-50 text-amber-600'
-                                : 'bg-blue-50 text-blue-600'
-                            }`}
-                          >
-                            {isLocked ? <Lock className="w-5 h-5" /> : <BookOpen className="w-5 h-5" />}
-                          </div>
-
-                          <div className="min-w-0">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className="text-[11px] font-semibold text-slate-500 bg-slate-100 px-2 py-0.5 rounded">
-                                {lesson.category}
+                        {/* Top Card Row */}
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className={`px-2.5 py-0.5 rounded-md text-xs font-bold font-mono ${
+                              hasPassed ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-700'
+                            }`}>
+                              {lesson.category || 'Article'}
+                            </span>
+                            {lesson.gazetteReference && (
+                              <span className="text-[11px] font-mono text-blue-700 bg-blue-50 px-2 py-0.5 rounded-md">
+                                {lesson.gazetteReference}
                               </span>
-                              {lesson.gazetteReference && (
-                                <span className="text-[10px] font-mono text-blue-700 bg-blue-50 px-2 py-0.5 rounded">
-                                  {lesson.gazetteReference}
-                                </span>
-                              )}
-                              {hasPassed && (
-                                <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded flex items-center gap-1">
-                                  <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                                  <span>Passed</span>
-                                </span>
-                              )}
-                            </div>
-                            <h3 className="font-bold text-slate-900 text-sm sm:text-base truncate mt-0.5">
-                              {localizedTitle}
-                            </h3>
+                            )}
                           </div>
-                        </div>
 
-                        <div className="flex items-center gap-2 shrink-0">
-                          {isLocked ? (
-                            <span className="text-xs font-semibold text-amber-700 bg-amber-50 px-3 py-1.5 rounded-lg flex items-center gap-1.5">
+                          {/* Status Pill */}
+                          {hasPassed ? (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full shrink-0">
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                              <span>{language === 'rw' ? 'Byarangiye' : language === 'fr' ? 'Réussi' : 'Passed'}</span>
+                            </span>
+                          ) : isLocked ? (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-700 bg-amber-50 px-2.5 py-1 rounded-full shrink-0">
                               <Lock className="w-3.5 h-3.5" />
-                              <span>Locked</span>
+                              <span>{language === 'rw' ? 'Bifunze' : language === 'fr' ? 'Verrouillé' : 'Locked'}</span>
                             </span>
                           ) : (
-                            <ChevronRight className="w-5 h-5 text-slate-400" />
+                            <span className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-400 shrink-0">
+                              <Clock className="w-3 h-3" />
+                              <span>~3 min</span>
+                            </span>
                           )}
+                        </div>
+
+                        {/* Title */}
+                        <div>
+                          <h3 className="font-bold text-slate-900 text-sm sm:text-base leading-snug group-hover:text-blue-600 transition-colors line-clamp-2">
+                            {localizedTitle}
+                          </h3>
+                        </div>
+
+                        {/* Bottom Action Footer */}
+                        <div className="pt-2.5 border-t border-slate-100 flex items-center justify-between text-xs">
+                          <span className="text-slate-400 flex items-center gap-1 text-[11px]">
+                            <BookOpen className="w-3.5 h-3.5 text-slate-400" />
+                            <span>{language === 'rw' ? 'Isomo rirambuye' : language === 'fr' ? 'Leçon officielle' : 'Official lesson'}</span>
+                          </span>
+
+                          <div className={`inline-flex items-center gap-1 font-semibold transition-colors ${
+                            isLocked ? 'text-amber-700' : 'text-blue-600 group-hover:text-blue-700'
+                          }`}>
+                            <span>
+                              {isLocked 
+                                ? (language === 'rw' ? 'Fungura' : language === 'fr' ? 'Débloquer' : 'Unlock') 
+                                : (language === 'rw' ? 'Tangira Kwiga' : language === 'fr' ? 'Étudier' : 'Study Lesson')}
+                            </span>
+                            <ChevronRight className="w-4 h-4 transition-transform group-hover:translate-x-0.5" />
+                          </div>
                         </div>
                       </div>
                     );
                   })}
+                </div>
+              )}
+
+              {/* Bottom Numeric Pagination Bar */}
+              {totalLessonPages > 1 && (
+                <div className="bg-white p-4 rounded-2xl border border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs shadow-2xs mt-4">
+                  <span className="text-slate-500 font-medium">
+                    {language === 'rw'
+                      ? <>Ipaji <strong className="text-slate-900 font-mono">{safeLessonPage}</strong> kuri <strong className="text-slate-900 font-mono">{totalLessonPages}</strong></>
+                      : language === 'fr'
+                      ? <>Page <strong className="text-slate-900 font-mono">{safeLessonPage}</strong> sur <strong className="text-slate-900 font-mono">{totalLessonPages}</strong></>
+                      : <>Page <strong className="text-slate-900 font-mono">{safeLessonPage}</strong> of <strong className="text-slate-900 font-mono">{totalLessonPages}</strong></>}
+                  </span>
+
+                  <div className="inline-flex items-center rounded-xl border border-slate-200 bg-slate-50/50 p-1">
+                    <button
+                      type="button"
+                      onClick={() => goToPage(safeLessonPage - 1)}
+                      disabled={safeLessonPage <= 1}
+                      className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg font-semibold text-slate-700 hover:bg-white disabled:opacity-25 disabled:pointer-events-none transition-colors"
+                    >
+                      <ChevronLeft className="w-4 h-4" />
+                      <span className="hidden sm:inline">{language === 'rw' ? 'Ibyabanje' : language === 'fr' ? 'Précédent' : 'Previous'}</span>
+                    </button>
+
+                    {/* Numeric page pills */}
+                    <div className="flex items-center px-1 border-x border-slate-200 gap-1">
+                      {Array.from({ length: totalLessonPages }, (_, i) => i + 1)
+                        .filter(p => p === 1 || p === totalLessonPages || Math.abs(p - safeLessonPage) <= 1)
+                        .map((pageNum, idx, arr) => {
+                          const prevPageNum = arr[idx - 1];
+                          const showEllipsis = prevPageNum && pageNum - prevPageNum > 1;
+                          return (
+                            <React.Fragment key={pageNum}>
+                              {showEllipsis && <span className="px-1 text-slate-300">…</span>}
+                              <button
+                                type="button"
+                                onClick={() => goToPage(pageNum)}
+                                className={`w-8 h-8 flex items-center justify-center rounded-lg font-mono text-xs font-bold transition-all ${
+                                  safeLessonPage === pageNum
+                                    ? 'bg-blue-600 text-white shadow-2xs'
+                                    : 'text-slate-600 hover:bg-white'
+                                }`}
+                              >
+                                {pageNum}
+                              </button>
+                            </React.Fragment>
+                          );
+                        })}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => goToPage(safeLessonPage + 1)}
+                      disabled={safeLessonPage >= totalLessonPages}
+                      className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg font-semibold text-slate-700 hover:bg-white disabled:opacity-25 disabled:pointer-events-none transition-colors"
+                    >
+                      <span className="hidden sm:inline">{language === 'rw' ? 'Ibikurikira' : language === 'fr' ? 'Suivant' : 'Next'}</span>
+                      <ChevronRight className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
@@ -749,23 +1077,27 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
                   ))}
                 </div>
               ) : filteredVideos.length === 0 ? (
-                <div className="p-12 text-center bg-white rounded-xl border border-slate-200 space-y-2">
+                <div className="p-12 text-center bg-white rounded-2xl border border-slate-200 space-y-2">
                   <Video className="w-10 h-10 text-slate-300 mx-auto" />
-                  <h4 className="font-bold text-slate-900 text-base">No Video Tutorials Found</h4>
-                  <p className="text-xs text-slate-500">Try selecting a different category or clearing your search.</p>
+                  <h4 className="font-bold text-slate-900 text-base">
+                    {language === 'rw' ? "Nta mavidewo yabonetse" : language === 'fr' ? "Aucune vidéo trouvée" : "No Video Tutorials Found"}
+                  </h4>
+                  <p className="text-xs text-slate-500">
+                    {language === 'rw' ? "Hindura icyiciro cyangwa usukure ibyo washakishije." : language === 'fr' ? "Essayez une autre catégorie ou effacez la recherche." : "Try selecting a different category or clearing your search."}
+                  </p>
                 </div>
               ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {filteredVideos.map((video) => {
+                  {filteredVideos.map((video, idx) => {
                     const isLocked = !hasLessonVideosAccess && !video.isFreePreview;
                     const localizedTitle =
                       video.title?.[language as Language] || video.title?.en || video.title?.rw || 'Video';
 
                     return (
                       <div
-                        key={video.id}
+                        key={`${video.id}-${idx}`}
                         onClick={() => handleSelectVideo(video)}
-                        className={`bg-white rounded-xl border overflow-hidden shadow-2xs transition-all cursor-pointer flex flex-col ${
+                        className={`bg-white rounded-2xl border overflow-hidden shadow-2xs transition-all cursor-pointer flex flex-col ${
                           isLocked
                             ? 'opacity-90 border-slate-200 hover:border-purple-300'
                             : 'hover:border-purple-400 hover:shadow-xs'

@@ -105,6 +105,31 @@ export const learnerDashboardT: Record<string, Record<Language, string>> = {
     en: "left",
     rw: "bisigaye",
     fr: "restants"
+  },
+  inviteFriends: {
+    en: "Invite Friends & Earn",
+    rw: "Tumira Inshuti Wunguke",
+    fr: "Invitez des amis & Gagnez"
+  },
+  coins: {
+    en: "Coins",
+    rw: "Amanota",
+    fr: "Pièces"
+  },
+  inviteDesc: {
+    en: "Share your referral link and earn points for every friend who joins!",
+    rw: "Sangiza inshuti zawe link yawe maze wunguke amanota kuri buri nshuti yiyandikishije!",
+    fr: "Partagez votre lien de parrainage et gagnez des points pour chaque ami qui s'inscrit !"
+  },
+  copyLink: {
+    en: "Copy Link",
+    rw: "Kopiye Link",
+    fr: "Copier le lien"
+  },
+  copied: {
+    en: "Copied!",
+    rw: "Byakopiwe!",
+    fr: "Copié !"
   }
 };
 

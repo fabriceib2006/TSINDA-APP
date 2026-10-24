@@ -1,10 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { db, storage } from '../../lib/firebase';
-import { collection, getDocs, doc, setDoc, addDoc, updateDoc, deleteDoc } from 'firebase/firestore';
+import { collection, getDocs, doc, setDoc, addDoc, updateDoc, deleteDoc, writeBatch } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { handleFirestoreError, OperationType } from '../../lib/firestoreUtils';
 import { Question, ExamSettings, Language } from '../../types';
+import { compressImage } from '../../lib/imageUtils';
 import Papa from 'papaparse';
+import JSZip from 'jszip';
 import { 
   Settings, 
   HelpCircle, 
@@ -80,13 +82,13 @@ export const ExamsManager: React.FC = () => {
   const [parsedRows, setParsedRows] = useState<any[]>([]);
   const [validationReport, setValidationReport] = useState<{
     validCount: number;
-    errors: { row: number; message: string }[];
+    skippedCount: number;
+    errors: { row: number; message: string; type?: string }[];
     missingImages: string[];
     unusedImages: string[];
     duplicateImages: string[];
     existingIds: { id: string; row: number }[];
   } | null>(null);
-  const [updateExisting, setUpdateExisting] = useState(false);
   const [importing, setImporting] = useState(false);
 
   const [firestoreCategories, setFirestoreCategories] = useState<string[]>([]);
@@ -221,16 +223,15 @@ export const ExamsManager: React.FC = () => {
     }
   };
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        setImageUrl(reader.result);
-      }
-    };
-    reader.readAsDataURL(file);
+    try {
+      const compressed = await compressImage(file);
+      setImageUrl(compressed);
+    } catch (err) {
+      console.error("Error compressing image:", err);
+    }
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -249,65 +250,130 @@ export const ExamsManager: React.FC = () => {
     });
   };
 
-  const handleBulkImagesUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleBulkImagesUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files) return;
     const files = Array.from(e.target.files);
-    setBulkImages(files);
-    validateBulkRows(parsedRows, files);
+    const imageMap = new Map<string, File>();
+
+    for (const file of files) {
+      if (file.name.toLowerCase().endsWith('.zip') || file.type.includes('zip')) {
+        try {
+          const zip = new JSZip();
+          const zipContent = await zip.loadAsync(file);
+          for (const [relativePath, zipEntry] of Object.entries(zipContent.files)) {
+            if (!zipEntry.dir) {
+              const filename = relativePath.split('/').pop() || relativePath;
+              const blob = await zipEntry.async('blob');
+              const imgFile = new File([blob], filename, { type: 'image/png' });
+              imageMap.set(filename.toLowerCase(), imgFile);
+            }
+          }
+        } catch (err) {
+          console.error("Error unzipping file:", err);
+        }
+      } else {
+        imageMap.set(file.name.toLowerCase(), file);
+      }
+    }
+
+    const allFiles = Array.from(imageMap.values());
+    setBulkImages(allFiles);
+    validateBulkRows(parsedRows, allFiles);
   };
 
   const validateBulkRows = (rows: any[], images: File[]) => {
-    const errors: { row: number; message: string }[] = [];
-    const imageNamesSet = new Set(images.map(img => img.name.toLowerCase()));
-    const matchedImages = new Set<string>();
-    const seenImageNames = new Set<string>();
-    const duplicateImages = new Set<string>();
-    const existingIds: { id: string; row: number }[] = [];
+    const errors: { row: number; message: string; type?: string }[] = [];
+    let skippedCount = 0;
+    const imageNamesMap = new Map<string, File>();
+    images.forEach(img => imageNamesMap.set(img.name.toLowerCase(), img));
+
     const matchedImagesInRows = new Set<string>();
+    const existingIds: { id: string; row: number }[] = [];
 
     rows.forEach((row, index) => {
       const rowNum = index + 1;
-      if (!row.text_en && !row.text_rw) {
-        errors.push({ row: rowNum, message: "Missing question text in English or Kinyarwanda." });
+      const status = (row.import_status || '').trim().toLowerCase();
+      if (status === 'needs_decision') {
+        skippedCount++;
+        return;
       }
-      if (!row.option_1 || !row.option_2 || !row.option_3 || !row.option_4) {
-        errors.push({ row: rowNum, message: "Missing one or more options (option_1 to option_4 required)." });
-      }
-      if (row.correct_index === undefined || row.correct_index === '' || isNaN(Number(row.correct_index))) {
-        errors.push({ row: rowNum, message: "Missing or invalid correct_index (0-3)." });
-      }
-      if (row.id && questions.some(q => q.id === row.id)) {
-        existingIds.push({ id: row.id, row: rowNum });
-      }
-      if (row.image_name) {
-        const imgName = row.image_name.trim().toLowerCase();
-        if (seenImageNames.has(imgName)) {
-            duplicateImages.add(imgName);
-        }
-        seenImageNames.add(imgName);
-        if (imageNamesSet.has(imgName)) {
-            matchedImages.add(imgName);
-            matchedImagesInRows.add(imgName);
-        }
-      }
-    });
 
-    const missingImages = rows
-      .map(r => r.image_name?.trim())
-      .filter(Boolean)
-      .filter(imgName => !imageNamesSet.has(imgName.toLowerCase()));
+      const qId = (row.question_id || row.id || '').trim();
+      if (!qId) {
+        errors.push({ row: rowNum, message: "Missing question_id.", type: "Missing ID" });
+        return;
+      }
+
+      if (questions.some(q => q.id === qId)) {
+        existingIds.push({ id: qId, row: rowNum });
+      }
+
+      const qRw = (row.question_rw || '').trim();
+      const qEn = (row.question_en || '').trim();
+      const qFr = (row.question_fr || '').trim();
+      if (!qRw && !qEn && !qFr) {
+        errors.push({ row: rowNum, message: "Missing question text in all languages (rw, en, fr).", type: "Missing Question Text" });
+      }
+
+      const correctAns = (row.correct_answer || '').trim().toUpperCase();
+      if (!['A', 'B', 'C', 'D'].includes(correctAns)) {
+        errors.push({ row: rowNum, message: `Invalid or missing correct_answer (${row.correct_answer}): must be A, B, C, or D.`, type: "Invalid Correct Answer" });
+      }
+
+      // Check options a, b, c, d
+      ['a', 'b', 'c', 'd'].forEach(optKey => {
+        const textRw = (row[`option_${optKey}_rw`] || '').trim();
+        const textEn = (row[`option_${optKey}_en`] || '').trim();
+        const textFr = (row[`option_${optKey}_fr`] || '').trim();
+        const optImg = (row[`option_${optKey}_image`] || '').trim();
+        if (!textRw && !textEn && !textFr && !optImg) {
+          errors.push({ row: rowNum, message: `Option ${optKey.toUpperCase()} has no text and no image.`, type: "Invalid Option" });
+        }
+        if (optImg) {
+          const cleanImg = optImg.toLowerCase();
+          matchedImagesInRows.add(cleanImg);
+          if (imageNamesMap.size > 0 && !imageNamesMap.has(cleanImg)) {
+            errors.push({ row: rowNum, message: `Missing option image: ${optImg}`, type: "Missing Image" });
+          }
+        }
+      });
+
+      // Check image_name (pipe separated)
+      const imgNames = (row.image_name || '').split('|').map((s: string) => s.trim()).filter(Boolean);
+      imgNames.forEach((imgName: string) => {
+        const cleanName = imgName.toLowerCase();
+        matchedImagesInRows.add(cleanName);
+        if (imageNamesMap.size > 0 && !imageNamesMap.has(cleanName)) {
+          errors.push({ row: rowNum, message: `Missing image_name reference: ${imgName}`, type: "Missing Image" });
+        }
+      });
+    });
 
     const unusedImages = images
       .map(img => img.name)
       .filter(imgName => !matchedImagesInRows.has(imgName.toLowerCase()));
 
+    const validCount = Math.max(0, rows.length - skippedCount - errors.length);
+
     setValidationReport({
-      validCount: rows.length - errors.length,
+      validCount,
+      skippedCount,
       errors,
-      missingImages: Array.from(new Set(missingImages)),
+      missingImages: [],
       unusedImages,
-      duplicateImages: Array.from(duplicateImages),
+      duplicateImages: [],
       existingIds
+    });
+  };
+
+  const [importProgress, setImportProgress] = useState<string>('');
+
+  const fileToDataUrl = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
     });
   };
 
@@ -316,74 +382,132 @@ export const ExamsManager: React.FC = () => {
     setImporting(true);
 
     try {
+      setImportProgress(`Reading images (0/${bulkImages.length})...`);
       const imageUrlMap = new Map<string, string>();
-      for (const imgFile of bulkImages) {
-        try {
-          const storageRef = ref(storage, `questions/${Date.now()}_${imgFile.name}`);
-          const snapshot = await uploadBytes(storageRef, imgFile);
-          const downloadUrl = await getDownloadURL(snapshot.ref);
-          imageUrlMap.set(imgFile.name.toLowerCase(), downloadUrl);
-        } catch (err) {
-          console.error("Error uploading bulk image:", imgFile.name, err);
+      for (let i = 0; i < bulkImages.length; i++) {
+        const img = bulkImages[i];
+        if (i % 10 === 0 || i === bulkImages.length - 1) {
+          setImportProgress(`Reading images (${i + 1}/${bulkImages.length})`);
         }
+        const dataUrl = await fileToDataUrl(img);
+        imageUrlMap.set(img.name.toLowerCase(), dataUrl);
       }
 
-      let importedCount = 0;
-      for (const [index, row] of parsedRows.entries()) {
-        const rowNum = index + 1;
-        const isExisting = validationReport?.existingIds.some(e => e.id === row.id);
-        if (isExisting && !updateExisting) continue;
+      const validRowsToImport = parsedRows.filter(row => {
+        const status = (row.import_status || '').trim().toLowerCase();
+        if (status === 'needs_decision') return false;
+        const qId = (row.question_id || row.id || '').trim();
+        return Boolean(qId);
+      });
 
-        const textEn = row.text_en || '';
-        const textRw = row.text_rw || '';
-        const textFr = row.text_fr || textEn;
+      let importedCount = 0;
+      let batch = writeBatch(db);
+      let batchSize = 0;
+
+      for (let i = 0; i < validRowsToImport.length; i++) {
+        const row = validRowsToImport[i];
+        const qId = (row.question_id || row.id || '').trim();
+
+        if (i % 20 === 0 || i === validRowsToImport.length - 1) {
+          setImportProgress(`Saving questions (${i + 1}/${validRowsToImport.length})`);
+        }
+
+        const correctAns = (row.correct_answer || 'A').trim().toUpperCase();
+        let correctIndex = 0;
+        if (correctAns === 'B') correctIndex = 1;
+        else if (correctAns === 'C') correctIndex = 2;
+        else if (correctAns === 'D') correctIndex = 3;
+
         const options = {
-          en: [row.option_1, row.option_2, row.option_3, row.option_4].filter(Boolean),
-          rw: [row.option_1_rw, row.option_2_rw, row.option_3_rw, row.option_4_rw].filter(Boolean),
-          fr: [row.option_1_fr, row.option_2_fr, row.option_3_fr, row.option_4_fr].filter(Boolean)
+          rw: [row.option_a_rw, row.option_b_rw, row.option_c_rw, row.option_d_rw].map(s => (s || '').trim()),
+          en: [row.option_a_en, row.option_b_en, row.option_c_en, row.option_d_en].map(s => (s || '').trim()),
+          fr: [row.option_a_fr, row.option_b_fr, row.option_c_fr, row.option_d_fr].map(s => (s || '').trim()),
         };
-        const correctIndex = Number(row.correct_index ?? 0);
-        const category = row.category || 'General';
-        const explanation = {
-          en: row.explanation || row.explanation_en || '',
-          rw: row.explanation_rw || '',
-          fr: row.explanation_fr || ''
+
+        const optionImages = {
+          a: row.option_a_image ? imageUrlMap.get(row.option_a_image.trim().toLowerCase()) || '' : '',
+          b: row.option_b_image ? imageUrlMap.get(row.option_b_image.trim().toLowerCase()) || '' : '',
+          c: row.option_c_image ? imageUrlMap.get(row.option_c_image.trim().toLowerCase()) || '' : '',
+          d: row.option_d_image ? imageUrlMap.get(row.option_d_image.trim().toLowerCase()) || '' : '',
         };
-        const imageName = row.image_name?.trim().toLowerCase();
-        const imageUrlVal = imageName ? imageUrlMap.get(imageName) || '' : '';
+
+        const imgNames = (row.image_name || '').split('|').map((s: string) => s.trim()).filter(Boolean);
+        const images = imgNames.map((name: string) => imageUrlMap.get(name.toLowerCase()) || '').filter(Boolean);
+        const imageUrlVal = images[0] || '';
 
         const questionData = {
-          text: { en: textEn, rw: textRw, fr: textFr },
+          text: {
+            rw: (row.question_rw || '').trim(),
+            en: (row.question_en || '').trim(),
+            fr: (row.question_fr || '').trim(),
+          },
           options,
-          correctIndex,
-          explanation,
-          category,
+          optionImages,
+          images,
+          imageNames: imgNames,
+          optionImageNames: {
+            a: (row.option_a_image || '').trim(),
+            b: (row.option_b_image || '').trim(),
+            c: (row.option_c_image || '').trim(),
+            d: (row.option_d_image || '').trim(),
+          },
           imageUrl: imageUrlVal,
+          correctIndex,
+          category: row.group_id || 'Traffic Signs',
+          article_id: row.article_id || '',
+          group_id: row.group_id || '',
+          source_number: row.source_number || '',
+          source_page: row.source_page || '',
+          review_flags: row.review_flags || '',
+          translation_source: row.translation_source || '',
+          match_confidence: row.match_confidence || '',
+          alt_articles: row.alt_articles || '',
+          explanation: {
+            rw: (row.explanation_rw || '').trim(),
+            en: (row.explanation_en || '').trim(),
+            fr: (row.explanation_fr || '').trim(),
+          },
           isPublished: true
         };
 
-        if (isExisting) {
-            await updateDoc(doc(db, 'questions', row.id), questionData);
-        } else {
-            await addDoc(collection(db, 'questions'), questionData);
+        const docStringSize = new TextEncoder().encode(JSON.stringify(questionData)).length;
+        if (docStringSize > 900 * 1024) {
+          throw new Error(`Question ${qId} exceeds 900 KB limit (${Math.round(docStringSize / 1024)} KB)`);
         }
+
+        batch.set(doc(db, 'questions', qId), questionData, { merge: true });
+        batchSize++;
         importedCount++;
+
+        if (batchSize === 500) {
+          await batch.commit();
+          batch = writeBatch(db);
+          batchSize = 0;
+        }
       }
 
-      alert(`Successfully imported ${importedCount} questions!`);
+      if (batchSize > 0) {
+        await batch.commit();
+      }
+
+      alert(`Successfully imported/updated ${importedCount} questions!`);
       setParsedRows([]);
       setBulkImages([]);
       setValidationReport(null);
       setCsvFile(null);
       setSubTab('questions');
       fetchData();
-    } catch (err) {
+    } catch (err: any) {
       console.error("Error during bulk import:", err);
-      alert("Bulk import failed. Please check console.");
+      alert(`Bulk import failed: ${err.message || err}`);
     } finally {
       setImporting(false);
+      setImportProgress('');
     }
   };
+
+  const [currentPage, setCurrentPage] = useState(1);
+  const ITEMS_PER_PAGE = 15;
 
   const filteredQuestions = questions.filter(q => {
     const matchesSearch = q.text.en.toLowerCase().includes(searchQuery.toLowerCase()) || 
@@ -392,6 +516,38 @@ export const ExamsManager: React.FC = () => {
     const matchesType = typeFilter === 'all' || (typeFilter === 'image' ? !!q.imageUrl : !q.imageUrl);
     return matchesSearch && matchesCategory && matchesType;
   });
+
+  const totalPages = Math.ceil(filteredQuestions.length / ITEMS_PER_PAGE);
+  const paginatedQuestions = filteredQuestions.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE);
+  
+  // Reset to page 1 when filtering
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, categoryFilter, typeFilter]);
+
+  const paginationControls = totalPages > 1 ? (
+    <div className="flex items-center justify-between p-4 border-t border-slate-200">
+      <span className="text-sm text-slate-500">
+        Showing {(currentPage - 1) * ITEMS_PER_PAGE + 1} - {Math.min(currentPage * ITEMS_PER_PAGE, filteredQuestions.length)} of {filteredQuestions.length} questions
+      </span>
+      <div className="flex gap-2">
+        <button
+          disabled={currentPage === 1}
+          onClick={() => setCurrentPage(p => p - 1)}
+          className="px-3 py-1 bg-white border border-slate-300 rounded-md text-sm font-medium hover:bg-slate-50 disabled:opacity-50"
+        >
+          Previous
+        </button>
+        <button
+          disabled={currentPage === totalPages}
+          onClick={() => setCurrentPage(p => p + 1)}
+          className="px-3 py-1 bg-white border border-slate-300 rounded-md text-sm font-medium hover:bg-slate-50 disabled:opacity-50"
+        >
+          Next
+        </button>
+      </div>
+    </div>
+  ) : null;
 
   const categories = [
     'all',
@@ -594,7 +750,8 @@ export const ExamsManager: React.FC = () => {
                 </p>
               </div>
             ) : (
-              <div className="overflow-x-auto">
+              <>
+                <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse min-w-[650px]">
                   <thead>
                     <tr className="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-600 uppercase">
@@ -606,7 +763,7 @@ export const ExamsManager: React.FC = () => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 text-sm">
-                    {filteredQuestions.map((q) => (
+                    {paginatedQuestions.map((q) => (
                       <tr key={q.id} className="hover:bg-slate-50/60 transition-colors">
                         <td className="py-4 px-6 whitespace-nowrap">
                           {q.imageUrl ? (
@@ -695,10 +852,34 @@ export const ExamsManager: React.FC = () => {
                   </tbody>
                 </table>
               </div>
-            )}
-          </div>
+              {totalPages > 1 && (
+                <div className="flex items-center justify-between p-4 border-t border-slate-200">
+                  <span className="text-sm text-slate-500">
+                    Showing {(currentPage - 1) * ITEMS_PER_PAGE + 1} - {Math.min(currentPage * ITEMS_PER_PAGE, filteredQuestions.length)} of {filteredQuestions.length} questions
+                  </span>
+                  <div className="flex gap-2">
+                    <button
+                      disabled={currentPage === 1}
+                      onClick={() => setCurrentPage(p => p - 1)}
+                      className="px-3 py-1 bg-white border border-slate-300 rounded-md text-sm font-medium hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      Previous
+                    </button>
+                    <button
+                      disabled={currentPage === totalPages}
+                      onClick={() => setCurrentPage(p => p + 1)}
+                      className="px-3 py-1 bg-white border border-slate-300 rounded-md text-sm font-medium hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
         </div>
-      )}
+      </div>
+    )}
 
       {/* 3. Bulk Import */}
       {subTab === 'bulk' && (
@@ -743,10 +924,18 @@ export const ExamsManager: React.FC = () => {
             <div className="p-6 bg-white rounded-xl border border-slate-200 shadow-sm space-y-4">
               <h4 className="font-bold text-slate-900 text-sm">Validation Preview Report</h4>
               
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-xs font-medium">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs font-medium">
                 <div className="p-3 bg-slate-50 rounded-[10px] border">
-                  <span className="text-slate-500 block">Valid Rows:</span>
+                  <span className="text-slate-500 block">Total Rows:</span>
+                  <span className="text-lg font-bold text-slate-900">{parsedRows.length}</span>
+                </div>
+                <div className="p-3 bg-slate-50 rounded-[10px] border">
+                  <span className="text-slate-500 block">Valid:</span>
                   <span className="text-lg font-bold text-emerald-600">{validationReport.validCount}</span>
+                </div>
+                <div className="p-3 bg-slate-50 rounded-[10px] border">
+                  <span className="text-slate-500 block">Skipped (Needs Decision):</span>
+                  <span className="text-lg font-bold text-amber-600">{validationReport.skippedCount}</span>
                 </div>
                 <div className="p-3 bg-slate-50 rounded-[10px] border">
                   <span className="text-slate-500 block">Errors:</span>
@@ -754,65 +943,36 @@ export const ExamsManager: React.FC = () => {
                     {validationReport.errors.length}
                   </span>
                 </div>
-                <div className="p-3 bg-slate-50 rounded-[10px] border">
-                  <span className="text-slate-500 block">Conflicts:</span>
-                  <span className={`text-lg font-bold ${validationReport.existingIds.length > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>
-                    {validationReport.existingIds.length}
-                  </span>
-                </div>
               </div>
 
               {validationReport.errors.length > 0 && (
                 <div className="space-y-1">
-                  <span className="text-xs font-bold text-red-700">Row Errors:</span>
-                  <ul className="text-xs text-red-600 space-y-1 max-h-32 overflow-y-auto bg-slate-50 p-3 rounded-[10px] border">
-                    {validationReport.errors.map((err, idx) => (
+                  <span className="text-xs font-bold text-red-700">Row Errors (Showing up to first 20 examples per type):</span>
+                  <ul className="text-xs text-red-600 space-y-1 max-h-48 overflow-y-auto bg-slate-50 p-3 rounded-[10px] border font-mono">
+                    {validationReport.errors.slice(0, 20).map((err, idx) => (
                       <li key={idx}>Row {err.row}: {err.message}</li>
                     ))}
+                    {validationReport.errors.length > 20 && (
+                      <li className="text-slate-500 italic">...and {validationReport.errors.length - 20} more errors.</li>
+                    )}
                   </ul>
-                </div>
-              )}
-
-              {validationReport.duplicateImages.length > 0 && (
-                <div className="space-y-1">
-                  <span className="text-xs font-bold text-red-700">Duplicate Image References:</span>
-                  <p className="text-xs text-red-600 bg-slate-50 p-3 rounded-[10px] border">
-                    {validationReport.duplicateImages.join(', ')}
-                  </p>
-                </div>
-              )}
-
-              {validationReport.missingImages.length > 0 && (
-                <div className="space-y-1">
-                  <span className="text-xs font-bold text-amber-700">Missing Uploaded Images:</span>
-                  <p className="text-xs text-amber-800 bg-slate-50 p-3 rounded-[10px] border">
-                    {validationReport.missingImages.join(', ')}
-                  </p>
                 </div>
               )}
 
               {validationReport.unusedImages.length > 0 && (
                 <div className="space-y-1">
-                  <span className="text-xs font-bold text-slate-700">Unused Uploaded Images:</span>
-                  <p className="text-xs text-slate-600 bg-slate-50 p-3 rounded-[10px] border">
+                  <span className="text-xs font-bold text-slate-700">Unused Uploaded Images (Warnings):</span>
+                  <p className="text-xs text-slate-600 bg-slate-50 p-3 rounded-[10px] border max-h-24 overflow-y-auto">
                     {validationReport.unusedImages.join(', ')}
                   </p>
                 </div>
               )}
 
+              {/* Existing IDs notice */}
               {validationReport.existingIds.length > 0 && (
-                <div className="flex items-center gap-2 pt-2">
-                  <input
-                    type="checkbox"
-                    id="updateExisting"
-                    checked={updateExisting}
-                    onChange={(e) => setUpdateExisting(e.target.checked)}
-                    className="w-4 h-4 text-blue-600 rounded border-slate-300"
-                  />
-                  <label htmlFor="updateExisting" className="text-xs font-bold text-slate-700">
-                    Update existing question IDs (Skip if unchecked)
-                  </label>
-                </div>
+                <p className="text-xs text-blue-700 font-semibold pt-2">
+                  Note: {validationReport.existingIds.length} question(s) already exist in the database and will be updated/replaced with new data & images.
+                </p>
               )}
 
               <button
@@ -820,7 +980,7 @@ export const ExamsManager: React.FC = () => {
                 disabled={importing || validationReport.validCount === 0}
                 className="w-full min-h-[44px] py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-[10px] text-sm shadow-sm transition-colors disabled:opacity-50"
               >
-                {importing ? "Importing..." : `Confirm Import (${validationReport.validCount} Valid Rows)`}
+                {importing ? (importProgress || "Importing...") : `Confirm Import (${validationReport.validCount} Valid Rows)`}
               </button>
             </div>
           )}

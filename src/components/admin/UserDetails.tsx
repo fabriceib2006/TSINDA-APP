@@ -3,7 +3,27 @@ import { db, auth } from '../../lib/firebase';
 import { collection, query, where, getDocs, doc, updateDoc, addDoc } from 'firebase/firestore';
 import { UserProfile, Subscription, Plan, ExamAttempt } from '../../types';
 import { normalizeSubscription, normalizePlan } from '../../lib/subscriptionUtils';
-import { ArrowLeft, Plus, CheckCircle, XCircle, Loader2, AlertCircle, Calendar, ShieldCheck } from 'lucide-react';
+import { 
+  ArrowLeft, 
+  Plus, 
+  CheckCircle, 
+  XCircle, 
+  Loader2, 
+  AlertCircle, 
+  Calendar, 
+  ShieldCheck,
+  Eye,
+  Award,
+  Clock,
+  BarChart3,
+  TrendingUp,
+  BookOpen,
+  Check,
+  X,
+  FileText,
+  Filter,
+  CheckCircle2
+} from 'lucide-react';
 import { ConfirmModal } from '../common/ConfirmModal';
 
 interface UserDetailsProps {
@@ -11,14 +31,99 @@ interface UserDetailsProps {
   onBack: () => void;
 }
 
+interface PerformanceSummary {
+  totalExams: number;
+  passedExams: number;
+  failedExams: number;
+  passRate: number;
+  averageScore: number;
+  averageScorePercent: number;
+  highestScore: number;
+  lowestScore: number;
+  averageDurationSeconds: number;
+  totalQuizzes: number;
+  passedQuizzes: number;
+}
+
+interface QuestionReviewItem {
+  index: number;
+  questionId: string;
+  text: any;
+  options: any;
+  userAnswer: number | null;
+  correctIndex: number;
+  isCorrect: boolean;
+  explanation: any;
+  category?: string;
+  categoryName?: any;
+  imageUrl?: string | null;
+}
+
+interface ExamHistoryItem {
+  id: string;
+  attemptId: string;
+  date: string;
+  durationSeconds: number;
+  score: number;
+  total: number;
+  passMark: number;
+  passed: boolean;
+  percentage: number;
+  correctCount: number;
+  incorrectCount: number;
+  questions?: QuestionReviewItem[];
+}
+
+interface CategoryMastery {
+  categoryId: string;
+  categoryName: any;
+  totalQuestions: number;
+  correctCount: number;
+  accuracyPercent: number;
+}
+
+interface LessonQuizItem {
+  lessonId: string;
+  lessonTitle: any;
+  category: string;
+  score: number;
+  total: number;
+  percent: number;
+  passed: boolean;
+  attempts: number;
+  date: string;
+}
+
 export const UserDetails: React.FC<UserDetailsProps> = ({ user, onBack }) => {
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
-  const [examAttempts, setExamAttempts] = useState<ExamAttempt[]>([]);
   const [plans, setPlans] = useState<Plan[]>([]);
   const [loading, setLoading] = useState(true);
   const [showGrantModal, setShowGrantModal] = useState(false);
   const [actionData, setActionData] = useState<{type: 'cancel'|'reset', subId: string}|null>(null);
   
+  // Performance & History state
+  const [summary, setSummary] = useState<PerformanceSummary>({
+    totalExams: 0,
+    passedExams: 0,
+    failedExams: 0,
+    passRate: 0,
+    averageScore: 0,
+    averageScorePercent: 0,
+    highestScore: 0,
+    lowestScore: 0,
+    averageDurationSeconds: 0,
+    totalQuizzes: 0,
+    passedQuizzes: 0
+  });
+  const [examHistory, setExamHistory] = useState<ExamHistoryItem[]>([]);
+  const [categoryPerformance, setCategoryPerformance] = useState<CategoryMastery[]>([]);
+  const [lessonQuizzes, setLessonQuizzes] = useState<LessonQuizItem[]>([]);
+  
+  // UI Tabs & Filters
+  const [activeHistoryTab, setActiveHistoryTab] = useState<'exams' | 'quizzes'>('exams');
+  const [examFilter, setExamFilter] = useState<'all' | 'passed' | 'failed'>('all');
+  const [currentPage, setCurrentPage] = useState(1);
+
   // Grant modal state
   const [selectedPlanId, setSelectedPlanId] = useState('');
   const [customDays, setCustomDays] = useState<number | ''>('');
@@ -27,10 +132,24 @@ export const UserDetails: React.FC<UserDetailsProps> = ({ user, onBack }) => {
   const [grantError, setGrantError] = useState<string | null>(null);
   const [successToast, setSuccessToast] = useState<string | null>(null);
 
+  const formatDuration = (seconds: number) => {
+    if (!seconds || seconds <= 0) return '—';
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    if (mins === 0) return `${secs}s`;
+    return `${mins}m ${secs < 10 ? '0' : ''}${secs}s`;
+  };
+
+  const getLocalizedText = (item: any, fallback = '—') => {
+    if (!item) return fallback;
+    if (typeof item === 'string') return item;
+    return item.en || item.rw || item.fr || Object.values(item)[0] || fallback;
+  };
+
   const fetchData = async () => {
     setLoading(true);
     try {
-      // 1. Fetch Plans (Try Firestore collection, then query filter, then backend API /api/plans)
+      // 1. Fetch Plans
       let loadedPlans: Plan[] = [];
       try {
         const plansSnap = await getDocs(collection(db, 'plans'));
@@ -80,18 +199,143 @@ export const UserDetails: React.FC<UserDetailsProps> = ({ user, onBack }) => {
         console.warn("Failed fetching user subscriptions:", subErr);
       }
 
-      // 3. Fetch Exam Attempts from user subcollection (with legacy root fallback)
+      // 3. Fetch Full User Performance & Detailed History via Server API
+      let performanceLoaded = false;
       try {
-        let examsSnap = await getDocs(collection(db, 'users', user.uid, 'examAttempts')).catch(() => null);
-        if (!examsSnap || examsSnap.empty) {
-          examsSnap = await getDocs(query(collection(db, 'examAttempts'), where('userId', '==', user.uid))).catch(() => null);
+        const currentUser = auth.currentUser;
+        const token = await currentUser?.getIdToken();
+        if (token) {
+          const perfRes = await fetch(`/api/admin/users/${user.uid}/performance`, {
+            headers: { Authorization: `Bearer ${token}` }
+          });
+          if (perfRes.ok) {
+            const perfData = await perfRes.json();
+            if (perfData.success) {
+              if (perfData.summary) setSummary(perfData.summary);
+              if (Array.isArray(perfData.examHistory)) setExamHistory(perfData.examHistory);
+              if (Array.isArray(perfData.categoryPerformance)) setCategoryPerformance(perfData.categoryPerformance);
+              if (Array.isArray(perfData.lessonQuizzes)) setLessonQuizzes(perfData.lessonQuizzes);
+              performanceLoaded = true;
+            }
+          }
         }
-        if (examsSnap && !examsSnap.empty) {
-          setExamAttempts(examsSnap.docs.map(d => ({ id: d.id, ...d.data() } as ExamAttempt)));
-        }
-      } catch (examErr) {
-        console.warn("Failed fetching exam attempts:", examErr);
+      } catch (apiErr) {
+        console.warn("Failed loading from /api/admin/users/:userId/performance:", apiErr);
       }
+
+      // 4. Client-side fallback if server performance endpoint didn't respond
+      if (!performanceLoaded) {
+        try {
+          const [attemptsSnap, resultsSnap, progressSnap] = await Promise.all([
+            getDocs(collection(db, 'users', user.uid, 'examAttempts')).catch(() => null),
+            getDocs(collection(db, 'users', user.uid, 'examResults')).catch(() => null),
+            getDocs(collection(db, 'users', user.uid, 'progress')).catch(() => null),
+          ]);
+
+          const localExams: ExamHistoryItem[] = [];
+          if (resultsSnap && !resultsSnap.empty) {
+            resultsSnap.docs.forEach(d => {
+              const data = d.data();
+              const score = Number(data.score) || 0;
+              const total = Number(data.total) || 20;
+              const passMark = Number(data.passMark) || 12;
+              localExams.push({
+                id: d.id,
+                attemptId: data.attemptId || d.id,
+                date: data.submittedAt || data.date || new Date().toISOString(),
+                durationSeconds: Number(data.durationSeconds) || 0,
+                score,
+                total,
+                passMark,
+                passed: data.passed !== undefined ? Boolean(data.passed) : score >= passMark,
+                percentage: total > 0 ? Math.round((score / total) * 100) : 0,
+                correctCount: score,
+                incorrectCount: Math.max(0, total - score),
+                questions: Array.isArray(data.results) ? data.results : []
+              });
+            });
+          }
+
+          if (attemptsSnap && !attemptsSnap.empty) {
+            attemptsSnap.docs.forEach(d => {
+              const data = d.data();
+              // Only finished or completed attempts
+              if (data.status === 'finished' || data.status === 'completed' || data.score !== undefined) {
+                if (!localExams.some(e => e.id === d.id || e.attemptId === d.id)) {
+                  const score = Number(data.score) || 0;
+                  const total = Number(data.total) || 20;
+                  const passMark = 12;
+                  localExams.push({
+                    id: d.id,
+                    attemptId: d.id,
+                    date: data.submittedAt || (data.startedAt?.toDate ? data.startedAt.toDate().toISOString() : data.startedAt) || new Date().toISOString(),
+                    durationSeconds: Number(data.durationSeconds) || 0,
+                    score,
+                    total,
+                    passMark,
+                    passed: data.passed !== undefined ? Boolean(data.passed) : score >= passMark,
+                    percentage: total > 0 ? Math.round((score / total) * 100) : 0,
+                    correctCount: score,
+                    incorrectCount: Math.max(0, total - score),
+                    questions: Array.isArray(data.results) ? data.results : []
+                  });
+                }
+              }
+            });
+          }
+
+          localExams.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+          setExamHistory(localExams);
+
+          // Compute basic stats
+          const totalExams = localExams.length;
+          const passedExams = localExams.filter(e => e.passed).length;
+          const failedExams = totalExams - passedExams;
+          const passRate = totalExams > 0 ? Math.round((passedExams / totalExams) * 100) : 0;
+          const totalScores = localExams.reduce((acc, curr) => acc + curr.score, 0);
+          const averageScore = totalExams > 0 ? Number((totalScores / totalExams).toFixed(1)) : 0;
+          const averageScorePercent = totalExams > 0 ? Math.round((totalScores / (totalExams * 20)) * 100) : 0;
+          const highestScore = totalExams > 0 ? Math.max(...localExams.map(e => e.score)) : 0;
+          const lowestScore = totalExams > 0 ? Math.min(...localExams.map(e => e.score)) : 0;
+
+          // Local quizzes
+          const localQuizzes: LessonQuizItem[] = [];
+          if (progressSnap && !progressSnap.empty) {
+            progressSnap.docs.forEach(doc => {
+              const p = doc.data();
+              localQuizzes.push({
+                lessonId: p.lessonId || doc.id,
+                lessonTitle: { en: 'Lesson ' + (p.lessonId || doc.id), rw: 'Isomo ' + (p.lessonId || doc.id) },
+                category: 'General',
+                score: Number(p.score) || 0,
+                total: Number(p.total) || 0,
+                percent: Number(p.percent) || 0,
+                passed: Boolean(p.passed || p.completed),
+                attempts: Number(p.attempts) || 1,
+                date: p.lastAccessed?.toDate ? p.lastAccessed.toDate().toISOString() : new Date().toISOString()
+              });
+            });
+          }
+
+          setSummary({
+            totalExams,
+            passedExams,
+            failedExams,
+            passRate,
+            averageScore,
+            averageScorePercent,
+            highestScore,
+            lowestScore,
+            averageDurationSeconds: 0,
+            totalQuizzes: localQuizzes.length,
+            passedQuizzes: localQuizzes.filter(q => q.passed).length
+          });
+          setLessonQuizzes(localQuizzes);
+        } catch (fallbackErr) {
+          console.warn("Client fallback failed:", fallbackErr);
+        }
+      }
+
     } catch (err) {
       console.error("Error in fetchData:", err);
     } finally {
@@ -171,12 +415,8 @@ export const UserDetails: React.FC<UserDetailsProps> = ({ user, onBack }) => {
       ? plan.name 
       : (plan.name.en || plan.name.rw || plan.name.fr || 'Standard Pass');
 
-    const startDate = new Date().toISOString();
-    const endDate = new Date(Date.now() + durationDays * 24 * 60 * 60 * 1000).toISOString();
-
     let grantedSuccessfully = false;
 
-    // 1. Backend API endpoint with admin authentication
     try {
       const currentUser = auth.currentUser;
       const token = await currentUser?.getIdToken();
@@ -237,16 +477,30 @@ export const UserDetails: React.FC<UserDetailsProps> = ({ user, onBack }) => {
       return bTime - aTime;
     })[0];
 
+  const filteredExams = examHistory.filter(exam => {
+    if (examFilter === 'passed') return exam.passed;
+    if (examFilter === 'failed') return !exam.passed;
+    return true;
+  });
+
+  const pageSize = 5;
+  const totalFiltered = filteredExams.length;
+  const totalPages = Math.max(1, Math.ceil(totalFiltered / pageSize));
+  const safePage = Math.min(Math.max(1, currentPage), totalPages);
+  const startIndex = totalFiltered === 0 ? 0 : (safePage - 1) * pageSize;
+  const endIndex = Math.min(startIndex + pageSize, totalFiltered);
+  const paginatedExams = filteredExams.slice(startIndex, endIndex);
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <button onClick={onBack} className="min-h-[44px] flex items-center gap-2 text-sm font-semibold text-slate-600 hover:text-slate-900">
+        <button onClick={onBack} className="min-h-[44px] flex items-center gap-2 text-sm font-semibold text-slate-600 hover:text-slate-900 transition-colors">
           <ArrowLeft className="w-4 h-4" /> Back to Learners
         </button>
       </div>
 
       {successToast && (
-        <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center justify-between text-emerald-800 text-sm">
+        <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center justify-between text-emerald-800 text-sm animate-in fade-in">
           <div className="flex items-center gap-2">
             <CheckCircle className="w-5 h-5 text-emerald-600 shrink-0" />
             <span>{successToast}</span>
@@ -255,25 +509,30 @@ export const UserDetails: React.FC<UserDetailsProps> = ({ user, onBack }) => {
         </div>
       )}
 
+      {/* User Header Profile Card */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 flex flex-col sm:flex-row justify-between sm:items-center gap-4">
         <div>
-          <h2 className="text-xl font-bold text-slate-900">{user.name || 'Student'}</h2>
-          <div className="text-slate-500 text-sm">{user.email} • {user.phone || 'No phone'}</div>
-          <div className="text-sm mt-2 flex items-center gap-2">
-            Status: 
-            <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${user.status === 'active' ? 'bg-emerald-50 text-emerald-700':'bg-red-50 text-red-700'}`}>
-              {user.status}
+          <h2 className="text-xl font-bold text-slate-900">{user.name || 'Learner'}</h2>
+          <div className="text-slate-500 text-sm mt-0.5">{user.email} • {user.phone || 'No phone'}</div>
+          <div className="text-xs text-slate-400 mt-1 flex items-center gap-2">
+            <span>Joined: {user.createdAt ? new Date(user.createdAt).toLocaleDateString() : 'N/A'}</span>
+            <span>·</span>
+            <span>ID: <code className="font-mono text-slate-500">{user.uid.slice(0, 8)}...</code></span>
+            <span>·</span>
+            <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-semibold ${user.status === 'active' ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
+              {user.status === 'active' ? 'Active' : 'Suspended'}
             </span>
           </div>
         </div>
         <button 
           onClick={handleOpenGrantModal} 
-          className="flex items-center justify-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white rounded-lg font-medium text-sm transition-colors shadow-sm"
+          className="flex items-center justify-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white rounded-lg font-medium text-sm transition-colors shadow-sm shrink-0"
         >
           <Plus className="w-4 h-4"/> Grant Subscription
         </button>
       </div>
 
+      {/* Active Subscription Banner */}
       {activeSub && (
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-4">
           <div className="flex items-center justify-between">
@@ -310,13 +569,13 @@ export const UserDetails: React.FC<UserDetailsProps> = ({ user, onBack }) => {
             <div className="p-3 bg-slate-50 rounded-lg flex items-center gap-2 justify-end">
               <button 
                 onClick={() => setActionData({type:'reset', subId: activeSub.id})} 
-                className="px-3 py-1.5 text-xs bg-blue-50 text-blue-700 hover:bg-blue-100 rounded-md font-medium"
+                className="px-3 py-1.5 text-xs bg-blue-50 text-blue-700 hover:bg-blue-100 rounded-md font-medium transition-colors"
               >
                 Reset Exams
               </button>
               <button 
                 onClick={() => setActionData({type:'cancel', subId: activeSub.id})} 
-                className="px-3 py-1.5 text-xs bg-red-50 text-red-700 hover:bg-red-100 rounded-md font-medium"
+                className="px-3 py-1.5 text-xs bg-red-50 text-red-700 hover:bg-red-100 rounded-md font-medium transition-colors"
               >
                 Cancel Sub
               </button>
@@ -325,6 +584,7 @@ export const UserDetails: React.FC<UserDetailsProps> = ({ user, onBack }) => {
         </div>
       )}
 
+      {/* Subscription History Table */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-4">
         <h3 className="font-bold text-lg text-slate-900">Subscription History</h3>
         {subscriptions.length === 0 ? (
@@ -357,7 +617,7 @@ export const UserDetails: React.FC<UserDetailsProps> = ({ user, onBack }) => {
                           {s.source === 'admin_grant' ? 'Admin Grant' : 'Paypack/MoMo'}
                         </span>
                       </td>
-                      <td className="py-3 px-3 text-slate-600">
+                      <td className="py-3 px-3 text-slate-600 font-mono">
                         {s.examsUsed} / {s.examLimit === null ? '∞' : s.examLimit}
                       </td>
                       <td className="py-3 px-3">
@@ -376,43 +636,362 @@ export const UserDetails: React.FC<UserDetailsProps> = ({ user, onBack }) => {
         )}
       </div>
 
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-4">
-        <h3 className="font-bold text-lg text-slate-900">Exam History</h3>
-        {examAttempts.filter(e => e.status === 'completed').length === 0 ? (
-          <div className="text-sm text-slate-500 py-4 text-center">No exams completed yet.</div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left">
-              <thead>
-                <tr className="text-xs text-slate-500 uppercase border-b">
-                  <th className="py-2.5 px-3">Date</th>
-                  <th className="py-2.5 px-3">Score</th>
-                  <th className="py-2.5 px-3">Result</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y text-sm">
-                {examAttempts
-                  .filter(e => e.status === 'completed')
-                  .sort((a, b) => new Date(b.finishedAt || '').getTime() - new Date(a.finishedAt || '').getTime())
-                  .map(exam => (
-                    <tr key={exam.id} className="hover:bg-slate-50">
-                      <td className="py-3 px-3 text-slate-600">{new Date(exam.finishedAt || '').toLocaleDateString()}</td>
-                      <td className="py-3 px-3 font-medium text-slate-900">{exam.score} / 20</td>
-                      <td className="py-3 px-3">
-                        <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-semibold ${
-                          exam.passed ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'
-                        }`}>
-                          {exam.passed ? 'Pass (>=12)' : 'Fail'}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-              </tbody>
-            </table>
+      {/* PERFORMANCE & EXAM ANALYTICS SECTION */}
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
+          <div>
+            <h3 className="font-bold text-lg text-slate-900 flex items-center gap-2">
+              <TrendingUp className="w-5 h-5 text-blue-600" /> Learner Performance & History
+            </h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Comprehensive analysis of official mock exams, score evolution, topic accuracy, and practice quizzes.
+            </p>
           </div>
-        )}
+        </div>
+
+        {/* 4 KPI Cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {/* Card 1: Exams & Pass Rate */}
+          <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/70 space-y-2">
+            <div className="flex items-center justify-between text-xs font-medium text-slate-500">
+              <span>Pass Rate</span>
+              <Award className="w-4 h-4 text-emerald-600" />
+            </div>
+            <div className="flex items-baseline gap-2">
+              <span className="text-2xl font-bold text-slate-900 font-mono tabular-nums">{summary.passRate}%</span>
+              <span className="text-xs text-slate-500">
+                ({summary.passedExams} of {summary.totalExams} passed)
+              </span>
+            </div>
+            <div className="w-full bg-slate-200 h-1.5 rounded-full overflow-hidden">
+              <div 
+                className={`h-full transition-all duration-300 ${summary.passRate >= 70 ? 'bg-emerald-500' : summary.passRate >= 50 ? 'bg-amber-500' : 'bg-red-500'}`}
+                style={{ width: `${Math.min(100, summary.passRate)}%` }}
+              />
+            </div>
+            <div className="text-[11px] text-slate-500 flex justify-between">
+              <span>Passed: {summary.passedExams}</span>
+              <span>Failed: {summary.failedExams}</span>
+            </div>
+          </div>
+
+          {/* Card 2: Average Score */}
+          <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/70 space-y-2">
+            <div className="flex items-center justify-between text-xs font-medium text-slate-500">
+              <span>Average Score</span>
+              <BarChart3 className="w-4 h-4 text-blue-600" />
+            </div>
+            <div className="flex items-baseline gap-2">
+              <span className="text-2xl font-bold text-slate-900 font-mono tabular-nums">
+                {summary.averageScore} <span className="text-sm text-slate-500 font-normal">/ 20</span>
+              </span>
+              <span className="text-xs font-semibold text-blue-600">
+                ({summary.averageScorePercent}%)
+              </span>
+            </div>
+            <div className="text-xs text-slate-500 flex items-center justify-between pt-1">
+              <span>Pass Mark Requirement:</span>
+              <span className="font-semibold text-slate-700 font-mono">12 / 20 (60%)</span>
+            </div>
+          </div>
+
+          {/* Card 3: Best vs Lowest Score */}
+          <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/70 space-y-2">
+            <div className="flex items-center justify-between text-xs font-medium text-slate-500">
+              <span>Score Range</span>
+              <ShieldCheck className="w-4 h-4 text-purple-600" />
+            </div>
+            <div className="flex items-baseline gap-3">
+              <div>
+                <div className="text-xs text-slate-400">Peak</div>
+                <div className="text-xl font-bold text-emerald-600 font-mono tabular-nums">
+                  {summary.highestScore} <span className="text-xs text-slate-500">/ 20</span>
+                </div>
+              </div>
+              <div className="h-8 w-px bg-slate-200" />
+              <div>
+                <div className="text-xs text-slate-400">Lowest</div>
+                <div className="text-xl font-bold text-slate-600 font-mono tabular-nums">
+                  {summary.lowestScore} <span className="text-xs text-slate-500">/ 20</span>
+                </div>
+              </div>
+            </div>
+            <div className="text-xs text-slate-500 pt-0.5">
+              {summary.highestScore >= 12 ? 'Passed at least one exam' : 'Has not reached pass mark yet'}
+            </div>
+          </div>
+
+          {/* Card 4: Study & Pace */}
+          <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/70 space-y-2">
+            <div className="flex items-center justify-between text-xs font-medium text-slate-500">
+              <span>Avg Pace & Quizzes</span>
+              <Clock className="w-4 h-4 text-amber-600" />
+            </div>
+            <div className="text-lg font-bold text-slate-900 font-mono tabular-nums">
+              {formatDuration(summary.averageDurationSeconds)}
+            </div>
+            <div className="text-xs text-slate-600 flex items-center justify-between pt-1">
+              <span>Chapter Quizzes:</span>
+              <span className="font-semibold font-mono text-slate-900">
+                {summary.passedQuizzes} / {summary.totalQuizzes} Passed
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* History Switcher Tabs */}
+        <div className="space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 pb-3">
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setActiveHistoryTab('exams')}
+                className={`min-h-[38px] px-4 py-1.5 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${
+                  activeHistoryTab === 'exams'
+                    ? 'bg-blue-600 text-white shadow-xs'
+                    : 'bg-slate-100 text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Award className="w-4 h-4" />
+                <span>Mock Exam History ({examHistory.length})</span>
+              </button>
+              <button
+                onClick={() => setActiveHistoryTab('quizzes')}
+                className={`min-h-[38px] px-4 py-1.5 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${
+                  activeHistoryTab === 'quizzes'
+                    ? 'bg-blue-600 text-white shadow-xs'
+                    : 'bg-slate-100 text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <BookOpen className="w-4 h-4" />
+                <span>Lesson Chapter Quizzes ({lessonQuizzes.length})</span>
+              </button>
+            </div>
+
+            {activeHistoryTab === 'exams' && examHistory.length > 0 && (
+              <div className="flex items-center gap-1.5 self-end sm:self-auto">
+                <span className="text-xs text-slate-500 flex items-center gap-1">
+                  <Filter className="w-3.5 h-3.5" /> Filter:
+                </span>
+                <button
+                  onClick={() => setExamFilter('all')}
+                  className={`text-xs px-2.5 py-1 rounded-md transition-colors ${
+                    examFilter === 'all' ? 'bg-slate-900 text-white font-medium' : 'text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  All ({examHistory.length})
+                </button>
+                <button
+                  onClick={() => setExamFilter('passed')}
+                  className={`text-xs px-2.5 py-1 rounded-md transition-colors ${
+                    examFilter === 'passed' ? 'bg-emerald-600 text-white font-medium' : 'text-emerald-700 hover:bg-emerald-50'
+                  }`}
+                >
+                  Passed ({examHistory.filter(e => e.passed).length})
+                </button>
+                <button
+                  onClick={() => setExamFilter('failed')}
+                  className={`text-xs px-2.5 py-1 rounded-md transition-colors ${
+                    examFilter === 'failed' ? 'bg-red-600 text-white font-medium' : 'text-red-700 hover:bg-red-50'
+                  }`}
+                >
+                  Failed ({examHistory.filter(e => !e.passed).length})
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* TAB 1: Mock Exams Table */}
+          {activeHistoryTab === 'exams' && (
+            <>
+              {filteredExams.length === 0 ? (
+                <div className="p-8 text-center space-y-2 border border-dashed border-slate-200 rounded-xl">
+                  <Award className="w-8 h-8 text-slate-300 mx-auto" />
+                  <div className="text-sm font-semibold text-slate-700">No mock exams found</div>
+                  <p className="text-xs text-slate-400 max-w-sm mx-auto">
+                    {examHistory.length === 0 
+                      ? 'This learner has not completed any official mock exams yet. Completed attempts with detailed scores will appear here.'
+                      : 'No exams match the selected filter.'}
+                  </p>
+                </div>
+              ) : (
+                <>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse min-w-[700px]">
+                      <thead>
+                        <tr className="text-xs text-slate-500 uppercase border-b bg-slate-50/50">
+                          <th className="py-3 px-4">Date & Time</th>
+                          <th className="py-3 px-4">Score & Percentage</th>
+                          <th className="py-3 px-4">Result</th>
+                          <th className="py-3 px-4">Answers Breakdown</th>
+                          <th className="py-3 px-4">Duration</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 text-sm">
+                        {paginatedExams.map((exam, idx) => (
+                          <tr key={`${exam.id || 'exam'}-${startIndex + idx}`} className="hover:bg-slate-50/80 transition-colors">
+                            <td className="py-3.5 px-4 text-slate-700">
+                              <div className="font-medium text-slate-900">
+                                {new Date(exam.date).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}
+                              </div>
+                              <div className="text-xs text-slate-400 font-mono">
+                                {new Date(exam.date).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}
+                              </div>
+                            </td>
+                            <td className="py-3.5 px-4">
+                              <div className="font-bold text-slate-900 font-mono tabular-nums text-base">
+                                {exam.score} <span className="text-xs text-slate-500 font-normal">/ {exam.total}</span>
+                              </div>
+                              <div className="text-xs font-semibold text-blue-600">
+                                {exam.percentage}%
+                              </div>
+                            </td>
+                            <td className="py-3.5 px-4">
+                              <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold ${
+                                exam.passed 
+                                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200/50' 
+                                  : 'bg-red-50 text-red-700 border border-red-200/50'
+                              }`}>
+                                {exam.passed ? <CheckCircle2 className="w-3.5 h-3.5" /> : <XCircle className="w-3.5 h-3.5" />}
+                                <span>{exam.passed ? 'PASSED (>=12)' : 'FAILED (<12)'}</span>
+                              </span>
+                            </td>
+                            <td className="py-3.5 px-4 font-mono text-xs">
+                              <div className="flex items-center gap-2">
+                                <span className="text-emerald-700 font-semibold bg-emerald-50 px-1.5 py-0.5 rounded">
+                                  ✓ {exam.correctCount} correct
+                                </span>
+                                <span className="text-red-700 font-semibold bg-red-50 px-1.5 py-0.5 rounded">
+                                  ✕ {exam.incorrectCount} wrong
+                                </span>
+                              </div>
+                            </td>
+                            <td className="py-3.5 px-4 text-slate-600 font-mono text-xs">
+                              {formatDuration(exam.durationSeconds)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {totalPages > 1 && (
+                    <div className="p-4 border-t border-slate-200 bg-slate-50/70 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
+                      <div className="text-slate-600 font-medium">
+                        Showing <span className="font-mono font-semibold text-slate-900">{startIndex + 1}–{endIndex}</span> of <span className="font-mono font-semibold text-slate-900">{totalFiltered}</span>
+                      </div>
+
+                      <div className="flex items-center gap-2.5">
+                        <div className="inline-flex items-center rounded-lg border border-slate-200 bg-white p-0.5 shadow-2xs">
+                          <button
+                            onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                            disabled={safePage <= 1}
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-semibold text-slate-600 hover:text-slate-900 hover:bg-slate-50 disabled:opacity-25 transition-colors"
+                          >
+                            Previous
+                          </button>
+                          <div className="flex items-center px-1 border-x border-slate-100 gap-1">
+                            {Array.from({ length: totalPages }, (_, i) => i + 1)
+                              .filter(p => p === 1 || p === totalPages || Math.abs(p - safePage) <= 1)
+                              .map((pageNum, idx, arr) => {
+                                const prevPageNum = arr[idx - 1];
+                                const showEllipsis = prevPageNum && pageNum - prevPageNum > 1;
+                                return (
+                                  <React.Fragment key={pageNum}>
+                                    {showEllipsis && <span className="px-1 text-slate-300">…</span>}
+                                    <button
+                                      onClick={() => setCurrentPage(pageNum)}
+                                      className={`w-7 h-7 flex items-center justify-center rounded-md font-mono text-xs font-semibold transition-colors ${
+                                        safePage === pageNum
+                                          ? 'bg-slate-900 text-white shadow-2xs'
+                                          : 'text-slate-600 hover:bg-slate-100'
+                                      }`}
+                                    >
+                                      {pageNum}
+                                    </button>
+                                  </React.Fragment>
+                                );
+                              })}
+                          </div>
+                          <button
+                            onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                            disabled={safePage >= totalPages}
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-semibold text-slate-600 hover:text-slate-900 hover:bg-slate-50 disabled:opacity-25 transition-colors"
+                          >
+                            Next
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </>
+          )}
+
+          {/* TAB 2: Lesson Chapter Quizzes */}
+          {activeHistoryTab === 'quizzes' && (
+            <>
+              {lessonQuizzes.length === 0 ? (
+                <div className="p-8 text-center space-y-2 border border-dashed border-slate-200 rounded-xl">
+                  <BookOpen className="w-8 h-8 text-slate-300 mx-auto" />
+                  <div className="text-sm font-semibold text-slate-700">No chapter quizzes recorded</div>
+                  <p className="text-xs text-slate-400 max-w-sm mx-auto">
+                    This learner hasn't completed end-of-lesson practice quizzes yet.
+                  </p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse min-w-[650px]">
+                    <thead>
+                      <tr className="text-xs text-slate-500 uppercase border-b bg-slate-50/50">
+                        <th className="py-3 px-4">Lesson / Chapter</th>
+                        <th className="py-3 px-4">Category</th>
+                        <th className="py-3 px-4">Score</th>
+                        <th className="py-3 px-4">Result</th>
+                        <th className="py-3 px-4">Attempts</th>
+                        <th className="py-3 px-4">Last Taken</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 text-sm">
+                      {lessonQuizzes.map((quiz, qIdx) => (
+                        <tr key={qIdx} className="hover:bg-slate-50/80 transition-colors">
+                          <td className="py-3.5 px-4 font-semibold text-slate-900">
+                            {getLocalizedText(quiz.lessonTitle, quiz.lessonId)}
+                          </td>
+                          <td className="py-3.5 px-4 text-xs text-slate-600">
+                            {quiz.category || 'General'}
+                          </td>
+                          <td className="py-3.5 px-4 font-mono">
+                            <span className="font-bold text-slate-900">{quiz.score}</span>
+                            <span className="text-slate-400 text-xs"> / {quiz.total}</span>
+                            <span className="text-xs font-semibold text-blue-600 ml-1.5">({quiz.percent}%)</span>
+                          </td>
+                          <td className="py-3.5 px-4">
+                            <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold ${
+                              quiz.passed ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'
+                            }`}>
+                              {quiz.passed ? <Check className="w-3 h-3" /> : <X className="w-3 h-3" />}
+                              <span>{quiz.passed ? 'Passed (>=70%)' : 'Needs Practice'}</span>
+                            </span>
+                          </td>
+                          <td className="py-3.5 px-4 text-slate-600 font-mono text-xs">
+                            {quiz.attempts} attempt{quiz.attempts > 1 ? 's' : ''}
+                          </td>
+                          <td className="py-3.5 px-4 text-xs text-slate-500 font-mono">
+                            {new Date(quiz.date).toLocaleDateString()}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
+          )}
+        </div>
       </div>
 
+      {/* Grant Subscription Modal */}
       {showGrantModal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl w-full max-w-lg shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">

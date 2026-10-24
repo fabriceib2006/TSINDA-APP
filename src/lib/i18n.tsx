@@ -8,24 +8,47 @@ export const getText = (field: Record<Language, string> | any, lang: Language) =
 };
 
 export const getLocalizedQuestionText = (q: Question, lang: Language): { text: string; isFallback: boolean } => {
-  if (q.text && q.text[lang] && q.text[lang].trim() !== '') {
-    return { text: q.text[lang], isFallback: false };
+  const primary = q.text?.[lang];
+  if (primary && primary.trim() !== '') return { text: primary, isFallback: false };
+
+  let fallbackLang: Language = 'en';
+  if (lang === 'fr') {
+    if (q.text?.en && q.text.en.trim() !== '') fallbackLang = 'en';
+    else if (q.text?.rw && q.text.rw.trim() !== '') fallbackLang = 'rw';
+  } else if (lang === 'en') {
+    if (q.text?.fr && q.text.fr.trim() !== '') fallbackLang = 'fr';
+    else if (q.text?.rw && q.text.rw.trim() !== '') fallbackLang = 'rw';
+  } else {
+    if (q.text?.en && q.text.en.trim() !== '') fallbackLang = 'en';
+    else if (q.text?.fr && q.text.fr.trim() !== '') fallbackLang = 'fr';
   }
-  const enText = q.text?.en || '';
-  return { text: enText, isFallback: lang !== 'en' && Boolean(enText) };
+
+  const fallbackText = q.text?.[fallbackLang] || q.text?.en || q.text?.rw || q.text?.fr || '';
+  return { text: fallbackText, isFallback: Boolean(fallbackText) && lang !== fallbackLang };
 };
 
 export const getLocalizedQuestionOptions = (q: Question, lang: Language): { options: string[]; isFallback: boolean } => {
-  if (q.options && !Array.isArray(q.options)) {
+  if (q.options && typeof q.options === 'object' && !Array.isArray(q.options)) {
     const langOpts = q.options[lang];
     if (Array.isArray(langOpts) && langOpts.length > 0 && langOpts.some(o => Boolean(o && o.trim()))) {
       return { options: langOpts, isFallback: false };
     }
-    const enOpts = Array.isArray(q.options.en) && q.options.en.length > 0 ? q.options.en : [];
-    return { options: enOpts, isFallback: lang !== 'en' && enOpts.length > 0 };
+    let fallbackLang: Language = 'en';
+    if (lang === 'fr') {
+      if (Array.isArray(q.options.en) && q.options.en.length > 0) fallbackLang = 'en';
+      else if (Array.isArray(q.options.rw) && q.options.rw.length > 0) fallbackLang = 'rw';
+    } else if (lang === 'en') {
+      if (Array.isArray(q.options.fr) && q.options.fr.length > 0) fallbackLang = 'fr';
+      else if (Array.isArray(q.options.rw) && q.options.rw.length > 0) fallbackLang = 'rw';
+    } else {
+      if (Array.isArray(q.options.en) && q.options.en.length > 0) fallbackLang = 'en';
+      else if (Array.isArray(q.options.fr) && q.options.fr.length > 0) fallbackLang = 'fr';
+    }
+    const fallbackOpts = q.options[fallbackLang] || q.options.en || q.options.rw || q.options.fr || [];
+    return { options: fallbackOpts, isFallback: fallbackOpts.length > 0 && lang !== fallbackLang };
   }
   if (Array.isArray(q.options)) {
-    return { options: q.options, isFallback: lang !== 'en' && q.options.length > 0 };
+    return { options: q.options, isFallback: false };
   }
   return { options: [], isFallback: false };
 };
@@ -36,8 +59,19 @@ export const getLocalizedQuestionExplanation = (q: Question, lang: Language): { 
     if (typeof langExp === 'string' && langExp.trim()) {
       return { explanation: langExp, isFallback: false };
     }
-    const enExp = q.explanation.en || '';
-    return { explanation: enExp, isFallback: lang !== 'en' && Boolean(enExp) };
+    let fallbackLang: Language = 'en';
+    if (lang === 'fr') {
+      if (q.explanation.en && q.explanation.en.trim()) fallbackLang = 'en';
+      else if (q.explanation.rw && q.explanation.rw.trim()) fallbackLang = 'rw';
+    } else if (lang === 'en') {
+      if (q.explanation.fr && q.explanation.fr.trim()) fallbackLang = 'fr';
+      else if (q.explanation.rw && q.explanation.rw.trim()) fallbackLang = 'rw';
+    } else {
+      if (q.explanation.en && q.explanation.en.trim()) fallbackLang = 'en';
+      else if (q.explanation.fr && q.explanation.fr.trim()) fallbackLang = 'fr';
+    }
+    const fallbackExp = q.explanation[fallbackLang] || q.explanation.en || q.explanation.rw || q.explanation.fr || '';
+    return { explanation: fallbackExp, isFallback: Boolean(fallbackExp) && lang !== fallbackLang };
   }
   return { explanation: '', isFallback: false };
 };

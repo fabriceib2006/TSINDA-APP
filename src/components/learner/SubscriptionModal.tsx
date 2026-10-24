@@ -32,6 +32,9 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ isOpen, on
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [activePaymentId, setActivePaymentId] = useState<string | null>(null);
   const [checkingStatus, setCheckingStatus] = useState(false);
+  const [pointsBalance, setPointsBalance] = useState<number>(0);
+  const [pointValueRwf, setPointValueRwf] = useState<number>(1);
+  const [usePoints, setUsePoints] = useState<boolean>(false);
   const unsubscribeSnapshotRef = useRef<(() => void) | null>(null);
   const pollIntervalRef = useRef<any>(null);
 
@@ -156,6 +159,24 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ isOpen, on
               setActiveSub(null);
             }
           }
+
+          // Fetch referral points balance and point value
+          const idToken = await auth.currentUser?.getIdToken();
+          if (idToken) {
+            fetch('/api/referral/stats', {
+              headers: { Authorization: `Bearer ${idToken}` }
+            })
+              .then(res => res.json())
+              .then(data => {
+                if (data.pointsBalance !== undefined) {
+                  setPointsBalance(Number(data.pointsBalance) || 0);
+                }
+                if (data.pointValueRwf !== undefined) {
+                  setPointValueRwf(Number(data.pointValueRwf) || 1);
+                }
+              })
+              .catch(e => console.warn('Error fetching referral stats:', e));
+          }
         }
       } catch (err) {
         console.error('Error fetching plans/promotions:', err);
@@ -186,16 +207,27 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ isOpen, on
       return;
     }
 
-    const normalizedPhone = normalizePhone(phone);
-    if (!normalizedPhone || !validatePhone(normalizedPhone)) {
-      setErrorMsg(
-        language === 'rw'
-          ? 'Nyamuneka andika nimero nyayo ya MTN (078/079) cyangwa Airtel (072/073).'
-          : language === 'fr'
-          ? 'Veuillez saisir un numéro valide MTN (078/079) ou Airtel (072/073).'
-          : 'Please enter a valid Rwandan MTN (078/079) or Airtel (072/073) number.'
-      );
-      return;
+    const promoInfo = getBestPromotion(selectedPlan.id, selectedPlan.price, promotions);
+    const effectivePrice = promoInfo.discountedPrice;
+    const pointsDiscountMax = Math.min(pointsBalance, Math.ceil(effectivePrice / (pointValueRwf || 1)));
+    const appliedPoints = usePoints ? pointsDiscountMax : 0;
+    const pointsDiscountRwf = appliedPoints * (pointValueRwf || 1);
+    const finalPayableRwf = Math.max(0, effectivePrice - pointsDiscountRwf);
+    const isFreeWithPoints = usePoints && finalPayableRwf === 0;
+
+    let normalizedPhone = '';
+    if (!isFreeWithPoints) {
+      normalizedPhone = normalizePhone(phone) || '';
+      if (!normalizedPhone || !validatePhone(normalizedPhone)) {
+        setErrorMsg(
+          language === 'rw'
+            ? 'Nyamuneka andika nimero nyayo ya MTN (078/079) cyangwa Airtel (072/073).'
+            : language === 'fr'
+            ? 'Veuillez saisir un numéro valide MTN (078/079) ou Airtel (072/073).'
+            : 'Please enter a valid Rwandan MTN (078/079) or Airtel (072/073) number.'
+        );
+        return;
+      }
     }
 
     setProcessing(true);
@@ -215,7 +247,8 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ isOpen, on
         },
         body: JSON.stringify({
           planId: selectedPlan.id,
-          phone: normalizedPhone,
+          phone: normalizedPhone || undefined,
+          redeemPoints: appliedPoints > 0 ? appliedPoints : undefined,
         }),
       });
 
@@ -237,6 +270,17 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ isOpen, on
         error.code = result.code;
         error.details = result;
         throw error;
+      }
+
+      // If 100% free with points, activated immediately!
+      if (result.freeWithPoints) {
+        setStep('success');
+        setProcessing(false);
+        setTimeout(() => {
+          onSubscribed();
+          onClose();
+        }, 1800);
+        return;
       }
 
       const paymentId = result.paymentId;
@@ -596,47 +640,123 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ isOpen, on
               </div>
             </div>
 
-            {/* Payment Method & Phone */}
-            <div className="space-y-4 pt-2 border-t border-slate-100">
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">
-                  Mobile Money Phone Number (MTN or Airtel)
-                </label>
-                <div className="relative">
-                  <input
-                    type="tel"
-                    required
-                    value={phone}
-                    onChange={(e) => setPhone(e.target.value)}
-                    placeholder="078XXXXXXX or 072XXXXXXX"
-                    className={`w-full min-h-[44px] px-3.5 py-2.5 rounded-[10px] border ${
-                      network ? 'border-blue-500 ring-1 ring-blue-500' : 'border-slate-200'
-                    } text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-600`}
-                  />
-                  {network && (
-                    <div className="absolute right-3.5 top-2.5 text-xs font-bold text-blue-600 bg-blue-50 px-2.5 py-1 rounded-md border border-blue-200">
-                      {network} MoMo
+            {/* Points Redemption Option */}
+            {pointsBalance > 0 && selectedPlan && (() => {
+              const promoInfo = getBestPromotion(selectedPlan.id, selectedPlan.price, promotions);
+              const effectivePrice = promoInfo.discountedPrice;
+              const pointsDiscountMax = Math.min(pointsBalance, Math.ceil(effectivePrice / (pointValueRwf || 1)));
+              const appliedPoints = usePoints ? pointsDiscountMax : 0;
+              const pointsDiscountRwf = appliedPoints * (pointValueRwf || 1);
+              const finalPayableRwf = Math.max(0, effectivePrice - pointsDiscountRwf);
+
+              return (
+                <div className="bg-amber-50/80 border border-amber-200 rounded-xl p-4 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2.5">
+                      <span className="text-xl">🪙</span>
+                      <div>
+                        <div className="text-xs sm:text-sm font-bold text-amber-900">
+                          Redeem TSINDA Coins ({pointsBalance} Available)
+                        </div>
+                        <div className="text-[11px] text-amber-700">
+                          1 Coin = {pointValueRwf} RWF • Max {pointsDiscountMax} Coins applicable
+                        </div>
+                      </div>
+                    </div>
+                    <label className="relative inline-flex items-center cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={usePoints}
+                        onChange={(e) => setUsePoints(e.target.checked)}
+                        className="sr-only peer"
+                      />
+                      <div className="w-10 h-5.5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4.5 after:w-4.5 after:transition-all peer-checked:bg-amber-600"></div>
+                    </label>
+                  </div>
+                  {usePoints && (
+                    <div className="text-xs font-semibold text-amber-900 pt-2 border-t border-amber-200/60 flex items-center justify-between">
+                      <span>Applying {pointsDiscountMax} Coins Discount:</span>
+                      <span className="font-bold text-emerald-700">-RWF {pointsDiscountRwf.toLocaleString()}</span>
                     </div>
                   )}
                 </div>
-                <span className="text-[11px] text-slate-500 mt-1 block">Example: 0788123456</span>
-                {!network && phone.length > 2 && (
-                  <p className="text-xs text-amber-600 mt-1">Please enter an MTN (078/079) or Airtel (072/073) number.</p>
-                )}
-              </div>
-            </div>
+              );
+            })()}
+
+            {/* Payment Method & Phone */}
+            {(() => {
+              const promoInfo = selectedPlan ? getBestPromotion(selectedPlan.id, selectedPlan.price, promotions) : { discountedPrice: 0 };
+              const effectivePrice = promoInfo.discountedPrice;
+              const pointsDiscountMax = Math.min(pointsBalance, Math.ceil(effectivePrice / (pointValueRwf || 1)));
+              const appliedPoints = usePoints ? pointsDiscountMax : 0;
+              const pointsDiscountRwf = appliedPoints * (pointValueRwf || 1);
+              const finalPayableRwf = Math.max(0, effectivePrice - pointsDiscountRwf);
+              const isFreeWithPoints = usePoints && finalPayableRwf === 0;
+
+              if (isFreeWithPoints) {
+                return (
+                  <div className="p-4 bg-emerald-50 rounded-xl border border-emerald-200 text-xs sm:text-sm text-emerald-800 font-bold flex items-center gap-2">
+                    <Check className="w-5 h-5 text-emerald-600 shrink-0" />
+                    <span>100% Free! This plan is fully covered by your {pointsDiscountMax} coins. No mobile money payment required.</span>
+                  </div>
+                );
+              }
+
+              return (
+                <div className="space-y-4 pt-2 border-t border-slate-100">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">
+                      Mobile Money Phone Number (MTN or Airtel)
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="tel"
+                        required
+                        value={phone}
+                        onChange={(e) => setPhone(e.target.value)}
+                        placeholder="078XXXXXXX or 072XXXXXXX"
+                        className={`w-full min-h-[44px] px-3.5 py-2.5 rounded-[10px] border ${
+                          network ? 'border-blue-500 ring-1 ring-blue-500' : 'border-slate-200'
+                        } text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-600`}
+                      />
+                      {network && (
+                        <div className="absolute right-3.5 top-2.5 text-xs font-bold text-blue-600 bg-blue-50 px-2.5 py-1 rounded-md border border-blue-200">
+                          {network} MoMo
+                        </div>
+                      )}
+                    </div>
+                    <span className="text-[11px] text-slate-500 mt-1 block">Example: 0788123456</span>
+                    {!network && phone.length > 2 && (
+                      <p className="text-xs text-amber-600 mt-1">Please enter an MTN (078/079) or Airtel (072/073) number.</p>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
 
             {(() => {
               const isSelectedPlanStudy = Boolean(selectedPlan?.access?.trafficRules || selectedPlan?.access?.lessonVideos);
               const isBlockedByActiveStudyPlan = Boolean(activeSub && isSelectedPlanStudy);
 
+              const promoInfo = selectedPlan ? getBestPromotion(selectedPlan.id, selectedPlan.price, promotions) : { discountedPrice: 0 };
+              const effectivePrice = promoInfo.discountedPrice;
+              const pointsDiscountMax = Math.min(pointsBalance, Math.ceil(effectivePrice / (pointValueRwf || 1)));
+              const appliedPoints = usePoints ? pointsDiscountMax : 0;
+              const pointsDiscountRwf = appliedPoints * (pointValueRwf || 1);
+              const finalPayableRwf = Math.max(0, effectivePrice - pointsDiscountRwf);
+              const isFreeWithPoints = usePoints && finalPayableRwf === 0;
+
+              const isButtonDisabled = processing || isBlockedByActiveStudyPlan || !selectedPlan || (!isFreeWithPoints && !network);
+
               return (
                 <button
                   type="submit"
-                  disabled={processing || isBlockedByActiveStudyPlan || !selectedPlan || !network}
+                  disabled={isButtonDisabled}
                   className={`w-full min-h-[44px] py-3.5 px-4 font-semibold rounded-[10px] shadow-sm transition-colors text-sm flex items-center justify-center gap-2 ${
                     isBlockedByActiveStudyPlan
                       ? 'bg-slate-200 text-slate-500 cursor-not-allowed border border-slate-300'
+                      : isFreeWithPoints
+                      ? 'bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-50'
                       : 'bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50'
                   }`}
                 >
@@ -649,8 +769,10 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ isOpen, on
                           ? `Plan d'étude actif jusqu'au ${formatCatDate(activeSub!.endDate)}`
                           : `Active Study Plan Expires on ${formatCatDate(activeSub!.endDate)}`)
                       : processing
-                      ? (language === 'rw' ? 'Ubwishyu burimo gutegurwa...' : language === 'fr' ? 'Initialisation du paiement...' : 'Initiating Paypack Payment...')
-                      : `${language === 'rw' ? 'Ishyura' : language === 'fr' ? 'Payer' : 'Pay'} RWF ${selectedPlan?.price.toLocaleString() || 0}`}
+                      ? (language === 'rw' ? 'Ubwishyu burimo gutegurwa...' : language === 'fr' ? 'Initialisation du paiement...' : 'Activating...')
+                      : isFreeWithPoints
+                      ? `🎉 Activate 100% Free with ${pointsDiscountMax} Coins`
+                      : `${language === 'rw' ? 'Ishyura' : language === 'fr' ? 'Payer' : 'Pay'} RWF ${finalPayableRwf.toLocaleString()}`}
                   </span>
                 </button>
               );

@@ -148,6 +148,16 @@ export interface Question {
   explanation: Record<Language, string>;
   category: string;
   imageUrl?: string;
+  images?: string[];
+  optionImages?: Record<string, string>;
+  article_id?: string;
+  group_id?: string;
+  source_number?: string;
+  source_page?: string;
+  review_flags?: string;
+  translation_source?: string;
+  match_confidence?: string;
+  alt_articles?: string;
   isPublished: boolean;
 }
 

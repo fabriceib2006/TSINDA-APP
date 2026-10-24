@@ -4,7 +4,7 @@ import { doc, getDoc, collection, getDocs, query, where, orderBy, onSnapshot } f
 import { Language } from '../types';
 import { t, homepageT } from '../i18n/translations';
 import { 
-  BookOpen, Award, Play, UserPlus, CreditCard, CheckCircle2, TrendingUp, Users, ShieldCheck, Globe, Star,
+  BookOpen, Award, Play, UserPlus, CreditCard, CheckCircle2, TrendingUp, Users, ShieldCheck, Globe, Star, Gift, Sparkles,
   ArrowRight, Mail, Phone, X, Menu, ChevronDown, AlertCircle,
   Instagram, Facebook, Twitter, Youtube, Linkedin, MessageCircle, MapPin
 } from 'lucide-react';
@@ -33,11 +33,15 @@ export const HomePage: React.FC = () => {
   const [imageSlots, setImageSlots] = useState<Record<string, string>>({});
   const [heroPreview, setHeroPreview] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const [stats, setStats] = useState({ questions: 0, lessons: 0, videos: 0 });
+
 
   // Auth overlay
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [dismissedAnnouncements, setDismissedAnnouncements] = useState<string[]>([]);
+  const [openFaqIds, setOpenFaqIds] = useState<string[]>([]);
+  const toggleFaq = (id: string) => {
+    setOpenFaqIds(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
+  };
 
   const formatCatDate = (dateInput: string | Date | number): string => {
     const d = typeof dateInput === 'string' || typeof dateInput === 'number' ? new Date(dateInput) : dateInput;
@@ -134,11 +138,7 @@ export const HomePage: React.FC = () => {
         ]);
 
         const statsData = statsSnap && statsSnap.exists() ? statsSnap.data() : null;
-        setStats({
-            questions: statsData?.questionsCount ?? 500,
-            lessons: statsData?.lessonsCount ?? (lSnap ? lSnap.size : 24),
-            videos: statsData?.videosCount ?? (vSnap ? vSnap.size : 12)
-        });
+
 
         if (secSnap) setSections(secSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter((s: any) => s.isVisible).sort((a: any, b: any) => (a.order || 0) - (b.order || 0)));
         if (itemSnap) setItems(itemSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter((i: any) => i.isVisible));
@@ -330,18 +330,6 @@ export const HomePage: React.FC = () => {
 
                       {/* Three small trust chips */}
                       <div className="flex flex-wrap items-center justify-center lg:justify-start gap-3 pt-2">
-                        <div className="px-3.5 py-1.5 bg-white border border-slate-200 rounded-full text-xs font-bold text-slate-700 shadow-2xs flex items-center gap-1.5">
-                          <span className="w-2 h-2 rounded-full bg-blue-600"></span>
-                          <span>{stats.questions} {t[language].questionsLabel || 'Published Questions'}</span>
-                        </div>
-                        <div className="px-3.5 py-1.5 bg-white border border-slate-200 rounded-full text-xs font-bold text-slate-700 shadow-2xs flex items-center gap-1.5">
-                          <span className="w-2 h-2 rounded-full bg-emerald-600"></span>
-                          <span>{stats.lessons} {t[language].lessonsLabel || 'Gazette Lessons'}</span>
-                        </div>
-                        <div className="px-3.5 py-1.5 bg-white border border-slate-200 rounded-full text-xs font-bold text-slate-700 shadow-2xs flex items-center gap-1.5">
-                          <span className="w-2 h-2 rounded-full bg-purple-600"></span>
-                          <span>{stats.videos} {t[language].videosLabel || 'Video Explanations'}</span>
-                        </div>
                       </div>
 
                       <div className="pt-2 flex flex-col sm:flex-row items-center justify-center lg:justify-start gap-3">
@@ -406,9 +394,30 @@ export const HomePage: React.FC = () => {
           }
 
           if (section.type === 'features') {
-            const secItems = getSectionItems('features');
+            const rawItems = getSectionItems('features');
+            const secItems = [...rawItems];
+            if (!secItems.some(i => i.iconName === 'Gift' || (i.title?.en && i.title.en.toLowerCase().includes('refer')))) {
+              secItems.push({
+                id: 'feature-referral',
+                title: {
+                  en: 'Refer & Earn Free Plans',
+                  rw: 'Sangiza Bagenzi Wunguke Amanota',
+                  fr: 'Parrainez & Gagnez Gratuitement'
+                },
+                description: {
+                  en: 'Share your personal referral link with friends. Earn reward points on every confirmed subscription and redeem them to buy plans 100% free without paying money!',
+                  rw: 'Sangiza inshuti zawe link yawe, uzigame amanota kuri buri fatabuguzi maze uyakoreshe ugura amapaki ku buntu nta mafaranga utanze!',
+                  fr: 'Invitez vos amis avec votre lien de parrainage. Gagnez des points sur chaque abonnement et échangez-les pour obtenir des plans d\'étude 100% gratuits !'
+                },
+                iconName: 'Gift',
+                order: 4,
+                isVisible: true,
+                isReferralCard: true
+              });
+            }
+
             const featureIconMap: Record<string, React.ElementType> = {
-              BookOpen, Award, Play, UserPlus, CreditCard, CheckCircle2, TrendingUp, Users, ShieldCheck, Globe, Star
+              BookOpen, Award, Play, UserPlus, CreditCard, CheckCircle2, TrendingUp, Users, ShieldCheck, Globe, Star, Gift, Sparkles
             };
             return (
               <section key={section.id} id="features" className="py-20 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto space-y-12">
@@ -417,22 +426,53 @@ export const HomePage: React.FC = () => {
                   <p className="text-sm text-slate-600 max-w-lg mx-auto">{section.subtitle?.[language] || section.subtitle?.en}</p>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
                   {secItems.map((item, idx) => {
                     const IconComponent = featureIconMap[item.iconName] || Star;
                     const slotKey = idx === 0 ? 'feature-lessons' : idx === 1 ? 'feature-exams' : idx === 2 ? 'feature-videos' : null;
                     const cardImg = (slotKey && imageSlots[slotKey]) || item.imageUrl;
+                    const isPromoCard = Boolean((item as any).isReferralCard || item.iconName === 'Gift');
+
                     return (
-                      <div key={item.id || idx} className="bg-white p-8 rounded-2xl border border-slate-200 shadow-xs space-y-4 hover:-translate-y-1 transition-all duration-300 hover:shadow-md">
-                        {cardImg ? (
-                          <img src={cardImg} alt="" className="w-12 h-12 rounded-2xl object-cover border border-slate-200" />
-                        ) : (
-                          <div className="w-12 h-12 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center">
-                            <IconComponent className="w-6 h-6" />
+                      <div 
+                        key={item.id || idx} 
+                        className={`p-8 rounded-2xl border shadow-xs space-y-4 hover:-translate-y-1 transition-all duration-300 hover:shadow-md relative flex flex-col justify-between ${
+                          isPromoCard 
+                            ? 'bg-gradient-to-b from-amber-50/70 to-white border-amber-300 ring-1 ring-amber-200' 
+                            : 'bg-white border-slate-200'
+                        }`}
+                      >
+                        {isPromoCard && (
+                          <div className="absolute -top-3 right-4 bg-amber-500 text-white text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full shadow-xs flex items-center gap-1">
+                            <Sparkles className="w-3 h-3" />
+                            <span>100% Free Pass</span>
                           </div>
                         )}
-                        <h3 className="text-lg font-bold text-slate-900">{item.title?.[language] || item.title?.en}</h3>
-                        <p className="text-sm text-slate-600 leading-relaxed">{item.description?.[language] || item.description?.en}</p>
+                        <div className="space-y-4">
+                          {cardImg ? (
+                            <img src={cardImg} alt="" className="w-12 h-12 rounded-2xl object-cover border border-slate-200" />
+                          ) : (
+                            <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${
+                              isPromoCard ? 'bg-amber-100 text-amber-700' : 'bg-blue-50 text-blue-600'
+                            }`}>
+                              <IconComponent className="w-6 h-6" />
+                            </div>
+                          )}
+                          <h3 className="text-lg font-bold text-slate-900">{item.title?.[language] || item.title?.en}</h3>
+                          <p className="text-sm text-slate-600 leading-relaxed">{item.description?.[language] || item.description?.en}</p>
+                        </div>
+
+                        {isPromoCard && (
+                          <div className="pt-2">
+                            <a
+                              href={userProfile ? '/student' : '/student?mode=signup'}
+                              className="inline-flex items-center gap-1 text-xs font-bold text-amber-700 hover:text-amber-800 transition-colors"
+                            >
+                              <span>{language === 'rw' ? 'Tangira Gutsindira Amapaki' : language === 'fr' ? 'Commencer à Parrainer' : 'Start Referring & Earning'}</span>
+                              <ArrowRight className="w-3.5 h-3.5" />
+                            </a>
+                          </div>
+                        )}
                       </div>
                     );
                   })}
@@ -473,36 +513,6 @@ export const HomePage: React.FC = () => {
             );
           }
 
-          if (section.type === 'stats') {
-            const secItems = getSectionItems('stats');
-            return (
-              <section key={section.id} className="py-8 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto my-12">
-                <div className="bg-gradient-to-br from-blue-600 to-blue-700 text-white rounded-3xl p-8 sm:p-12 shadow-xl relative overflow-hidden grid grid-cols-1 md:grid-cols-3 gap-8 items-center text-center md:text-left">
-                  { [
-                    { value: stats.questions, label: t[language].questionsLabel || 'Published Questions', icon: Award },
-                    { value: stats.lessons, label: t[language].lessonsLabel || 'Gazette Lessons', icon: BookOpen },
-                    { value: stats.videos, label: t[language].videosLabel || 'Video Lessons', icon: Play },
-                  ].filter(stat => stat.value > 0).length === 0 ? null : (
-                    [
-                      { value: stats.questions, label: t[language].questionsLabel || 'Published Questions', icon: Award },
-                      { value: stats.lessons, label: t[language].lessonsLabel || 'Gazette Lessons', icon: BookOpen },
-                      { value: stats.videos, label: t[language].videosLabel || 'Video Lessons', icon: Play },
-                    ].filter(stat => stat.value > 0).map((stat, i) => (
-                      <div key={i} className="flex flex-col md:flex-row items-center gap-4">
-                        <div className="w-14 h-14 rounded-2xl bg-white/10 text-white flex items-center justify-center shrink-0">
-                          <stat.icon className="w-7 h-7" />
-                        </div>
-                        <div>
-                          <div className="text-4xl sm:text-5xl font-black">{stat.value}</div>
-                          <div className="text-sm font-medium text-blue-100 mt-1">{stat.label}</div>
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </section>
-            );
-          }
           
           if (section.type === 'plans') {
               const sortedPlans = [...plans].sort((a,b) => a.sortOrder - b.sortOrder);
@@ -646,6 +656,7 @@ export const HomePage: React.FC = () => {
 
           if (section.type === 'faq') {
             const secItems = getSectionItems('faq');
+            // We use a state to manage open FAQ items
             return (
               <section key={section.id} id="faq" className="py-20 px-4 sm:px-6 lg:px-8 max-w-4xl mx-auto space-y-10">
                 <div className="text-center space-y-2">
@@ -654,12 +665,26 @@ export const HomePage: React.FC = () => {
                 </div>
 
                 <div className="space-y-4">
-                  {secItems.map((faq, idx) => (
-                    <div key={faq.id || idx} className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-2">
-                      <h3 className="font-bold text-slate-900 text-sm sm:text-base">{faq.title?.[language] || faq.title?.en}</h3>
-                      <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">{faq.description?.[language] || faq.description?.en}</p>
-                    </div>
-                  ))}
+                  {secItems.map((faq, idx) => {
+                    const id = faq.id || idx.toString();
+                    const isOpen = openFaqIds.includes(id);
+                    return (
+                      <div key={id} className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+                        <button 
+                          onClick={() => toggleFaq(id)}
+                          className="w-full flex items-center justify-between p-6 text-left font-bold text-slate-900 text-sm sm:text-base focus:outline-none"
+                        >
+                          <span>{faq.title?.[language] || faq.title?.en}</span>
+                          <ChevronDown className={`w-5 h-5 text-slate-400 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+                        </button>
+                        {isOpen && (
+                          <div className="px-6 pb-6 pt-0 text-xs sm:text-sm text-slate-600 leading-relaxed border-t border-slate-100">
+                            {faq.description?.[language] || faq.description?.en}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </section>
             );
@@ -720,12 +745,34 @@ export const HomePage: React.FC = () => {
 
           <div>
             <h4 className="text-xs font-bold uppercase tracking-wider text-white mb-3">{getText(homepageT.socialMedia, language)}</h4>
-            <div className="flex gap-3">
-              {socialLinks.map((s, idx) => (
-                <a key={s.id || idx} href={s.url} target="_blank" rel="noreferrer" className="text-xs font-semibold text-slate-300 hover:text-white bg-slate-800 px-3 py-1.5 rounded-lg">
-                  {s.platform}
-                </a>
-              ))}
+            <div className="flex flex-wrap gap-2.5">
+              {(socialLinks.length > 0 ? socialLinks : [
+                { platform: 'Facebook', url: 'https://facebook.com' },
+                { platform: 'Twitter', url: 'https://twitter.com' },
+                { platform: 'Instagram', url: 'https://instagram.com' },
+                { platform: 'YouTube', url: 'https://youtube.com' },
+              ]).map((s: any, idx: number) => {
+                const name = (s.platform || '').toLowerCase();
+                const IconComponent = name.includes('face') ? Facebook :
+                                      name.includes('twit') || name.includes('x') ? Twitter :
+                                      name.includes('insta') ? Instagram :
+                                      name.includes('tube') ? Youtube :
+                                      name.includes('link') ? Linkedin :
+                                      name.includes('whats') || name.includes('chat') ? MessageCircle : Globe;
+                return (
+                  <a
+                    key={s.id || idx}
+                    href={s.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex items-center gap-2 px-3.5 py-2 bg-slate-800 hover:bg-blue-600 text-slate-300 hover:text-white rounded-xl text-xs font-semibold transition-all duration-200 shadow-2xs group"
+                    title={s.platform}
+                  >
+                    <IconComponent className="w-4 h-4 text-slate-400 group-hover:text-white transition-colors" />
+                    <span className="capitalize">{s.platform}</span>
+                  </a>
+                );
+              })}
             </div>
           </div>
         </div>

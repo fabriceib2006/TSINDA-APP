@@ -28,6 +28,7 @@ import {
 } from 'lucide-react';
 import { Language } from '../../types';
 import { seedSystemSettingsIfNeeded } from '../../lib/seedSystemSettings';
+import { compressImage } from '../../lib/imageUtils';
 
 export const SystemSettingsManager: React.FC = () => {
   const [loading, setLoading] = useState(true);
@@ -56,6 +57,12 @@ export const SystemSettingsManager: React.FC = () => {
     pointsPercent: 10,
     pointValueRwf: 100
   });
+
+  const [rewardsList, setRewardsList] = useState<any[]>([]);
+  const [loadingRewards, setLoadingRewards] = useState(false);
+  const [reversingRewardId, setReversingRewardId] = useState<string | null>(null);
+  const [rewardsPage, setRewardsPage] = useState<number>(1);
+  const rewardsPerPage = 5;
 
   // Homepage sections & items
   const [sections, setSections] = useState<any[]>([]);
@@ -208,6 +215,56 @@ export const SystemSettingsManager: React.FC = () => {
     }
   };
 
+  const fetchRewards = async () => {
+    try {
+      setLoadingRewards(true);
+      const idToken = await auth.currentUser?.getIdToken();
+      if (!idToken) return;
+      const res = await fetch('/api/admin/referral/rewards', {
+        headers: { Authorization: `Bearer ${idToken}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setRewardsList(data.rewards || []);
+      }
+    } catch (e) {
+      console.warn('Error fetching referral rewards:', e);
+    } finally {
+      setLoadingRewards(false);
+    }
+  };
+
+  const handleReverseReward = async (rewardId: string) => {
+    const reason = window.prompt('Enter reason for reversing this reward:', 'Administrative review');
+    if (reason === null) return;
+    try {
+      setReversingRewardId(rewardId);
+      const idToken = await auth.currentUser?.getIdToken();
+      const res = await fetch('/api/admin/referral/reverse-reward', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${idToken}`
+        },
+        body: JSON.stringify({ rewardId, reason })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to reverse reward');
+      setSuccessMsg('Referral reward reversed successfully.');
+      fetchRewards();
+    } catch (err: any) {
+      setError(err.message || 'Error reversing reward');
+    } finally {
+      setReversingRewardId(null);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'referral') {
+      fetchRewards();
+    }
+  }, [activeTab]);
+
   // Social Links Handlers
   const handleSaveSocial = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -335,36 +392,32 @@ export const SystemSettingsManager: React.FC = () => {
     try {
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
-        const reader = new FileReader();
-        reader.onload = async (event) => {
-          const url = event.target?.result as string;
-          const nameWithoutExt = file.name.replace(/\.[^/.]+$/, '').toLowerCase();
-          
-          const matchingSlot = imageSlots.find(s => s.slotKey.toLowerCase() === nameWithoutExt);
-          if (matchingSlot) {
-            await updateDoc(doc(db, 'imageSlots', matchingSlot.id), {
-              imageUrl: url,
-              updatedAt: new Date().toISOString()
-            });
-            setImageSlots(prev => prev.map(s => s.id === matchingSlot.id ? { ...s, imageUrl: url, updatedAt: new Date().toISOString() } : s));
-          }
+        const url = await compressImage(file);
+        const nameWithoutExt = file.name.replace(/\.[^/.]+$/, '').toLowerCase();
+        
+        const matchingSlot = imageSlots.find(s => s.slotKey.toLowerCase() === nameWithoutExt);
+        if (matchingSlot) {
+          await updateDoc(doc(db, 'imageSlots', matchingSlot.id), {
+            imageUrl: url,
+            updatedAt: new Date().toISOString()
+          });
+          setImageSlots(prev => prev.map(s => s.id === matchingSlot.id ? { ...s, imageUrl: url, updatedAt: new Date().toISOString() } : s));
+        }
 
-          const mediaData = {
-            url,
-            name: file.name,
-            size: `${(file.size / 1024).toFixed(1)} KB`,
-            altText: { rw: file.name, en: file.name, fr: file.name },
-            createdAt: new Date().toISOString()
-          };
-          const ref = await addDoc(collection(db, 'siteMedia'), mediaData);
-          setMediaList(prev => [{ id: ref.id, ...mediaData }, ...prev]);
+        const mediaData = {
+          url,
+          name: file.name,
+          size: `${(file.size / 1024).toFixed(1)} KB`,
+          altText: { rw: file.name, en: file.name, fr: file.name },
+          createdAt: new Date().toISOString()
         };
-        reader.readAsDataURL(file);
+        const ref = await addDoc(collection(db, 'siteMedia'), mediaData);
+        setMediaList(prev => [{ id: ref.id, ...mediaData }, ...prev]);
       }
       await logAdminAction('UPLOAD_MEDIA', `Uploaded ${files.length} file(s) to media library`);
       setSuccessMsg('Media uploaded successfully.');
     } catch (err: any) {
-      setError('Failed to upload media.');
+      setError('Failed to upload media: ' + (err.message || ''));
     } finally {
       setUploadingMedia(false);
     }
@@ -381,17 +434,17 @@ export const SystemSettingsManager: React.FC = () => {
   };
 
   const handleReplaceSlotImage = async (slotId: string, file: File) => {
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      const url = event.target?.result as string;
+    try {
+      const url = await compressImage(file);
       await updateDoc(doc(db, 'imageSlots', slotId), { imageUrl: url, updatedAt: new Date().toISOString() });
       setImageSlots(imageSlots.map(s => s.id === slotId ? { ...s, imageUrl: url, updatedAt: new Date().toISOString() } : s));
       const mediaData = { url, name: file.name, size: `${(file.size / 1024).toFixed(1)} KB`, altText: { rw: file.name, en: file.name, fr: file.name }, createdAt: new Date().toISOString() };
       const ref = await addDoc(collection(db, 'siteMedia'), mediaData);
       setMediaList(prev => [{ id: ref.id, ...mediaData }, ...prev]);
       setSuccessMsg('Slot image replaced successfully.');
-    };
-    reader.readAsDataURL(file);
+    } catch (err: any) {
+      setError('Failed to replace slot image: ' + (err.message || ''));
+    }
   };
 
   const handleDeleteMedia = async (media: any) => {
@@ -1333,27 +1386,222 @@ export const SystemSettingsManager: React.FC = () => {
         </div>
       )}
 
-      {/* Referral Settings */}
+      {/* Referral Settings & Rewards */}
       {activeTab === 'referral' && (
-        <form onSubmit={handleSaveReferral} className="space-y-4 max-w-lg bg-white p-6 rounded-2xl border border-slate-200">
-          <div className="flex items-center gap-3">
-            <input type="checkbox" checked={referralSettings.active} onChange={e => setReferralSettings(p => ({...p, active: e.target.checked}))} className="w-5 h-5" />
-            <label className="font-bold">Active Referral System</label>
+        <div className="space-y-6">
+          <div className="max-w-2xl bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
+            <h3 className="text-base font-bold text-slate-900 mb-4 pb-2 border-b border-slate-100 flex items-center gap-2">
+              <span>🪙</span>
+              <span>Referral Program Configuration</span>
+            </h3>
+            <form onSubmit={handleSaveReferral} className="space-y-4">
+              <div className="flex items-center gap-3 p-3 bg-slate-50 rounded-xl border border-slate-200">
+                <input
+                  type="checkbox"
+                  id="referralActive"
+                  checked={referralSettings.active}
+                  onChange={e => setReferralSettings(p => ({...p, active: e.target.checked}))}
+                  className="w-5 h-5 text-blue-600 rounded"
+                />
+                <label htmlFor="referralActive" className="font-bold text-sm text-slate-900 cursor-pointer">
+                  Activate Referral & Rewards System
+                </label>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Base Domain for Referral Links
+                </label>
+                <input
+                  type="text"
+                  value={referralSettings.baseDomain}
+                  onChange={e => setReferralSettings(p => ({...p, baseDomain: e.target.value}))}
+                  placeholder="https://ais-dev-lixew3oqgbkl4s66icznfc-399525316199.europe-west1.run.app"
+                  className="w-full border border-slate-200 p-2.5 rounded-lg text-sm font-mono focus:ring-2 focus:ring-blue-600 focus:outline-none"
+                />
+                <span className="text-[11px] text-slate-500 mt-1 block">
+                  Domain used when students click "Copy Link" (e.g. https://domain.com)
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                    Reward Percent (%)
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="100"
+                    value={referralSettings.pointsPercent}
+                    onChange={e => setReferralSettings(p => ({...p, pointsPercent: Number(e.target.value)}))}
+                    className="w-full border border-slate-200 p-2.5 rounded-lg text-sm focus:ring-2 focus:ring-blue-600 focus:outline-none"
+                  />
+                  <span className="text-[11px] text-slate-500 mt-1 block">
+                    % of cash plan payment awarded to referrer
+                  </span>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                    Point Value (RWF per Point)
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={referralSettings.pointValueRwf}
+                    onChange={e => setReferralSettings(p => ({...p, pointValueRwf: Number(e.target.value)}))}
+                    className="w-full border border-slate-200 p-2.5 rounded-lg text-sm focus:ring-2 focus:ring-blue-600 focus:outline-none"
+                  />
+                  <span className="text-[11px] text-slate-500 mt-1 block">
+                    Value of 1 point when redeemed for plans
+                  </span>
+                </div>
+              </div>
+
+              <div className="pt-2">
+                <button
+                  type="submit"
+                  disabled={saving}
+                  className="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-xl font-bold text-sm shadow-sm transition-colors disabled:opacity-50"
+                >
+                  {saving ? 'Saving...' : 'Save Referral Configuration'}
+                </button>
+              </div>
+            </form>
           </div>
-          <div>
-            <label className="block text-sm font-medium">Base Domain</label>
-            <input type="text" value={referralSettings.baseDomain} onChange={e => setReferralSettings(p => ({...p, baseDomain: e.target.value}))} className="w-full border p-2 rounded" />
+
+          {/* Referral Rewards Management Table */}
+          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+              <div>
+                <h3 className="text-base font-bold text-slate-900">Referral Rewards & Reversals</h3>
+                <p className="text-xs text-slate-500">Track all points awarded for referred student purchases and reverse if needed.</p>
+              </div>
+              <button
+                type="button"
+                onClick={fetchRewards}
+                disabled={loadingRewards}
+                className="self-start sm:self-auto px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold flex items-center gap-1.5"
+              >
+                <span>🔄</span>
+                <span>{loadingRewards ? 'Refreshing...' : 'Refresh List'}</span>
+              </button>
+            </div>
+
+            {(() => {
+              const sortedRewards = [...rewardsList].sort((a, b) => Number(b.pointsAwarded || 0) - Number(a.pointsAwarded || 0));
+              const totalRewardsPages = Math.ceil(sortedRewards.length / rewardsPerPage) || 1;
+              const paginatedRewards = sortedRewards.slice((rewardsPage - 1) * rewardsPerPage, rewardsPage * rewardsPerPage);
+
+              if (loadingRewards) {
+                return <div className="py-8 text-center text-xs text-slate-500">Loading rewards...</div>;
+              }
+              if (rewardsList.length === 0) {
+                return (
+                  <div className="py-8 text-center text-xs text-slate-500 bg-slate-50 rounded-xl border border-dashed border-slate-200">
+                    No referral rewards recorded yet.
+                  </div>
+                );
+              }
+              return (
+                <div className="space-y-4">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead>
+                        <tr className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200">
+                          <th className="py-2.5 px-3">Date</th>
+                          <th className="py-2.5 px-3">Referrer</th>
+                          <th className="py-2.5 px-3">Referred Student / Plan</th>
+                          <th className="py-2.5 px-3">Amount Paid</th>
+                          <th className="py-2.5 px-3">Points Awarded</th>
+                          <th className="py-2.5 px-3">Status</th>
+                          <th className="py-2.5 px-3 text-right">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {paginatedRewards.map((rw: any) => {
+                          const isReversed = rw.status === 'reversed';
+                          const dateStr = rw.createdAt?.toDate 
+                            ? rw.createdAt.toDate().toLocaleDateString()
+                            : rw.date ? new Date(rw.date).toLocaleDateString() : 'N/A';
+
+                          return (
+                            <tr key={rw.id} className="hover:bg-slate-50/80">
+                              <td className="py-3 px-3 text-slate-600 whitespace-nowrap">{dateStr}</td>
+                              <td className="py-3 px-3 font-mono font-semibold text-slate-900 truncate max-w-[120px]" title={rw.referrerId}>
+                                {rw.referrerId}
+                              </td>
+                              <td className="py-3 px-3">
+                                <div className="font-semibold text-slate-900">{rw.planName || 'Plan'}</div>
+                                <div className="text-[11px] text-slate-500 truncate max-w-[160px]">{rw.buyerEmail || rw.buyerId}</div>
+                              </td>
+                              <td className="py-3 px-3 font-semibold text-slate-800 whitespace-nowrap">
+                                RWF {Number(rw.amountPaid || 0).toLocaleString()}
+                              </td>
+                              <td className="py-3 px-3 font-bold text-amber-600 whitespace-nowrap">
+                                🪙 {rw.pointsAwarded} Coins
+                              </td>
+                              <td className="py-3 px-3">
+                                <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase ${
+                                  isReversed ? 'bg-red-100 text-red-800 border border-red-200' : 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                                }`}>
+                                  {rw.status || 'awarded'}
+                                </span>
+                              </td>
+                              <td className="py-3 px-3 text-right">
+                                {!isReversed ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleReverseReward(rw.id)}
+                                    disabled={reversingRewardId === rw.id}
+                                    className="px-2.5 py-1 bg-red-50 hover:bg-red-100 text-red-700 font-bold rounded text-[11px] border border-red-200 transition-colors disabled:opacity-50"
+                                  >
+                                    {reversingRewardId === rw.id ? 'Reversing...' : 'Reverse'}
+                                  </button>
+                                ) : (
+                                  <span className="text-[11px] text-slate-400 italic">Reversed</span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Email-style Pagination Controls */}
+                  <div className="flex items-center justify-between pt-3 border-t border-slate-100 text-xs text-slate-500">
+                    <div>
+                      Showing {Math.min((rewardsPage - 1) * rewardsPerPage + 1, sortedRewards.length)} to {Math.min(rewardsPage * rewardsPerPage, sortedRewards.length)} of {sortedRewards.length} rewards
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setRewardsPage(p => Math.max(p - 1, 1))}
+                        disabled={rewardsPage === 1}
+                        className="px-3 py-1.5 bg-white border border-slate-200 rounded-lg font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40 transition-colors"
+                      >
+                        Previous
+                      </button>
+                      <span className="px-3 py-1.5 font-bold text-slate-700">
+                        Page {rewardsPage} of {totalRewardsPages}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setRewardsPage(p => Math.min(p + 1, totalRewardsPages))}
+                        disabled={rewardsPage === totalRewardsPages}
+                        className="px-3 py-1.5 bg-white border border-slate-200 rounded-lg font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40 transition-colors"
+                      >
+                        Next
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
-          <div>
-            <label className="block text-sm font-medium">Points Percent (of payment)</label>
-            <input type="number" value={referralSettings.pointsPercent} onChange={e => setReferralSettings(p => ({...p, pointsPercent: Number(e.target.value)}))} className="w-full border p-2 rounded" />
-          </div>
-          <div>
-            <label className="block text-sm font-medium">Point Value (RWF per point)</label>
-            <input type="number" value={referralSettings.pointValueRwf} onChange={e => setReferralSettings(p => ({...p, pointValueRwf: Number(e.target.value)}))} className="w-full border p-2 rounded" />
-          </div>
-          <button type="submit" disabled={saving} className="bg-blue-600 text-white px-4 py-2 rounded">Save Referral Settings</button>
-        </form>
+        </div>
       )}
 
       {/* Confirmation Modal */}

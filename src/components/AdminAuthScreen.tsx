@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import { t } from '../i18n/translations';
-import { ShieldCheck, AlertCircle, Globe } from 'lucide-react';
+import { ShieldCheck, AlertCircle, Globe, Home } from 'lucide-react';
 import { Language } from '../types';
 
 export const AdminAuthScreen: React.FC = () => {
@@ -26,7 +26,18 @@ export const AdminAuthScreen: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-slate-900 flex flex-col justify-center py-10 sm:py-12 px-4 sm:px-6 lg:px-8 relative overflow-x-hidden">
-      {/* Language Switcher */}
+      {/* Home Link Top Left */}
+      <div className="absolute top-4 sm:top-6 left-4 sm:left-6 z-10">
+        <a
+          href="/"
+          className="flex items-center gap-1.5 px-3.5 py-2 bg-slate-800 border border-slate-700 text-slate-200 hover:bg-slate-700 rounded-xl shadow-xs text-xs font-bold transition-colors"
+        >
+          <Home className="w-4 h-4 text-blue-400" />
+          <span>{{ en: "Home", rw: "Ahabanza", fr: "Accueil" }[language] || "Home"}</span>
+        </a>
+      </div>
+
+      {/* Language Switcher Top Right */}
       <div className="absolute top-4 sm:top-6 right-4 sm:right-6 flex items-center gap-1.5 bg-slate-800 border border-slate-700 p-1 rounded-xl shadow-xs z-10">
         <Globe className="w-4 h-4 text-slate-400 ml-1.5 mr-0.5" />
         {(['en', 'rw', 'fr'] as Language[]).map((lang) => (
@@ -49,10 +60,18 @@ export const AdminAuthScreen: React.FC = () => {
           T
         </div>
         <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-white">
-          TSINDA Admin Portal
+          {{
+            en: "TSINDA Admin Portal",
+            rw: "Urubuga rw'Abayobozi ba TSINDA",
+            fr: "Portail Admin TSINDA"
+          }[language] || "TSINDA Admin Portal"}
         </h2>
         <p className="mt-1.5 text-xs sm:text-sm text-slate-400 max-w-sm mx-auto leading-relaxed">
-          Restricted access for authorized administrators only.
+          {{
+            en: "Restricted access for authorized administrators only.",
+            rw: "Kurinda kwinjira ku bayobozi bemewe gusa.",
+            fr: "Accès restreint aux administrateurs autorisés."
+          }[language] || "Restricted access for authorized administrators only."}
         </p>
       </div>
 
@@ -60,7 +79,13 @@ export const AdminAuthScreen: React.FC = () => {
         <div className="bg-slate-800 py-8 px-6 sm:px-8 shadow-lg rounded-2xl border border-slate-700 space-y-6">
           <div className="flex items-center gap-2 border-b border-slate-700 pb-3">
             <ShieldCheck className="w-5 h-5 text-blue-500" />
-            <h3 className="text-base font-bold text-white">Admin Sign In</h3>
+            <h3 className="text-base font-bold text-white">
+              {{
+                en: "Admin Sign In",
+                rw: "Kwinjira k'Umuyobozi",
+                fr: "Connexion Admin"
+              }[language] || "Admin Sign In"}
+            </h3>
           </div>
 
           {error && (
@@ -83,7 +108,11 @@ export const AdminAuthScreen: React.FC = () => {
                 <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
                 <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
               </svg>
-              <span>{loading ? "Authenticating..." : "Continue with email"}</span>
+              <span>
+                {loading 
+                  ? ({ en: "Authenticating...", rw: "Biri kwemezwa...", fr: "Authentification..." }[language] || "Authenticating...") 
+                  : ({ en: "Sign in with Google", rw: "Injira ukoresheje Google", fr: "Se connecter avec Google" }[language] || "Sign in with Google")}
+              </span>
             </button>
           </div>
         </div>

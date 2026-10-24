@@ -2,10 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import { t } from '../i18n/translations';
-import { Globe, Lock, Mail, User, Phone, AlertCircle, ShieldCheck, ArrowLeft, CheckCircle2 } from 'lucide-react';
+import { Globe, Lock, Mail, User, Phone, AlertCircle, ShieldCheck, ArrowLeft, CheckCircle2, Home } from 'lucide-react';
 import { Language } from '../types';
-import { normalizePhone, validatePhone, detectNetwork } from '../lib/phoneUtils';
-import { confirmPasswordReset, verifyPasswordResetCode } from 'firebase/auth';
+import { normalizePhone, validatePhone } from '../lib/phoneUtils';
+import { confirmPasswordReset } from 'firebase/auth';
 import { auth } from '../lib/firebase';
 
 export const AuthScreen: React.FC = () => {
@@ -57,12 +57,20 @@ export const AuthScreen: React.FC = () => {
 
     try {
       if (!phone || !phone.trim()) {
-        throw new Error("Wrong phone/email or password.");
+        throw new Error({
+          en: "Wrong phone/email or password.",
+          rw: "Nimero ya telefoni/imeri cyangwa ijambo ry'ibanga sibyo.",
+          fr: "Numéro de téléphone/e-mail ou mot de passe incorrect."
+        }[language] || "Wrong phone/email or password.");
       }
       await signInWithPhone(phone, password);
     } catch (err: any) {
       console.error("Login error code:", err.code || 'unknown');
-      setError("Wrong phone/email or password.");
+      setError({
+        en: "Wrong phone/email or password.",
+        rw: "Nimero ya telefoni/imeri cyangwa ijambo ry'ibanga sibyo.",
+        fr: "Numéro de téléphone/e-mail ou mot de passe incorrect."
+      }[language] || "Wrong phone/email or password.");
     } finally {
       setLoading(false);
     }
@@ -73,18 +81,30 @@ export const AuthScreen: React.FC = () => {
     setError(null);
 
     if (password !== confirmPassword) {
-      setError("Passwords do not match.");
+      setError({
+        en: "Passwords do not match.",
+        rw: "Amagambo y'ibanga ntabwo ahura.",
+        fr: "Les mots de passe ne correspondent pas."
+      }[language] || "Passwords do not match.");
       return;
     }
 
     if (password.length < 8) {
-      setError("Password must be at least 8 characters.");
+      setError({
+        en: "Password must be at least 8 characters.",
+        rw: "Ijambo ry'ibanga rigomba kuba rifite nibura inyuguti 8.",
+        fr: "Le mot de passe doit contenir au moins 8 caractères."
+      }[language] || "Password must be at least 8 characters.");
       return;
     }
 
     const normalized = normalizePhone(phone);
     if (!normalized || !validatePhone(normalized)) {
-      setError("Invalid phone number.");
+      setError({
+        en: "Invalid phone number.",
+        rw: "Nimero ya telefoni si yo.",
+        fr: "Numéro de téléphone invalide."
+      }[language] || "Invalid phone number.");
       return;
     }
 
@@ -93,7 +113,11 @@ export const AuthScreen: React.FC = () => {
       await signUpWithPhone(name, normalized, email, password);
     } catch (err: any) {
       console.error("Signup error:", err);
-      setError(err.message || "Could not create account. Please try again.");
+      setError(err.message || ({
+        en: "Could not create account. Please try again.",
+        rw: "Gufungura konti byanze. Nyamuneka yongera ugerageze.",
+        fr: "Impossible de créer le compte. Veuillez réessayer."
+      }[language] || "Could not create account. Please try again."));
     } finally {
       setLoading(false);
     }
@@ -120,12 +144,6 @@ export const AuthScreen: React.FC = () => {
           rw: "Dirishya rya Google ryarinze n'urukiko rw'urubuga rwawe.",
           fr: "La fenêtre pop-up Google a été bloquée par votre navigateur."
         }[language] || "Google sign-in popup was blocked by your browser.");
-      } else if (code === 'operation-not-allowed') {
-        setError({
-          en: "Google sign-in is not enabled in Firebase. Please enable Google provider in Firebase Authentication console.",
-          rw: "Kwinjira na Google ntibifunguye muri Firebase. Nyamuneka fungura Google muri Firebase.",
-          fr: "La connexion Google n'est pas activée dans la console Firebase."
-        }[language] || "Google sign-in is not enabled in Firebase.");
       } else if (code === 'not-admin') {
         setError({
           en: "This account is not an administrator",
@@ -150,7 +168,11 @@ export const AuthScreen: React.FC = () => {
 
     const normalized = normalizePhone(phone);
     if (!normalized || !validatePhone(normalized)) {
-      setError("Please enter a valid Rwandan MTN (078/079) or Airtel (072/073) phone number.");
+      setError({
+        en: "Please enter a valid Rwandan MTN (078/079) or Airtel (072/073) phone number.",
+        rw: "Nyamuneka shyiraho nimero y'u Rwanda yemewe (MTN cyangwa Airtel).",
+        fr: "Veuillez entrer un numéro de téléphone rwandais valide."
+      }[language] || "Please enter a valid Rwandan phone number.");
       return;
     }
 
@@ -161,7 +183,11 @@ export const AuthScreen: React.FC = () => {
       setSuccessMsg(res.message);
     } catch (err: any) {
       console.error("Password reset error:", err);
-      setSuccessMsg("If this number is registered, a reset link was sent to its email");
+      setSuccessMsg({
+        en: "If this number is registered, a reset link was sent to its email.",
+        rw: "Niba iyi nimero yanditse, link yo gusubiza ijambo ry'ibanga yoherejwe kuri imeri.",
+        fr: "Si ce numéro est enregistré, un lien de réinitialisation a été envoyé à son e-mail."
+      }[language] || "If this number is registered, a reset link was sent to its email");
     } finally {
       setLoading(false);
     }
@@ -170,11 +196,19 @@ export const AuthScreen: React.FC = () => {
   const handleConfirmResetSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (newPassword !== confirmNewPassword) {
-      setError("Passwords do not match.");
+      setError({
+        en: "Passwords do not match.",
+        rw: "Amagambo y'ibanga ntabwo ahura.",
+        fr: "Les mots de passe ne correspondent pas."
+      }[language] || "Passwords do not match.");
       return;
     }
     if (newPassword.length < 6) {
-      setError("Password must be at least 6 characters.");
+      setError({
+        en: "Password must be at least 6 characters.",
+        rw: "Ijambo ry'ibanga rigomba kuba rifite nibura inyuguti 6.",
+        fr: "Le mot de passe doit contenir au moins 6 caractères."
+      }[language] || "Password must be at least 6 characters.");
       return;
     }
     if (!resetOobCode) return;
@@ -183,11 +217,19 @@ export const AuthScreen: React.FC = () => {
     setError(null);
     try {
       await confirmPasswordReset(auth, resetOobCode, newPassword);
-      setResetSuccessMessage("Password successfully reset! You can now sign in with your new password.");
+      setResetSuccessMessage({
+        en: "Password successfully reset! You can now sign in with your new password.",
+        rw: "Ijambo ry'ibanga ryahinduwe neza! Ushobora kwinjira n'ijambo ry'ibanga rishya.",
+        fr: "Mot de passe réinitialisé avec succès ! Vous pouvez vous connecter."
+      }[language] || "Password successfully reset!");
       setResetOobCode(null);
     } catch (err: any) {
       console.error("Confirm reset error:", err);
-      setError(err.message || "Failed to reset password. Link may be expired or invalid.");
+      setError(err.message || ({
+        en: "Failed to reset password. Link may be expired or invalid.",
+        rw: "Guhindura ijambo ry'ibanga byanze. Link ishobora kuba yarangiye cyangwa siyo.",
+        fr: "Échec de la réinitialisation du mot de passe."
+      }[language] || "Failed to reset password."));
     } finally {
       setLoading(false);
     }
@@ -195,7 +237,18 @@ export const AuthScreen: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col justify-center py-10 sm:py-12 px-4 sm:px-6 lg:px-8 relative overflow-x-hidden">
-      {/* Language Switcher */}
+      {/* Home Link Top Left */}
+      <div className="absolute top-4 sm:top-6 left-4 sm:left-6 z-10">
+        <a
+          href="/"
+          className="flex items-center gap-1.5 px-3.5 py-2 bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 rounded-xl shadow-xs text-xs font-bold transition-colors"
+        >
+          <Home className="w-4 h-4 text-blue-600" />
+          <span>{{ en: "Home", rw: "Ahabanza", fr: "Accueil" }[language] || "Home"}</span>
+        </a>
+      </div>
+
+      {/* Language Switcher Top Right */}
       <div className="absolute top-4 sm:top-6 right-4 sm:right-6 flex items-center gap-1.5 bg-white border border-slate-200 p-1 rounded-xl shadow-xs z-10">
         <Globe className="w-4 h-4 text-slate-400 ml-1.5 mr-0.5" />
         {(['en', 'rw', 'fr'] as Language[]).map((lang) => (
@@ -232,8 +285,12 @@ export const AuthScreen: React.FC = () => {
           {resetOobCode ? (
             <div className="space-y-5">
               <div className="text-center space-y-1">
-                <h3 className="text-lg font-bold text-slate-900">Set New Password</h3>
-                <p className="text-xs text-slate-500">Please enter your new password below.</p>
+                <h3 className="text-lg font-bold text-slate-900">
+                  {{ en: "Set New Password", rw: "Shyiraho Ijambo ry'Ibanga Rishya", fr: "Définir un nouveau mot de passe" }[language] || "Set New Password"}
+                </h3>
+                <p className="text-xs text-slate-500">
+                  {{ en: "Please enter your new password below.", rw: "Nyamuneka shyiraho ijambo ry'ibanga rishya munsi.", fr: "Veuillez entrer votre nouveau mot de passe ci-dessous." }[language] || "Please enter your new password below."}
+                </p>
               </div>
 
               {resetSuccessMessage ? (
@@ -249,7 +306,7 @@ export const AuthScreen: React.FC = () => {
                     }}
                     className="w-full min-h-[44px] py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl text-xs sm:text-sm shadow-sm transition-colors"
                   >
-                    Proceed to Sign In
+                    {{ en: "Proceed to Sign In", rw: "Komeza Uyinjiye", fr: "Procéder à la connexion" }[language] || "Proceed to Sign In"}
                   </button>
                 </div>
               ) : (
@@ -262,7 +319,9 @@ export const AuthScreen: React.FC = () => {
                   )}
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">New Password</label>
+                    <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">
+                      {{ en: "New Password", rw: "Ijambo ry'Ibanga Rishya", fr: "Nouveau mot de passe" }[language] || "New Password"}
+                    </label>
                     <div className="relative">
                       <Lock className="absolute left-3.5 top-3.5 w-4 h-4 text-slate-400" />
                       <input
@@ -277,7 +336,9 @@ export const AuthScreen: React.FC = () => {
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Confirm New Password</label>
+                    <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">
+                      {{ en: "Confirm New Password", rw: "Emeza Ijambo ry'Ibanga Rishya", fr: "Confirmer le nouveau mot de passe" }[language] || "Confirm New Password"}
+                    </label>
                     <div className="relative">
                       <Lock className="absolute left-3.5 top-3.5 w-4 h-4 text-slate-400" />
                       <input
@@ -296,7 +357,7 @@ export const AuthScreen: React.FC = () => {
                     disabled={loading}
                     className="w-full min-h-[44px] py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl text-xs sm:text-sm shadow-sm transition-colors disabled:opacity-50"
                   >
-                    {loading ? "Resetting..." : "Update Password"}
+                    {loading ? ({ en: "Resetting...", rw: "Birimo gusubizwa...", fr: "Réinitialisation..." }[language] || "Resetting...") : ({ en: "Update Password", rw: "Vugurura Ijambo ry'Ibanga", fr: "Mettre à jour le mot de passe" }[language] || "Update Password")}
                   </button>
                 </form>
               )}
@@ -315,7 +376,9 @@ export const AuthScreen: React.FC = () => {
                 >
                   <ArrowLeft className="w-4 h-4" />
                 </button>
-                <h3 className="text-base font-bold text-slate-900">Reset Password via Phone</h3>
+                <h3 className="text-base font-bold text-slate-900">
+                  {{ en: "Reset Password via Phone", rw: "Subiza Ijambo ry'Ibanga ukoresheje Telefoni", fr: "Réinitialiser le mot de passe par téléphone" }[language] || "Reset Password via Phone"}
+                </h3>
               </div>
 
               {successMsg ? (
@@ -330,17 +393,23 @@ export const AuthScreen: React.FC = () => {
                     }}
                     className="w-full min-h-[44px] py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl text-xs sm:text-sm shadow-sm transition-colors"
                   >
-                    Return to Sign In
+                    {{ en: "Return to Sign In", rw: "Subira aho Kwinjira", fr: "Retour à la connexion" }[language] || "Return to Sign In"}
                   </button>
                 </div>
               ) : (
                 <form onSubmit={handleForgotPasswordSubmit} className="space-y-4">
                   <p className="text-xs text-slate-500 leading-relaxed">
-                    Enter your registered Rwandan phone number. If valid, a secure password reset link will be sent to your email address on file.
+                    {{
+                      en: "Enter your registered Rwandan phone number. If valid, a secure password reset link will be sent to your email address on file.",
+                      rw: "Injira nimero yawe yanditse mu Rwanda. Niba ari yo, ubutumwa buzoherezwa kuri imeri yawe.",
+                      fr: "Entrez votre numéro de téléphone. Un lien de réinitialisation sera envoyé à votre e-mail."
+                    }[language] || "Enter your registered Rwandan phone number. If valid, a secure password reset link will be sent to your email address on file."}
                   </p>
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Phone Number</label>
+                    <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">
+                      {{ en: "Phone Number", rw: "Nimero ya Telefoni", fr: "Numéro de téléphone" }[language] || "Phone Number"}
+                    </label>
                     <div className="relative">
                       <Phone className="absolute left-3.5 top-3.5 w-4 h-4 text-slate-400" />
                       <input
@@ -360,7 +429,7 @@ export const AuthScreen: React.FC = () => {
                     disabled={loading}
                     className="w-full min-h-[44px] py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl text-xs sm:text-sm shadow-sm transition-colors disabled:opacity-50"
                   >
-                    {loading ? "Processing..." : "Send Reset Link to Email"}
+                    {loading ? ({ en: "Processing...", rw: "Birimo gutunganywa...", fr: "Traitement..." }[language] || "Processing...") : ({ en: "Send Reset Link to Email", rw: "Ohereza Link yo Gusubiza kuri Imeri", fr: "Envoyer le lien de réinitialisation par e-mail" }[language] || "Send Reset Link to Email")}
                   </button>
                 </form>
               )}
@@ -415,7 +484,7 @@ export const AuthScreen: React.FC = () => {
                     <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
                   </svg>
                   <span>
-                    {loading ? "Signing in..." : ({
+                    {loading ? ({ en: "Signing in...", rw: "Biri kwandikwa...", fr: "Connexion..." }[language] || "Signing in...") : ({
                       en: "Sign in with Google",
                       rw: "Injira ukoresheje Google",
                       fr: "Se connecter avec Google"
@@ -429,7 +498,9 @@ export const AuthScreen: React.FC = () => {
             <div className="space-y-5">
               <div className="flex justify-between items-center border-b border-slate-100 pb-3">
                 <div className="text-sm font-bold text-slate-900">
-                  {isSignUp ? "Student Registration" : "Student Sign In"}
+                  {isSignUp 
+                    ? ({ en: "Student Registration", rw: "Kwiyandikisha k'Umunyeshuri", fr: "Inscription Élève" }[language] || "Student Registration")
+                    : ({ en: "Student Sign In", rw: "Kwinjira k'Umunyeshuri", fr: "Connexion Élève" }[language] || "Student Sign In")}
                 </div>
                 <button
                   onClick={() => {
@@ -439,7 +510,9 @@ export const AuthScreen: React.FC = () => {
                   }}
                   className="text-xs font-semibold text-blue-600 hover:underline"
                 >
-                  {isSignUp ? "Already registered? Sign In" : "Create Account"}
+                  {isSignUp 
+                    ? ({ en: "Already registered? Sign In", rw: "Wariyandikishe? Injira", fr: "Déjà inscrit ? Se connecter" }[language] || "Already registered? Sign In")
+                    : ({ en: "Create Account", rw: "Fungura Konti", fr: "Créer un compte" }[language] || "Create Account")}
                 </button>
               </div>
 
@@ -454,7 +527,9 @@ export const AuthScreen: React.FC = () => {
                 /* STUDENT SIGNUP FORM */
                 <form onSubmit={handleStudentSignup} className="space-y-4">
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Full Name *</label>
+                    <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">
+                      {{ en: "Full Name *", rw: "Amazina Yose *", fr: "Nom complet *" }[language] || "Full Name *"}
+                    </label>
                     <div className="relative">
                       <User className="absolute left-3.5 top-3.5 w-4 h-4 text-slate-400" />
                       <input
@@ -469,7 +544,9 @@ export const AuthScreen: React.FC = () => {
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Phone Number *</label>
+                    <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">
+                      {{ en: "Phone Number *", rw: "Nimero ya Telefoni *", fr: "Numéro de téléphone *" }[language] || "Phone Number *"}
+                    </label>
                     <div className="relative">
                       <Phone className="absolute left-3.5 top-3.5 w-4 h-4 text-slate-400" />
                       <input
@@ -485,7 +562,9 @@ export const AuthScreen: React.FC = () => {
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Email Address (For Password Reset) *</label>
+                    <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">
+                      {{ en: "Email Address (For Password Reset) *", rw: "Aderesi ya Imeri (Yo gusubiza ijambo ry'ibanga) *", fr: "Adresse e-mail (Pour réinitialisation) *" }[language] || "Email Address (For Password Reset) *"}
+                    </label>
                     <div className="relative">
                       <Mail className="absolute left-3.5 top-3.5 w-4 h-4 text-slate-400" />
                       <input
@@ -500,7 +579,9 @@ export const AuthScreen: React.FC = () => {
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Password *</label>
+                    <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">
+                      {{ en: "Password *", rw: "Ijambo ry'Ibanga *", fr: "Mot de passe *" }[language] || "Password *"}
+                    </label>
                     <div className="relative">
                       <Lock className="absolute left-3.5 top-3.5 w-4 h-4 text-slate-400" />
                       <input
@@ -515,7 +596,9 @@ export const AuthScreen: React.FC = () => {
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Confirm Password *</label>
+                    <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">
+                      {{ en: "Confirm Password *", rw: "Emeza Ijambo ry'Ibanga *", fr: "Confirmer le mot de passe *" }[language] || "Confirm Password *"}
+                    </label>
                     <div className="relative">
                       <Lock className="absolute left-3.5 top-3.5 w-4 h-4 text-slate-400" />
                       <input
@@ -534,14 +617,16 @@ export const AuthScreen: React.FC = () => {
                     disabled={loading}
                     className="w-full min-h-[44px] py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl text-xs sm:text-sm shadow-sm transition-colors disabled:opacity-50"
                   >
-                    {loading ? "Creating Account..." : "Complete Student Registration"}
+                    {loading ? ({ en: "Creating Account...", rw: "Konti irimo gufungurwa...", fr: "Création du compte..." }[language] || "Creating Account...") : ({ en: "Complete Student Registration", rw: "Wuzuze Kwiyandikisha", fr: "Terminer l'inscription" }[language] || "Complete Student Registration")}
                   </button>
                 </form>
               ) : (
                 /* STUDENT LOGIN FORM */
                 <form onSubmit={handleStudentLogin} className="space-y-4">
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Phone number or email</label>
+                    <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">
+                      {{ en: "Phone number or email", rw: "Nimero ya telefoni cyangwa imeri", fr: "Numéro de téléphone ou e-mail" }[language] || "Phone number or email"}
+                    </label>
                     <div className="relative">
                       <Phone className="absolute left-3.5 top-3.5 w-4 h-4 text-slate-400" />
                       <input
@@ -553,12 +638,16 @@ export const AuthScreen: React.FC = () => {
                         className="w-full min-h-[44px] pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-600"
                       />
                     </div>
-                    <span className="text-[11px] text-slate-500 mt-1 block">Use your phone number or your email.</span>
+                    <span className="text-[11px] text-slate-500 mt-1 block">
+                      {{ en: "Use your phone number or your email.", rw: "Koresha nimero ya telefoni cyangwa imeri yawe.", fr: "Utilisez votre numéro de téléphone ou votre e-mail." }[language] || "Use your phone number or your email."}
+                    </span>
                   </div>
 
                   <div>
                     <div className="flex justify-between items-center mb-1.5">
-                      <label className="block text-xs font-semibold text-slate-700 uppercase">Password</label>
+                      <label className="block text-xs font-semibold text-slate-700 uppercase">
+                        {{ en: "Password", rw: "Ijambo ry'Ibanga", fr: "Mot de passe" }[language] || "Password"}
+                      </label>
                       <button
                         type="button"
                         onClick={() => {
@@ -567,7 +656,7 @@ export const AuthScreen: React.FC = () => {
                         }}
                         className="text-xs text-blue-600 font-semibold hover:underline"
                       >
-                        Forgot password?
+                        {{ en: "Forgot password?", rw: "Wibagiwe ijambo ry'ibanga?", fr: "Mot de passe oublié ?" }[language] || "Forgot password?"}
                       </button>
                     </div>
                     <div className="relative">
@@ -588,7 +677,7 @@ export const AuthScreen: React.FC = () => {
                     disabled={loading}
                     className="w-full min-h-[44px] py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl text-xs sm:text-sm shadow-sm transition-colors disabled:opacity-50"
                   >
-                    {loading ? "Signing In..." : "Sign In to TSINDA"}
+                    {loading ? ({ en: "Signing In...", rw: "Kwinjira...", fr: "Connexion..." }[language] || "Signing In...") : ({ en: "Sign In to TSINDA", rw: "Injira kuri TSINDA", fr: "Se connecter à TSINDA" }[language] || "Sign In to TSINDA")}
                   </button>
                 </form>
               )}

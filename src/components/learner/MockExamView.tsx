@@ -60,8 +60,19 @@ export const MockExamView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   const [errorCode, setErrorCode] = useState<'NO_PLAN' | 'NO_CREDITS' | null>(null);
   const [isResumed, setIsResumed] = useState(false);
   const [reviewMode, setReviewMode] = useState(false);
+  const [reviewFilter, setReviewFilter] = useState<'all' | 'correct' | 'wrong'>('all');
   const [isSubModalOpen, setIsSubModalOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+
+  const handleRetryWrong = async () => {
+    if (!serverResult) return;
+    const wrongQuestionIds = serverResult.results.filter(r => !r.isCorrect).map(r => r.questionId);
+    if (wrongQuestionIds.length === 0) return;
+    
+    // Simplification: In a real app, this would require a specific API call. 
+    // For now, inform the user or implement a basic retry mechanism.
+    alert(`Retry functionality would start a new exam with ${wrongQuestionIds.length} wrong questions.`);
+  };
 
   useEffect(() => {
     let timer: any = null;
@@ -390,7 +401,7 @@ export const MockExamView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
 
           {/* Question Card */}
           <div className="bg-white rounded-2xl border border-slate-200 p-6 sm:p-10 shadow-sm space-y-6">
-            <div className="space-y-2">
+            <div className="space-y-3">
               <div className="inline-block text-[11px] font-bold uppercase tracking-wider text-blue-600 bg-blue-50 px-2.5 py-1 rounded-md">
                 {examQuestions[currentIndex].category}
               </div>
@@ -398,27 +409,61 @@ export const MockExamView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
                 <span>{getLocalizedQuestionText(examQuestions[currentIndex], language).text}</span>
                 {getLocalizedQuestionText(examQuestions[currentIndex], language).isFallback && <NotTranslatedBadge />}
               </h2>
+              {Array.isArray(examQuestions[currentIndex].images) && examQuestions[currentIndex].images.length > 0 ? (
+                <div className="flex flex-wrap gap-3 pt-2">
+                  {examQuestions[currentIndex].images.map((imgUrl, i) => (
+                    <img
+                      key={`q-img-${currentIndex}-${i}`}
+                      src={imgUrl}
+                      alt={`Question illustration ${i+1}`}
+                      onError={(e) => { (e.currentTarget as HTMLElement).style.display = 'none'; }}
+                      className="max-h-48 rounded-xl border border-slate-200 bg-slate-50 object-contain shadow-xs"
+                    />
+                  ))}
+                </div>
+              ) : examQuestions[currentIndex].imageUrl ? (
+                <div className="pt-2">
+                  <img
+                    src={examQuestions[currentIndex].imageUrl}
+                    alt="Question illustration"
+                    onError={(e) => { (e.currentTarget as HTMLElement).style.display = 'none'; }}
+                    className="max-h-48 rounded-xl border border-slate-200 bg-slate-50 object-contain shadow-xs"
+                  />
+                </div>
+              ) : null}
             </div>
 
             <div className="space-y-3 pt-2">
               {getLocalizedQuestionOptions(examQuestions[currentIndex], language).options.map((opt, idx) => {
                 const isSelected = userAnswers[examQuestions[currentIndex].id] === idx;
+                const optLetter = ['a', 'b', 'c', 'd'][idx];
+                const optImg = (examQuestions[currentIndex] as any).optionImages?.[optLetter];
                 return (
                   <button
-                    key={idx}
+                    key={`${examQuestions[currentIndex].id}-${idx}`}
                     onClick={() => setUserAnswers({ ...userAnswers, [examQuestions[currentIndex].id]: idx })}
-                    className={`w-full text-left p-4 rounded-xl border transition-all flex items-center gap-3.5 ${
+                    className={`w-full text-left p-4 rounded-xl border transition-all flex items-start gap-3.5 ${
                       isSelected
                         ? 'border-blue-600 bg-blue-50/50 text-blue-900 font-semibold ring-2 ring-blue-600/20'
                         : 'border-slate-200 hover:border-slate-300 text-slate-700 bg-white'
                     }`}
                   >
-                    <div className={`w-6 h-6 rounded-full border flex items-center justify-center shrink-0 text-xs font-bold ${
+                    <div className={`w-6 h-6 rounded-full border flex items-center justify-center shrink-0 text-xs font-bold mt-0.5 ${
                       isSelected ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-300 text-slate-500'
                     }`}>
                       {String.fromCharCode(65 + idx)}
                     </div>
-                    <span className="text-sm sm:text-base leading-normal">{opt}</span>
+                    <div className="flex-1 space-y-1">
+                      {opt && <span className="text-sm sm:text-base leading-normal block">{opt}</span>}
+                      {optImg && (
+                        <img
+                          src={optImg}
+                          alt={`Option ${String.fromCharCode(65 + idx)} illustration`}
+                          onError={(e) => { (e.currentTarget as HTMLElement).style.display = 'none'; }}
+                          className="max-h-24 rounded-lg border bg-slate-50 object-contain mt-1"
+                        />
+                      )}
+                    </div>
                   </button>
                 );
               })}
@@ -490,60 +535,86 @@ export const MockExamView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
             </div>
           </div>
 
-          <div className="space-y-4 pt-4 border-t border-slate-100">
-            <h3 className="font-bold text-slate-900 text-lg">
-              {language === 'rw' ? 'Isesurwa ry\'Ibibazo' : language === 'fr' ? 'Révision des questions' : 'Question Review'}
-            </h3>
+          <div className="space-y-6 pt-4 border-t border-slate-100">
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <h3 className="font-bold text-slate-900 text-lg">
+                {language === 'rw' ? 'Isesurwa ry\'Ibibazo' : language === 'fr' ? 'Révision des questions' : 'Question Review'}
+              </h3>
+              <div className="flex gap-2 p-1 bg-slate-100 rounded-lg">
+                {(['all', 'correct', 'wrong'] as const).map(f => (
+                  <button key={f} onClick={() => setReviewFilter(f)} className={`px-3 py-1.5 rounded-md text-xs font-bold capitalize ${reviewFilter === f ? 'bg-white shadow-xs text-blue-600' : 'text-slate-600 hover:text-slate-900'}`}>
+                    {f}
+                  </button>
+                ))}
+              </div>
+            </div>
 
             <div className="space-y-4">
-              {serverResult.results.map((r, i) => {
+              {serverResult.results.filter(r => reviewFilter === 'all' || (reviewFilter === 'correct' ? r.isCorrect : !r.isCorrect)).map((r, i) => {
                 const q = examQuestions.find(item => item.id === r.questionId);
-                const explData = getLocalizedQuestionExplanation(q || { id: r.questionId, text: { en: '', rw: '', fr: '' }, options: { en: [], rw: [], fr: [] }, correctIndex: r.correctIndex, explanation: r.explanation, category: '', isPublished: true }, language);
+                if (!q) return null;
+                const explData = getLocalizedQuestionExplanation(q, language);
+                const optData = getLocalizedQuestionOptions(q, language);
 
                 return (
-                  <div key={r.questionId} className={`p-5 rounded-2xl border ${r.isCorrect ? 'border-emerald-200 bg-emerald-50/30' : 'border-rose-200 bg-rose-50/30'} space-y-3`}>
+                  <div key={`${r.questionId}-${i}`} className={`p-5 rounded-2xl border ${r.isCorrect ? 'border-emerald-200 bg-emerald-50/30' : 'border-rose-200 bg-rose-50/30'} space-y-4`}>
                     <div className="flex items-start justify-between gap-3">
-                      <div className="flex items-center gap-2 font-bold text-slate-900 text-sm">
-                        <span className="w-6 h-6 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center text-xs">{i + 1}</span>
-                        <span className="flex items-center flex-wrap gap-2">
-                          <span>{q ? getLocalizedQuestionText(q, language).text : r.questionId}</span>
-                          {q && getLocalizedQuestionText(q, language).isFallback && <NotTranslatedBadge />}
-                        </span>
+                      <div className="font-bold text-slate-900 text-sm flex gap-2">
+                        <span className="w-6 h-6 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center text-xs shrink-0">{i + 1}</span>
+                        <span className="leading-relaxed">{getLocalizedQuestionText(q, language).text}</span>
                       </div>
-                      {r.isCorrect ? (
-                        <span className="inline-flex items-center gap-1 bg-emerald-100 text-emerald-800 text-xs font-bold px-2.5 py-1 rounded-full shrink-0">
-                          <CheckCircle2 className="w-3.5 h-3.5" /> Correct
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 bg-rose-100 text-rose-800 text-xs font-bold px-2.5 py-1 rounded-full shrink-0">
-                          <XCircle className="w-3.5 h-3.5" /> Incorrect
-                        </span>
-                      )}
                     </div>
-
-                    <div className="text-xs text-slate-600 space-y-1 pl-8">
-                      <div>Your answer: <span className="font-semibold text-slate-900">{r.userAnswer !== undefined && r.userAnswer >= 0 ? String.fromCharCode(65 + r.userAnswer) : 'None'}</span></div>
-                      {!r.isCorrect && <div>Correct answer: <span className="font-semibold text-emerald-700">{String.fromCharCode(65 + r.correctIndex)}</span></div>}
-                    </div>
-
-                    <div className="mt-2 pl-8 pt-2 border-t border-slate-200/60 text-xs text-slate-700 space-y-1">
-                      <div className="flex items-center gap-2 font-semibold">
-                        <span>Explanation:</span>
-                        {explData.isFallback && <NotTranslatedBadge />}
+                    {/* Question Images */}
+                    {Array.isArray(q.images) && q.images.length > 0 && (
+                      <div className="flex flex-wrap gap-2 pl-8">
+                        {q.images.map((imgUrl, i) => <img key={i} src={imgUrl} alt="" className="max-h-36 rounded-lg border bg-slate-50 object-contain p-1" />)}
                       </div>
-                      <p className="leading-relaxed">{explData.explanation}</p>
+                    )}
+                    {/* Options */}
+                    <div className="grid grid-cols-1 gap-2 pl-8">
+                      {optData.options.map((opt, idx) => {
+                        const isCorrect = idx === r.correctIndex;
+                        const isUserAnswer = idx === r.userAnswer;
+                        const optLetter = ['a', 'b', 'c', 'd'][idx];
+                        const optImg = (q as any).optionImages?.[optLetter];
+                        
+                        return (
+                          <div key={`${r.questionId}-${idx}`} className={`p-3 rounded-lg border ${isCorrect ? 'border-emerald-500 bg-emerald-50' : isUserAnswer ? 'border-rose-500 bg-rose-50' : 'border-slate-200 bg-white'}`}>
+                            <div className="flex items-start gap-3">
+                              <span className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 text-xs font-bold ${isCorrect ? 'bg-emerald-500 text-white' : isUserAnswer ? 'bg-rose-500 text-white' : 'border border-slate-300 text-slate-500'}`}>
+                                {String.fromCharCode(65 + idx)}
+                              </span>
+                              <div className="flex-1 space-y-1">
+                                <span>{opt}</span>
+                                {optImg && <img src={optImg} alt="" className="max-h-20 rounded-md border bg-slate-50 object-contain mt-1" />}
+                              </div>
+                              {isCorrect && <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />}
+                              {isUserAnswer && !isCorrect && <XCircle className="w-5 h-5 text-rose-600 shrink-0" />}
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
+                    {/* Explanation */}
+                    {explData.explanation && (
+                      <div className="pl-8 pt-2 border-t border-slate-200/50">
+                        <h4 className="text-xs font-bold text-slate-800 mb-1">
+                          {language === 'rw' ? 'Ibisobanuro' : language === 'fr' ? 'Explication' : 'Explanation'}
+                        </h4>
+                        <p className="text-xs text-slate-700 leading-relaxed whitespace-pre-line">{explData.explanation}</p>
+                      </div>
+                    )}
                   </div>
                 );
               })}
             </div>
           </div>
-
-          <div className="flex justify-end pt-4">
-            <button
-              onClick={onBack}
-              className="px-6 py-3 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl text-sm transition-colors"
-            >
+          
+          <div className="flex justify-end pt-4 gap-3">
+            <button onClick={handleRetryWrong} className="px-6 py-3 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl text-sm transition-colors">
+              {language === 'rw' ? 'Subiramo Ibibazo Byanze' : language === 'fr' ? 'Réessayer les questions erronées' : 'Retry wrong questions'}
+            </button>
+            <button onClick={onBack} className="px-6 py-3 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl text-sm transition-colors">
               {language === 'rw' ? 'Subira ku Itangiriro' : language === 'fr' ? 'Terminer' : 'Finish & Exit'}
             </button>
           </div>
