@@ -23,7 +23,7 @@ interface AuthContextType {
   userProfile: UserProfile | null;
   loading: boolean;
   signInWithPhone: (identifier: string, pass: string) => Promise<void>;
-  signUpWithPhone: (name: string, phone: string, realEmail: string, pass: string) => Promise<void>;
+  signUpWithPhone: (name: string, phone: string, realEmail: string, pass: string, referralCode?: string) => Promise<void>;
   signInWithGoogleAdmin: () => Promise<void>;
   requestPasswordReset: (phone: string) => Promise<{ success: boolean; message: string }>;
   updateStudentProfile: (name: string, email: string, currentPass?: string, newPass?: string) => Promise<void>;
@@ -181,7 +181,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const signUpWithPhone = async (name: string, phone: string, realEmail: string, pass: string) => {
+  const signUpWithPhone = async (name: string, phone: string, realEmail: string, pass: string, referralCode?: string) => {
     const normalized = normalizePhone(phone);
     if (!normalized || !validatePhone(normalized)) {
       throw new Error("Invalid phone number.");
@@ -250,7 +250,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           'Authorization': `Bearer ${idToken}`,
           'Content-Type': 'application/json' 
         },
-        body: JSON.stringify({ refCode: new URLSearchParams(window.location.search).get('ref') })
+        body: JSON.stringify({ refCode: referralCode || new URLSearchParams(window.location.search).get('ref') })
       });
 
     } catch (err: any) {

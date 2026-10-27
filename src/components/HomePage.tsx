@@ -754,29 +754,34 @@ export const HomePage: React.FC = () => {
 
           if (section.type === 'faq') {
             const secItems = getSectionItems('faq');
-            // We use a state to manage open FAQ items
-            return (
-              <section key={section.id} id="faq" className="py-20 px-4 sm:px-6 lg:px-8 max-w-4xl mx-auto space-y-10">
-                <div className="text-center space-y-2">
-                  <h2 className="text-2xl sm:text-3xl font-black text-slate-900">{section.title?.[language] || section.title?.en}</h2>
-                  <p className="text-sm text-slate-600">{section.subtitle?.[language] || section.subtitle?.en}</p>
-                </div>
+            const enhancedItems = [
+              ...secItems,
+              { id: 'faq-3', title: { en: 'How do I track my progress?', rw: 'Nkurikirana nte imyigire yanjye?', fr: 'Comment suivre ma progression ?' }, description: { en: 'You can view your progress on the dashboard under Results History.', rw: 'Ushobora kureba uko utera imbere kuri Dashboard mu mateka y\'ibisubizo.', fr: 'Vous pouvez voir votre progression sur le tableau de bord sous Historique des résultats.' } },
+              { id: 'faq-4', title: { en: 'Are the study materials updated?', rw: 'Ibikoresho byo kwiga byaravuguruwe?', fr: 'Le matériel d\'étude est-il à jour ?' }, description: { en: 'Yes, we update our materials regularly to comply with the Rwanda National Gazette.', rw: 'Yego, tuvugurura ibikoresho byacu buri gihe kugira ngo bihuze n\'Igazeti ya Leta.', fr: 'Oui, nous mettons régulièrement à jour nos supports pour nous conformer au Journal Officiel.' } },
+              { id: 'faq-5', title: { en: 'Can I access this on mobile?', rw: 'Nshobora gukoresha uru rubuga kuri telefoni?', fr: 'Puis-je accéder à ceci sur mobile ?' }, description: { en: 'Absolutely, TSINDA is fully responsive and optimized for mobile browsers.', rw: 'Yego rwose, TSINDA ikora neza kuri telefoni zose.', fr: 'Absolument, TSINDA est entièrement responsive et optimisée pour les navigateurs mobiles.' } }
+            ];
 
+            return (
+              <section key={section.id} id="faq" className="py-20 px-4 sm:px-6 lg:px-8 max-w-3xl mx-auto space-y-10">
+                <div className="text-center space-y-2">
+                  <h2 className="text-3xl font-black text-slate-900">{section.title?.[language] || section.title?.en}</h2>
+                  <p className="text-slate-500">{section.subtitle?.[language] || section.subtitle?.en}</p>
+                </div>
                 <div className="space-y-4">
-                  {secItems.map((faq, idx) => {
-                    const id = faq.id || idx.toString();
+                  {enhancedItems.map((faq) => {
+                    const id = faq.id;
                     const isOpen = openFaqIds.includes(id);
                     return (
-                      <div key={id} className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
-                        <button 
+                      <div key={id} className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden transition-all">
+                        <button
                           onClick={() => toggleFaq(id)}
-                          className="w-full flex items-center justify-between p-6 text-left font-bold text-slate-900 text-sm sm:text-base focus:outline-none"
+                          className="w-full text-left p-6 flex items-center justify-between font-bold text-slate-900 hover:bg-slate-50 transition-colors"
                         >
-                          <span>{faq.title?.[language] || faq.title?.en}</span>
+                          {faq.title?.[language] || faq.title?.en}
                           <ChevronDown className={`w-5 h-5 text-slate-400 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
                         </button>
                         {isOpen && (
-                          <div className="px-6 pb-6 pt-0 text-xs sm:text-sm text-slate-600 leading-relaxed border-t border-slate-100">
+                          <div className="px-6 pb-6 text-sm text-slate-600 leading-relaxed border-t border-slate-100 pt-4">
                             {faq.description?.[language] || faq.description?.en}
                           </div>
                         )}

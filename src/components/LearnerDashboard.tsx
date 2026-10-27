@@ -127,13 +127,14 @@ export const LearnerDashboard: React.FC = () => {
           <div className="space-y-6">
           <div className="space-y-6">
             {/* Referral Section */}
-            <div className="bg-blue-50 p-6 rounded-2xl border border-blue-100 flex flex-col sm:flex-row justify-between items-center gap-4">
+            <div className="bg-white p-6 rounded-2xl border border-slate-200 flex flex-col sm:flex-row justify-between items-center gap-4">
               <div>
-                <div className="flex items-center gap-2">
-                  <h3 className="font-bold text-blue-900">{getText(learnerDashboardT.inviteFriends, language)}</h3>
-                  <span className="bg-amber-100 text-amber-800 text-xs font-extrabold px-2 py-0.5 rounded-full">🪙 {points} {getText(learnerDashboardT.coins, language)}</span>
+                <div className="flex items-center gap-3">
+                  <h3 className="font-bold text-slate-900">{getText(learnerDashboardT.inviteFriends, language)}</h3>
+                  <span className="text-sm text-slate-500">·</span>
+                  <span className="text-sm font-semibold text-amber-700">🪙 {points} {getText(learnerDashboardT.coins, language)}</span>
                 </div>
-                <p className="text-sm text-blue-700">{getText(learnerDashboardT.inviteDesc, language)}</p>
+                <p className="text-sm text-slate-600 mt-1">{getText(learnerDashboardT.inviteDesc, language)}</p>
               </div>
               <div className="flex gap-2 w-full sm:w-auto">
                 <input type="text" readOnly value={`${domain.replace(/\/$/, '')}/student?mode=signup&ref=${userProfile?.referralCode || ''}`} className="bg-white border rounded px-3 py-2 text-sm font-mono flex-1 sm:w-72 min-w-0" />
@@ -153,13 +154,14 @@ export const LearnerDashboard: React.FC = () => {
             {/* Streamlined Greeting Section */}
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 py-2">
               <div>
-                <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
-                  {dict.welcomeBack}, <span className="text-blue-600">{userProfile?.name}</span>
+                <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
+                  {dict.welcomeBack}, {userProfile?.name}
                 </h1>
-                <p className="text-xs sm:text-sm text-slate-500 mt-1">
-                  <span className="font-semibold text-blue-700 bg-blue-50 px-2 py-0.5 rounded mr-1.5 border border-blue-200">
+                <p className="text-sm text-slate-500 mt-2">
+                  <span className="font-medium text-slate-900">
                     {getText(learnerDashboardT.student, language)}
                   </span>
+                  <span className="mx-2 text-slate-300">|</span>
                   {getText(learnerDashboardT.learnerDashboardDesc, language)}
                 </p>
               </div>
@@ -193,7 +195,7 @@ export const LearnerDashboard: React.FC = () => {
             </div>
 
             {/* Quick Navigation Cards - 12px rounded cards */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
               {/* Traffic Lessons Card */}
               <div
                 onClick={() => setActiveTab('lessons')}

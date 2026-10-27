@@ -30,6 +30,7 @@ export const AuthScreen: React.FC = () => {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
+  const [referralCode, setReferralCode] = useState('');
   
   // New password state for reset link
   const [newPassword, setNewPassword] = useState('');
@@ -45,8 +46,12 @@ export const AuthScreen: React.FC = () => {
     const params = new URLSearchParams(window.location.search);
     const mode = params.get('mode');
     const code = params.get('oobCode');
+    const ref = params.get('ref');
     if (mode === 'resetPassword' && code) {
       setResetOobCode(code);
+    }
+    if (ref) {
+      setReferralCode(ref);
     }
   }, []);
 
@@ -110,7 +115,7 @@ export const AuthScreen: React.FC = () => {
 
     setLoading(true);
     try {
-      await signUpWithPhone(name, normalized, email, password);
+      await signUpWithPhone(name, normalized, email, password, referralCode);
     } catch (err: any) {
       console.error("Signup error:", err);
       setError(err.message || ({
@@ -607,6 +612,22 @@ export const AuthScreen: React.FC = () => {
                         value={confirmPassword}
                         onChange={(e) => setConfirmPassword(e.target.value)}
                         placeholder="••••••••"
+                        className="w-full min-h-[44px] pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-600"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">
+                      {{ en: "Referral Code (Optional)", rw: "Nimero y'Umureferari (Niba ihari)", fr: "Code de parrainage (Optionnel)" }[language] || "Referral Code (Optional)"}
+                    </label>
+                    <div className="relative">
+                      <User className="absolute left-3.5 top-3.5 w-4 h-4 text-slate-400" />
+                      <input
+                        type="text"
+                        value={referralCode}
+                        onChange={(e) => setReferralCode(e.target.value)}
+                        placeholder="e.g. ABCDEF"
                         className="w-full min-h-[44px] pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-600"
                       />
                     </div>
