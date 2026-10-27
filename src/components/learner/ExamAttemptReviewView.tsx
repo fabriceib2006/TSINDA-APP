@@ -462,11 +462,11 @@ export const ExamAttemptReviewView: React.FC<ExamAttemptReviewViewProps> = ({
 
                   {/* Optional Road Sign / Traffic Image */}
                   {q.imageUrl && (
-                    <div className="max-w-md rounded-xl overflow-hidden border border-slate-200 bg-slate-50 p-2 shadow-2xs">
+                    <div className="w-full max-w-lg bg-slate-50/90 border border-slate-200/90 rounded-2xl p-4 sm:p-6 flex justify-center shadow-xs mx-auto">
                       <img
                         src={q.imageUrl}
                         alt="Road visual reference"
-                        className="w-full h-auto max-h-64 object-contain mx-auto rounded-lg"
+                        className="max-h-72 sm:max-h-96 w-auto object-contain rounded-xl"
                         loading="lazy"
                       />
                     </div>

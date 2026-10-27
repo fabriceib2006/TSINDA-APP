@@ -2772,12 +2772,12 @@ async function startServer() {
         const results = [];
         for (const qId of qIds) {
           const qDoc = await transaction.get(db.collection('questions').doc(qId));
+          const userAnswer = answers[qId] !== undefined ? answers[qId] : null;
           if (!qDoc.exists) {
-            results.push({ questionId: qId, userAnswer: answers[qId], correctIndex: 0, explanation: { en: 'Question missing', rw: '', fr: '' }, isCorrect: false });
+            results.push({ questionId: qId, userAnswer, correctIndex: 0, explanation: { en: 'Question missing', rw: '', fr: '' }, isCorrect: false });
             continue;
           }
           const qData = qDoc.data()!;
-          const userAnswer = answers[qId];
           const isCorrect = userAnswer === qData.correctIndex;
           if (isCorrect) score++;
           results.push({
@@ -2800,6 +2800,12 @@ async function startServer() {
           durationSeconds = Math.max(0, Math.floor((new Date(nowIso).getTime() - startMs) / 1000));
         }
 
+        // Sanitize answers object to replace undefined with null for Firestore
+        const sanitizedAnswers = Object.keys(answers).reduce((acc, key) => {
+          acc[key] = answers[key] !== undefined ? answers[key] : null;
+          return acc;
+        }, {} as Record<string, any>);
+
         transaction.update(attemptRef, {
           status: 'finished',
           submittedAt: nowIso,
@@ -2807,7 +2813,7 @@ async function startServer() {
           total: qIds.length,
           passed: score >= passMark,
           durationSeconds,
-          userAnswers: answers,
+          userAnswers: sanitizedAnswers,
           results
         });
 
@@ -2823,7 +2829,7 @@ async function startServer() {
           submittedAt: nowIso,
           date: nowIso,
           durationSeconds,
-          userAnswers: answers,
+          userAnswers: sanitizedAnswers,
           results
         };
         transaction.set(resultDocRef, resultRecord);

@@ -1,4 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { db } from '../lib/firebase';
+import { doc, getDoc, collection, getDocs } from 'firebase/firestore';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import { t } from '../i18n/translations';
@@ -21,9 +23,37 @@ export const Navbar: React.FC<NavbarProps> = ({
   const dict = t[language];
   const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
   const [langDropdownOpen, setLangDropdownOpen] = useState(false);
+  const [logoUrl, setLogoUrl] = useState<string | null>(null);
 
   const profileRef = useRef<HTMLDivElement>(null);
   const langRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    async function fetchLogo() {
+      try {
+        const setSnap = await getDoc(doc(db, 'siteSettings', 'config')).catch(() => null);
+        if (setSnap && setSnap.exists()) {
+          const settings = setSnap.data();
+          if (settings.logoUrl) {
+            setLogoUrl(settings.logoUrl);
+          }
+        }
+        
+        const slotSnap = await getDocs(collection(db, 'imageSlots')).catch(() => null);
+        if (slotSnap) {
+          slotSnap.docs.forEach(d => {
+            const data = d.data();
+            if (data.slotKey === 'logo' && data.imageUrl) {
+              setLogoUrl(data.imageUrl);
+            }
+          });
+        }
+      } catch (err) {
+        console.error('Error loading Navbar logo:', err);
+      }
+    }
+    fetchLogo();
+  }, []);
 
   // Close dropdowns on outside click
   useEffect(() => {
@@ -78,9 +108,13 @@ export const Navbar: React.FC<NavbarProps> = ({
             href="/" 
             className="flex items-center gap-2.5 min-h-[44px] py-1 focus-visible:ring-2 focus-visible:ring-blue-600 rounded-xl group transition-transform active:scale-98"
           >
-            <div className="w-9 h-9 sm:w-10 sm:h-10 bg-gradient-to-br from-blue-600 via-blue-600 to-indigo-700 text-white font-black rounded-xl flex items-center justify-center shadow-xs shrink-0 text-base sm:text-lg tracking-wider group-hover:shadow-md transition-shadow">
-              T
-            </div>
+            {logoUrl ? (
+              <img src={logoUrl} alt={dict.appName} className="w-9 h-9 sm:w-10 sm:h-10 object-cover rounded-xl shadow-xs" />
+            ) : (
+              <div className="w-9 h-9 sm:w-10 sm:h-10 bg-gradient-to-br from-blue-600 via-blue-600 to-indigo-700 text-white font-black rounded-xl flex items-center justify-center shadow-xs shrink-0 text-base sm:text-lg tracking-wider group-hover:shadow-md transition-shadow">
+                T
+              </div>
+            )}
             <div className="flex flex-col justify-center">
               <div className="flex items-center gap-2">
                 <span className="text-base sm:text-lg font-extrabold tracking-tight text-slate-900 leading-tight">

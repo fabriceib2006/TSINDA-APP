@@ -136,7 +136,7 @@ export const LearnerDashboard: React.FC = () => {
                 <p className="text-sm text-blue-700">{getText(learnerDashboardT.inviteDesc, language)}</p>
               </div>
               <div className="flex gap-2 w-full sm:w-auto">
-                <input type="text" readOnly value={`${domain.replace(/\/$/, '')}/student?mode=signup&ref=${userProfile?.referralCode || ''}`} className="bg-white border rounded px-3 py-2 text-sm font-mono flex-1 sm:w-72" />
+                <input type="text" readOnly value={`${domain.replace(/\/$/, '')}/student?mode=signup&ref=${userProfile?.referralCode || ''}`} className="bg-white border rounded px-3 py-2 text-sm font-mono flex-1 sm:w-72 min-w-0" />
                 <button 
                   onClick={() => {
                     navigator.clipboard.writeText(`${domain.replace(/\/$/, '')}/student?mode=signup&ref=${userProfile?.referralCode || ''}`);

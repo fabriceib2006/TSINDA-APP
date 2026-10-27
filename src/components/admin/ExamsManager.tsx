@@ -74,7 +74,12 @@ export const ExamsManager: React.FC = () => {
   const [correctIdx, setCorrectIdx] = useState(0);
   const [qCategory, setQCategory] = useState('Traffic Signs');
   const [imageUrl, setImageUrl] = useState('');
+  const [optionImageA, setOptionImageA] = useState('');
+  const [optionImageB, setOptionImageB] = useState('');
+  const [optionImageC, setOptionImageC] = useState('');
+  const [optionImageD, setOptionImageD] = useState('');
   const [qPublished, setQPublished] = useState(true);
+  const [isMediaModalOpen, setIsMediaModalOpen] = useState(false);
 
   // Bulk Import state
   const [csvFile, setCsvFile] = useState<File | null>(null);
@@ -162,9 +167,9 @@ export const ExamsManager: React.FC = () => {
     const questionData = {
       text: { en: qTextEn.trim(), rw: qTextRw.trim(), fr: qTextFr.trim() },
       options: {
-        en: [opt1En, opt2En, opt3En, opt4En].map(s => s.trim()).filter(Boolean),
-        rw: [opt1Rw, opt2Rw, opt3Rw, opt4Rw].map(s => s.trim()).filter(Boolean),
-        fr: [opt1Fr, opt2Fr, opt3Fr, opt4Fr].map(s => s.trim()).filter(Boolean)
+        en: [opt1En, opt2En, opt3En, opt4En].map(s => s.trim()),
+        rw: [opt1Rw, opt2Rw, opt3Rw, opt4Rw].map(s => s.trim()),
+        fr: [opt1Fr, opt2Fr, opt3Fr, opt4Fr].map(s => s.trim())
       },
       correctIndex: Number(correctIdx),
       explanation: {
@@ -174,6 +179,12 @@ export const ExamsManager: React.FC = () => {
       },
       category: qCategory,
       imageUrl,
+      optionImages: {
+        a: optionImageA,
+        b: optionImageB,
+        c: optionImageC,
+        d: optionImageD
+      },
       isPublished: qPublished
     };
 
@@ -223,12 +234,26 @@ export const ExamsManager: React.FC = () => {
     }
   };
 
-  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleMainQuestionImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     try {
       const compressed = await compressImage(file);
       setImageUrl(compressed);
+    } catch (err) {
+      console.error("Error compressing image:", err);
+    }
+  };
+
+  const handleOptionImageUpload = async (e: React.ChangeEvent<HTMLInputElement>, option: 'A' | 'B' | 'C' | 'D') => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const compressed = await compressImage(file);
+      if (option === 'A') setOptionImageA(compressed);
+      else if (option === 'B') setOptionImageB(compressed);
+      else if (option === 'C') setOptionImageC(compressed);
+      else if (option === 'D') setOptionImageD(compressed);
     } catch (err) {
       console.error("Error compressing image:", err);
     }
@@ -711,7 +736,7 @@ export const ExamsManager: React.FC = () => {
                 setOpt1Rw(''); setOpt2Rw(''); setOpt3Rw(''); setOpt4Rw('');
                 setOpt1Fr(''); setOpt2Fr(''); setOpt3Fr(''); setOpt4Fr('');
                 setExplanationEn(''); setExplanationRw(''); setExplanationFr('');
-                setCorrectIdx(0); setImageUrl(''); setQPublished(true);
+                setCorrectIdx(0); setImageUrl(''); setOptionImageA(''); setOptionImageB(''); setOptionImageC(''); setOptionImageD(''); setQPublished(true);
                 setIsModalOpen(true);
               }}
               className="min-h-[44px] flex items-center justify-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-[10px] text-sm shadow-sm transition-colors whitespace-nowrap"
@@ -831,6 +856,10 @@ export const ExamsManager: React.FC = () => {
                               setCorrectIdx(q.correctIndex ?? 0);
                               setQCategory(q.category || 'General');
                               setImageUrl(q.imageUrl || '');
+                              setOptionImageA(q.optionImages?.a || '');
+                              setOptionImageB(q.optionImages?.b || '');
+                              setOptionImageC(q.optionImages?.c || '');
+                              setOptionImageD(q.optionImages?.d || '');
                               setQPublished(q.isPublished ?? true);
                               setIsModalOpen(true);
                             }}
@@ -1093,20 +1122,20 @@ export const ExamsManager: React.FC = () => {
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Option A (EN) *</label>
-                      <input type="text" required value={opt1En} onChange={(e) => setOpt1En(e.target.value)} className="w-full min-h-[44px] px-3.5 py-2 rounded-[10px] border border-slate-300 text-base sm:text-sm bg-white" />
+                      <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Option A (EN)</label>
+                      <input type="text" value={opt1En} onChange={(e) => setOpt1En(e.target.value)} className="w-full min-h-[44px] px-3.5 py-2 rounded-[10px] border border-slate-300 text-base sm:text-sm bg-white" />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Option B (EN) *</label>
-                      <input type="text" required value={opt2En} onChange={(e) => setOpt2En(e.target.value)} className="w-full min-h-[44px] px-3.5 py-2 rounded-[10px] border border-slate-300 text-base sm:text-sm bg-white" />
+                      <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Option B (EN)</label>
+                      <input type="text" value={opt2En} onChange={(e) => setOpt2En(e.target.value)} className="w-full min-h-[44px] px-3.5 py-2 rounded-[10px] border border-slate-300 text-base sm:text-sm bg-white" />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Option C (EN) *</label>
-                      <input type="text" required value={opt3En} onChange={(e) => setOpt3En(e.target.value)} className="w-full min-h-[44px] px-3.5 py-2 rounded-[10px] border border-slate-300 text-base sm:text-sm bg-white" />
+                      <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Option C (EN)</label>
+                      <input type="text" value={opt3En} onChange={(e) => setOpt3En(e.target.value)} className="w-full min-h-[44px] px-3.5 py-2 rounded-[10px] border border-slate-300 text-base sm:text-sm bg-white" />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Option D (EN) *</label>
-                      <input type="text" required value={opt4En} onChange={(e) => setOpt4En(e.target.value)} className="w-full min-h-[44px] px-3.5 py-2 rounded-[10px] border border-slate-300 text-base sm:text-sm bg-white" />
+                      <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Option D (EN)</label>
+                      <input type="text" value={opt4En} onChange={(e) => setOpt4En(e.target.value)} className="w-full min-h-[44px] px-3.5 py-2 rounded-[10px] border border-slate-300 text-base sm:text-sm bg-white" />
                     </div>
                   </div>
                   <div>
@@ -1222,7 +1251,7 @@ export const ExamsManager: React.FC = () => {
                 <input
                   type="file"
                   accept="image/*"
-                  onChange={handleImageUpload}
+                  onChange={handleMainQuestionImageUpload}
                   className="w-full min-h-[44px] text-base sm:text-sm text-slate-500 file:mr-2 file:py-2 file:px-3 file:rounded-[8px] file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700"
                 />
               </div>
@@ -1230,9 +1259,27 @@ export const ExamsManager: React.FC = () => {
               {imageUrl && (
                 <div className="flex items-center gap-4 p-3 bg-slate-50 rounded-xl">
                   <img src={imageUrl} alt="Preview" className="w-16 h-16 object-cover rounded-lg border" />
-                  <span className="text-xs text-slate-500 font-medium">Image attached successfully</span>
+                  <span className="text-xs text-slate-500 font-medium">Question image attached.</span>
                 </div>
               )}
+
+              {/* Option Image Inputs */}
+              <div className="grid grid-cols-2 gap-4">
+                  {['A', 'B', 'C', 'D'].map(opt => (
+                      <div key={opt}>
+                          <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">Option {opt} Image (Optional)</label>
+                          <div className="flex gap-2">
+                             <input type="file" accept="image/*" onChange={(e) => {
+                                 console.log(`Uploading for option ${opt}`);
+                                 handleOptionImageUpload(e, opt as any);
+                             }} className="w-full text-xs" />
+                          </div>
+                          {(opt === 'A' && optionImageA) || (opt === 'B' && optionImageB) || (opt === 'C' && optionImageC) || (opt === 'D' && optionImageD) ? (
+                              <img src={opt === 'A' ? optionImageA : opt === 'B' ? optionImageB : opt === 'C' ? optionImageC : optionImageD} className="w-12 h-12 mt-2 border rounded" alt={`Option ${opt} Preview`} />
+                          ) : null}
+                      </div>
+                  ))}
+              </div>
 
               <div className="flex items-center gap-2 pt-1">
                 <input

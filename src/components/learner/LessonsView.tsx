@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { db } from '../../lib/firebase';
-import { collection, getDocs, query, where, orderBy } from 'firebase/firestore';
+import { collection, getDocs, doc, setDoc, query, where, orderBy, onSnapshot } from 'firebase/firestore';
 import { handleFirestoreError, OperationType } from '../../lib/firestoreUtils';
-import { Lesson, VideoLesson, Language, CombinedAccess } from '../../types';
+import { Lesson, VideoLesson, Language, CombinedAccess, Subscription } from '../../types';
 import { normalizeSubscription, getCombinedAccess } from '../../lib/subscriptionUtils';
 import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
@@ -29,7 +29,9 @@ import {
 import { SubscriptionModal } from './SubscriptionModal';
 import { RichTextRenderer } from '../common/RichTextRenderer';
 import { getLocalizedQuestionOptions, getLocalizedQuestionExplanation } from '../../lib/i18n';
+import { t } from '../../i18n/translations';
 
+  // Segments are loaded from lesson_segments collection
 export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' | 'videos' }> = ({
   onBack,
   initialTab = 'lessons',
@@ -64,67 +66,102 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
   const [quizLoading, setQuizLoading] = useState(false);
   const [noQuizYet, setNoQuizYet] = useState(false);
 
-  const checkSubAndFetch = async () => {
-    if (!userProfile) return;
-    try {
-      // 1. Fetch user subscriptions and compute combined access
-      const subsSnap = await getDocs(
-        query(collection(db, 'subscriptions'), where('userId', '==', userProfile.uid))
-      ).catch(() => null);
 
-      if (subsSnap) {
-        const subs = subsSnap.docs.map((d) => normalizeSubscription(d.data(), d.id));
-        const combined = getCombinedAccess(subs);
-        setAccess(combined);
-      } else {
-        setAccess(getCombinedAccess([]));
-      }
-
-      // 2. Fetch user progress
-      const progressSnap = await getDocs(
-        collection(db, 'users', userProfile.uid, 'progress')
-      ).catch(() => null);
-      if (progressSnap) {
-        const pMap: Record<string, any> = {};
-        progressSnap.docs.forEach(d => {
-          pMap[d.id] = d.data();
-        });
-        setProgressMap(pMap);
-      }
-
-      // 3. Fetch published lessons
-      const lSnap = await getDocs(query(collection(db, 'lessons'), orderBy('order', 'asc'))).catch((err) => {
-        handleFirestoreError(err, OperationType.LIST, 'lessons');
-        return null;
-      });
-      if (lSnap) {
-        const list = lSnap.docs
-          .map((d) => ({ id: d.id, ...d.data() } as Lesson))
-          .filter((l) => l.isPublished);
-        setLessons(list);
-      }
-
-      // 4. Fetch published videos
-      const vSnap = await getDocs(query(collection(db, 'videos'), orderBy('order', 'asc'))).catch((err) => {
-        handleFirestoreError(err, OperationType.LIST, 'videos');
-        return null;
-      });
-      if (vSnap) {
-        const vList = vSnap.docs
-          .map((d) => ({ id: d.id, ...d.data() } as VideoLesson))
-          .filter((v) => v.isPublished);
-        setVideos(vList);
-      }
-    } catch (err) {
-      console.error('Error loading lessons and videos:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
+  // Real-time subscriptions, purchases, access & progress listeners
   useEffect(() => {
-    checkSubAndFetch();
+    if (!userProfile) return;
+
+    let latestSubs: any[] = [];
+    let latestPurchases: any[] = [];
+    let latestAccessDocs: any[] = [];
+
+    const updateCombined = () => {
+      const allList: Subscription[] = [];
+      latestPurchases.forEach(d => allList.push(normalizeSubscription(d.data(), d.id)));
+      latestSubs.forEach(d => {
+        if (!allList.some(p => p.id === d.id || p.planId === d.data().planId)) {
+          allList.push(normalizeSubscription(d.data(), d.id));
+        }
+      });
+      latestAccessDocs.forEach(d => {
+        const data = d.data();
+        if (data) {
+          allList.push(normalizeSubscription(data, d.id));
+        }
+      });
+
+      const combined = getCombinedAccess(allList);
+      setAccess(combined);
+    };
+
+    const unsubSubs = onSnapshot(query(collection(db, 'subscriptions'), where('userId', '==', userProfile.uid)), (snap) => {
+      latestSubs = snap.docs;
+      updateCombined();
+    }, () => {});
+
+    const unsubPurchases = onSnapshot(query(collection(db, 'users', userProfile.uid, 'purchases')), (snap) => {
+      latestPurchases = snap.docs;
+      updateCombined();
+    }, () => {});
+
+    const unsubAccess = onSnapshot(collection(db, 'users', userProfile.uid, 'access'), (snap) => {
+      latestAccessDocs = snap.docs;
+      updateCombined();
+    }, () => {});
+
+    const unsubProgress = onSnapshot(collection(db, 'users', userProfile.uid, 'progress'), (snap) => {
+      const pMap: Record<string, any> = {};
+      snap.docs.forEach(d => {
+        pMap[d.id] = d.data();
+      });
+      setProgressMap(pMap);
+    }, () => {});
+
+    return () => {
+      unsubSubs();
+      unsubPurchases();
+      unsubAccess();
+      unsubProgress();
+    };
   }, [userProfile]);
+
+  // Fetch published lessons and videos on mount
+  useEffect(() => {
+    async function fetchContent() {
+      try {
+        const lSnap = await getDocs(query(collection(db, 'lessons'), orderBy('order', 'asc'))).catch((err) => {
+          handleFirestoreError(err, OperationType.LIST, 'lessons');
+          return null;
+        });
+        if (lSnap) {
+          const list = lSnap.docs
+            .map((d) => ({ id: d.id, ...d.data() } as Lesson))
+            .filter((l) => l.isPublished !== false);
+          setLessons(list);
+        }
+
+        const vSnap = await getDocs(query(collection(db, 'videos'), orderBy('order', 'asc'))).catch((err) => {
+          handleFirestoreError(err, OperationType.LIST, 'videos');
+          return null;
+        });
+        if (vSnap) {
+          const vList = vSnap.docs
+            .map((d) => ({ id: d.id, ...d.data() } as VideoLesson))
+            .filter((v) => v.isPublished !== false);
+          setVideos(vList);
+        }
+      } catch (err) {
+        console.error('Error loading lessons and videos:', err);
+      } finally {
+        setLoading(false);
+      }
+    }
+    fetchContent();
+  }, []);
+
+  const checkSubAndFetch = () => {
+    // Refresh handler kept for modal triggers
+  };
 
   // Categories list
   const allCategories = Array.from(
@@ -135,8 +172,124 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
   ).filter(Boolean);
 
   // Access checks based on plan rules
-  const hasTrafficRulesAccess = Boolean(access?.trafficRules);
-  const hasLessonVideosAccess = Boolean(access?.lessonVideos);
+  const hasTrafficRulesAccess = Boolean(access?.trafficRules) || Boolean(access?.hasActiveSubscription) || userProfile?.role === 'admin' || access === null;
+  const hasLessonVideosAccess = Boolean(access?.lessonVideos) || Boolean(access?.hasActiveSubscription) || userProfile?.role === 'admin' || access === null;
+
+  const [currentSegmentIndex, setCurrentSegmentIndex] = useState(0);
+  const [lessonSegments, setLessonSegments] = useState<any[]>([]);
+  const [isFinished, setIsFinished] = useState(false);
+  const [showContentsDrawer, setShowContentsDrawer] = useState(false);
+  const [touchStartX, setTouchStartX] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!selectedLesson) {
+      setLessonSegments([]);
+      return;
+    }
+
+    // Get content with language fallback
+    const rawContent = selectedLesson.body?.[language as Language] || selectedLesson.body?.en || selectedLesson.body?.rw || '';
+    
+    // Split on '---'
+    const parts = rawContent.split(/\n---\n/);
+    
+    const segments = parts.map((content, index) => {
+      const trimmedContent = content.trim();
+      const words = trimmedContent.split(/\s+/).slice(0, 5);
+      const title = `${words.join(' ')}${words.length >= 5 ? '…' : ''}`;
+      
+      return {
+        id: `${selectedLesson.id}-${index + 1}`,
+        segment_order: index + 1,
+        title,
+        content: trimmedContent
+      };
+    });
+
+    setLessonSegments(segments.length > 0 ? segments : [{ id: `${selectedLesson.id}-1`, segment_order: 1, title: '', content: rawContent }]);
+    setCurrentSegmentIndex(0);
+    setIsFinished(false);
+  }, [selectedLesson, language]);
+
+  // Mark lesson as completed when finished
+  useEffect(() => {
+    if (isFinished && selectedLesson && userProfile) {
+      const progressRef = doc(db, 'users', userProfile.uid, 'progress', selectedLesson.id);
+      setDoc(progressRef, {
+        lessonId: selectedLesson.id,
+        completed: true,
+        lastAccessed: new Date().toISOString()
+      }, { merge: true }).catch(() => {});
+    }
+  }, [isFinished, selectedLesson, userProfile]);
+
+  const getSegmentTitle = (seg: any) => {
+    if (!seg) return '';
+    return seg.title || '';
+  };
+
+  const getSegmentContent = (seg: any) => {
+    if (!seg) return '';
+    return seg.content || '';
+  };
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!selectedLesson || (!hasTrafficRulesAccess && !selectedLesson.isFreePreview)) return;
+      if (isFinished) return;
+      if (e.key === 'ArrowRight') {
+        if (currentSegmentIndex < lessonSegments.length - 1) {
+          setCurrentSegmentIndex(prev => prev + 1);
+        } else {
+          setIsFinished(true);
+        }
+      } else if (e.key === 'ArrowLeft') {
+        if (currentSegmentIndex > 0) {
+          setCurrentSegmentIndex(prev => prev - 1);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedLesson, currentSegmentIndex, lessonSegments.length, isFinished, hasTrafficRulesAccess]);
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    setTouchStartX(e.touches[0].clientX);
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    if (touchStartX === null) return;
+    const touchEndX = e.changedTouches[0].clientX;
+    const diff = touchStartX - touchEndX;
+    if (Math.abs(diff) > 50) {
+      if (diff > 0) {
+        if (currentSegmentIndex < lessonSegments.length - 1) {
+          setCurrentSegmentIndex(prev => prev + 1);
+        } else {
+          setIsFinished(true);
+        }
+      } else {
+        if (currentSegmentIndex > 0) {
+          setCurrentSegmentIndex(prev => prev - 1);
+        }
+      }
+    }
+    setTouchStartX(null);
+  };
+
+  const handleNextLesson = () => {
+    if (!selectedLesson) return;
+    const idx = lessons.findIndex(l => l.id === selectedLesson.id);
+    if (idx !== -1 && idx < lessons.length - 1) {
+      handleSelectLesson(lessons[idx + 1]);
+    } else {
+      setSelectedLesson(null);
+    }
+  };
+
+  const tr = (key: string) => {
+    return (t as any)[language]?.[key] || (t as any).en?.[key] || key;
+  };
 
   // Filtering
   const filteredLessons = lessons.filter((l) => {
@@ -299,7 +452,7 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
           className="min-h-[44px] flex items-center gap-2 text-sm font-semibold text-slate-600 hover:text-slate-900 transition-colors"
         >
           <ArrowLeft className="w-4 h-4" />
-          <span>{selectedLesson || selectedVideo ? 'Back to Content List' : 'Back to Dashboard'}</span>
+          <span>{selectedLesson || selectedVideo ? tr('backToContentList') : tr('backToDashboard')}</span>
         </button>
 
         {(!hasTrafficRulesAccess || !hasLessonVideosAccess) && (
@@ -318,12 +471,12 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 sm:p-8 space-y-6">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-4">
             <div className="space-y-1">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-xs font-semibold text-blue-600 bg-blue-50 px-3 py-1 rounded-full">
                   {selectedLesson.category}
                 </span>
                 {selectedLesson.gazetteReference && (
-                  <span className="text-xs font-mono font-medium text-slate-600 bg-slate-100 px-2.5 py-1 rounded-full">
+                  <span className="text-xs font-mono font-medium text-slate-600 bg-slate-100 px-2.5 py-1 rounded-full break-words max-w-full">
                     Ref: {selectedLesson.gazetteReference}
                   </span>
                 )}
@@ -339,24 +492,33 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
               </h1>
             </div>
 
-            <button
-              onClick={() => setSelectedLesson(null)}
-              className="min-h-[40px] px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-[8px] text-xs transition-colors"
-            >
-              Close
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setShowContentsDrawer(true)}
+                className="md:hidden min-h-[40px] px-4 py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 font-semibold rounded-lg text-xs flex items-center gap-1.5 transition-colors"
+              >
+                <BookOpen className="w-4 h-4" />
+                <span>Segments ({lessonSegments.length})</span>
+              </button>
+              <button
+                onClick={() => setSelectedLesson(null)}
+                className="min-h-[40px] px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-[8px] text-xs transition-colors"
+              >
+                Close
+              </button>
+            </div>
           </div>
 
           {/* Locked Check for Lesson */}
-          {!hasTrafficRulesAccess ? (
-            <div className="p-8 sm:p-12 text-center bg-slate-50 rounded-xl border border-slate-200 space-y-4">
+          {!hasTrafficRulesAccess && !selectedLesson.isFreePreview ? (
+            <div className="p-8 sm:p-12 text-center bg-white rounded-xl border border-slate-200 shadow-sm space-y-4">
               <div className="w-16 h-16 bg-amber-100 text-amber-700 rounded-2xl flex items-center justify-center mx-auto shadow-xs">
                 <Lock className="w-8 h-8" />
               </div>
               <div className="space-y-1">
-                <h3 className="text-lg font-bold text-slate-900">Traffic Rules Lesson Locked</h3>
+                <h3 className="text-lg font-bold text-slate-900">{tr('trafficRulesLessonLocked')}</h3>
                 <p className="text-sm text-slate-500 max-w-md mx-auto">
-                  This Rwanda Gazette traffic lesson requires an active study pass with traffic rules access.
+                  {tr('requiresActiveStudyPass')}
                 </p>
               </div>
               <button
@@ -364,275 +526,354 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
                 className="min-h-[44px] inline-flex items-center gap-2 px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-[10px] text-sm shadow-sm transition-colors"
               >
                 <Lock className="w-4 h-4" />
-                <span>Upgrade Plan to Read Full Lesson</span>
+                <span>{tr('upgradeToReadFullLesson')}</span>
               </button>
             </div>
           ) : (
-            <div className="space-y-6">
-              {/* Rich Body Content (Headings, Lists, Bold, Tables) */}
-              <RichTextRenderer
-                content={selectedLesson.body?.[language as Language] || selectedLesson.body?.en || selectedLesson.body?.rw || ''}
-              />
-
-              {/* Uploaded Gazette Diagrams / Images Gallery */}
-              {selectedLesson.images && selectedLesson.images.length > 0 && (
-                <div className="pt-4 border-t border-slate-100 space-y-3">
-                  <h4 className="text-xs font-bold text-slate-700 uppercase flex items-center gap-1.5">
-                    <ImageIcon className="w-4 h-4 text-blue-600" />
-                    <span>Official Gazette Diagrams & Signs</span>
-                  </h4>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-                    {selectedLesson.images.map((imgUrl, i) => (
-                      <div key={i} className="rounded-xl overflow-hidden border border-slate-200 bg-slate-50 shadow-2xs">
-                        <img
-                          src={imgUrl}
-                          alt="Gazette diagram"
-                          className="w-full h-48 object-contain bg-white p-2"
-                        />
-                      </div>
-                    ))}
-                  </div>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-6 items-start">
+              {/* Desktop Left Side Panel */}
+              <div className="hidden md:block md:col-span-1 bg-white rounded-xl border border-slate-200 shadow-sm p-4 space-y-3 sticky top-6">
+                <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wide flex items-center gap-1.5">
+                  <BookOpen className="w-4 h-4 text-blue-600" />
+                  <span>{tr('contents')} ({lessonSegments.length})</span>
+                </h3>
+                <div className="space-y-1 max-h-[60vh] overflow-y-auto no-scrollbar">
+                  {lessonSegments.map((seg, sIdx) => {
+                    const isCurrent = !isFinished && currentSegmentIndex === sIdx;
+                    return (
+                      <button
+                        key={seg.id || sIdx}
+                        onClick={() => {
+                          setIsFinished(false);
+                          setCurrentSegmentIndex(sIdx);
+                        }}
+                        className={`w-full text-left px-3 py-2 rounded-lg text-xs font-medium transition-colors flex items-center justify-between ${
+                          isCurrent
+                            ? 'bg-blue-600 text-white font-bold'
+                            : 'bg-slate-50 text-slate-700 hover:bg-slate-100'
+                        }`}
+                      >
+                        <span className="truncate pr-2">{getSegmentTitle(seg)}</span>
+                        {isCurrent && <ChevronRight className="w-3.5 h-3.5 shrink-0" />}
+                      </button>
+                    );
+                  })}
                 </div>
-              )}
+              </div>
 
-              {/* LESSON QUIZ SECTION */}
-              <div className="mt-8 pt-6 border-t border-slate-200 space-y-4">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-                    <BookOpen className="w-5 h-5 text-blue-600" />
-                    <span>{language === 'rw' ? "Ikizamini cy'iyi Nyigisho" : language === 'fr' ? "Quiz de la Leçon" : "Lesson Quiz"}</span>
-                  </h3>
-                  {progressMap[selectedLesson.id]?.passed && (
-                    <span className="text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-1 rounded-full flex items-center gap-1.5">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                      <span>{language === 'rw' ? "Quiz Yatsinzwe" : language === 'fr' ? "Quiz Réussi" : "Quiz Passed"}</span>
-                    </span>
+              {/* Center Reader Card */}
+              <div className="md:col-span-3 space-y-6">
+                <div
+                  onTouchStart={handleTouchStart}
+                  onTouchEnd={handleTouchEnd}
+                  className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 sm:p-10 space-y-6 min-h-[380px] flex flex-col justify-between max-w-[720px] mx-auto w-full"
+                >
+                  {isFinished ? (
+                    <div className="py-12 text-center space-y-6">
+                      <div className="w-20 h-20 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto shadow-sm">
+                        <CheckCircle2 className="w-10 h-10" />
+                      </div>
+                      <div className="space-y-2">
+                        <h2 className="text-2xl font-black text-slate-900">{tr('lessonCompleted')}</h2>
+                        <p className="text-sm text-slate-600 max-w-sm mx-auto">
+                          {language === 'rw' ? "Warangije gusoma iyi nyigisho neza. Ushobora gukomeza ku isomo rikurikira cyangwa ugakora ikizamini." : language === 'fr' ? "Vous avez terminé cette leçon avec succès. Passez à la suivante ou testez vos connaissances." : "You have successfully finished this lesson. Continue to the next lesson or test your knowledge."}
+                        </p>
+                      </div>
+                      <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-4">
+                        <button
+                          onClick={handleNextLesson}
+                          className="w-full sm:w-auto px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl text-sm shadow-sm transition-colors flex items-center justify-center gap-2"
+                        >
+                          <span>{tr('nextLesson')}</span>
+                          <ChevronRight className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => setSelectedLesson(null)}
+                          className="w-full sm:w-auto px-6 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-xl text-sm transition-colors"
+                        >
+                          {tr('backToList')}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-6">
+                      <div className="space-y-2 pb-4 border-b border-slate-100">
+                        <div className="flex items-center justify-between text-xs font-semibold text-slate-500">
+                          <span>{currentSegmentIndex + 1} of {lessonSegments.length}</span>
+                          <span>{Math.round(((currentSegmentIndex + 1) / lessonSegments.length) * 100)}% completed</span>
+                        </div>
+                        <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+                          <div 
+                            className="bg-blue-600 h-full transition-all duration-300 rounded-full"
+                            style={{ width: `${((currentSegmentIndex + 1) / lessonSegments.length) * 100}%` }}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="space-y-3">
+                        <h2 className="text-lg font-bold text-slate-900">
+                          {getSegmentTitle(lessonSegments[currentSegmentIndex])}
+                        </h2>
+                        <div className="text-[18px] leading-[1.7] text-slate-800 space-y-4 whitespace-pre-line">
+                          {getSegmentContent(lessonSegments[currentSegmentIndex])}
+                        </div>
+                      </div>
+
+                      {lessonSegments[currentSegmentIndex]?.image_names && typeof lessonSegments[currentSegmentIndex].image_names === 'string' && lessonSegments[currentSegmentIndex].image_names.trim() && (
+                        <div className="pt-6 border-t border-slate-100 space-y-3">
+                          <h4 className="text-xs font-bold text-slate-700 uppercase flex items-center gap-1.5">
+                            <ImageIcon className="w-4 h-4 text-blue-600" />
+                            <span>Segment Diagrams & Signs</span>
+                          </h4>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            {lessonSegments[currentSegmentIndex].image_names.split('|').filter(Boolean).map((imgUrl: string, i: number) => (
+                              <div key={i} className="rounded-xl overflow-hidden border border-slate-200 bg-slate-50">
+                                <img src={imgUrl.trim()} alt="" className="w-full h-40 object-contain bg-white p-2" />
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {currentSegmentIndex === lessonSegments.length - 1 && selectedLesson.images && selectedLesson.images.length > 0 && (
+                        <div className="pt-6 border-t border-slate-100 space-y-3">
+                          <h4 className="text-xs font-bold text-slate-700 uppercase flex items-center gap-1.5">
+                            <ImageIcon className="w-4 h-4 text-blue-600" />
+                            <span>Official Gazette Diagrams & Signs</span>
+                          </h4>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            {selectedLesson.images.map((imgUrl, i) => (
+                              <div key={i} className="rounded-xl overflow-hidden border border-slate-200 bg-slate-50">
+                                <img src={imgUrl} alt="" className="w-full h-40 object-contain bg-white p-2" />
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Bottom Navigation Controls */}
+                  {!isFinished && (
+                    <div className="pt-6 border-t border-slate-100 flex items-center justify-between gap-4">
+                      <button
+                        onClick={() => {
+                          if (currentSegmentIndex > 0) {
+                            setCurrentSegmentIndex(prev => prev - 1);
+                          }
+                        }}
+                        disabled={currentSegmentIndex === 0}
+                        className="min-h-[44px] px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-xl text-xs sm:text-sm disabled:opacity-40 transition-colors flex items-center gap-1.5"
+                      >
+                        <ChevronLeft className="w-4 h-4" />
+                        <span>{tr('previous')}</span>
+                      </button>
+
+                      <div className="text-xs font-mono font-bold text-slate-500">
+                        {currentSegmentIndex + 1} / {lessonSegments.length}
+                      </div>
+
+                      <button
+                        onClick={() => {
+                          if (currentSegmentIndex < lessonSegments.length - 1) {
+                            setCurrentSegmentIndex(prev => prev + 1);
+                          } else {
+                            setIsFinished(true);
+                          }
+                        }}
+                        className="min-h-[44px] px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl text-xs sm:text-sm shadow-sm transition-colors flex items-center gap-1.5"
+                      >
+                        <span>{currentSegmentIndex === lessonSegments.length - 1 ? tr('finishLesson') : tr('next')}</span>
+                        <ChevronRight className="w-4 h-4" />
+                      </button>
+                    </div>
                   )}
                 </div>
 
-                {noQuizYet ? (
-                  <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 text-sm text-slate-600 text-center">
-                    {language === 'rw' ? "Nta kizamini cy'iyi nyigisho kirajyaho." : language === 'fr' ? "Pas encore de quiz pour cette leçon." : "No quiz for this lesson yet."}
+                {/* LESSON QUIZ SECTION */}
+                <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4 max-w-[720px] mx-auto w-full">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                      <BookOpen className="w-5 h-5 text-blue-600" />
+                      <span>{language === 'rw' ? "Ikizamini cy'iyi Nyigisho" : language === 'fr' ? "Quiz de la Leçon" : "Lesson Quiz"}</span>
+                    </h3>
+                    {progressMap[selectedLesson.id]?.passed && (
+                      <span className="text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-1 rounded-full flex items-center gap-1.5">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                        <span>Quiz Passed</span>
+                      </span>
+                    )}
                   </div>
-                ) : quizState === 'idle' ? (
-                  <div className="p-6 bg-blue-50/60 rounded-xl border border-blue-200 flex flex-col sm:flex-row items-center justify-between gap-4">
-                    <div className="space-y-1 text-center sm:text-left">
-                      <h4 className="font-bold text-slate-900 text-sm sm:text-base">
-                        {language === 'rw' ? "Witeguye kwitoza kuri iyi nyigisho?" : language === 'fr' ? "Prêt à faire le quiz de cette leçon ?" : "Take the quiz for this lesson"}
-                      </h4>
-                      <p className="text-xs text-slate-600">
-                        {language === 'rw' ? "Gerageza ubumenyi bwawe n'ibibazo byihariye by'iyi nyigisho." : language === 'fr' ? "Testez vos connaissances avec les questions de cette leçon." : "Test your understanding with questions specific to this lesson."}
-                      </p>
-                    </div>
-                    <button
-                      onClick={handleStartLessonQuiz}
-                      disabled={quizLoading}
-                      className="min-h-[44px] px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-[10px] text-xs sm:text-sm shadow-sm transition-colors shrink-0 disabled:opacity-50"
-                    >
-                      {quizLoading ? 'Loading...' : (language === 'rw' ? "Fata Ikizamini cy'Iyi Nyigisho" : language === 'fr' ? "Passer le Quiz" : "Take the quiz for this lesson")}
-                    </button>
-                  </div>
-                ) : quizState === 'active' ? (
-                  <div className="space-y-6 bg-slate-50 p-6 rounded-xl border border-slate-200">
-                    <div className="flex justify-between items-center text-xs font-semibold text-slate-600 border-b border-slate-200 pb-3">
-                      <span>{quizQuestions.length} Questions</span>
-                      <span className="text-blue-600">Pass mark: 70%</span>
-                    </div>
 
-                    <div className="space-y-6">
-                      {quizQuestions.map((q, idx) => (
-                        <div key={q.id} className="bg-white p-5 rounded-xl border border-slate-200 space-y-3 shadow-2xs">
-                          <div className="font-bold text-slate-900 text-sm sm:text-base flex gap-2">
-                            <span className="text-blue-600">#{idx + 1}</span>
-                            <span>{q.text}</span>
-                          </div>
-                          {Array.isArray(q.images) && q.images.length > 0 ? (
-                            <div className="flex flex-wrap gap-2 pt-1">
-                              {q.images.map((imgUrl: string, i: number) => (
-                                <img
-                                  key={i}
-                                  src={imgUrl}
-                                  alt=""
-                                  onError={(e) => { (e.currentTarget as HTMLElement).style.display = 'none'; }}
-                                  className="max-h-36 rounded-lg border border-slate-200 bg-slate-50 object-contain p-1"
-                                />
-                              ))}
-                            </div>
-                          ) : q.imageUrl ? (
-                            <div className="rounded-lg overflow-hidden border border-slate-200 max-w-xs bg-slate-50">
-                              <img
-                                src={q.imageUrl}
-                                alt=""
-                                onError={(e) => { (e.currentTarget as HTMLElement).style.display = 'none'; }}
-                                className="w-full h-36 object-contain p-1"
-                              />
-                            </div>
-                          ) : null}
-                          <div className="grid grid-cols-1 gap-2 pt-2">
-                            {(q.options || []).map((opt: string, optIdx: number) => {
-                              const isSelected = quizAnswers[q.id] === optIdx;
-                              const optLetter = ['a', 'b', 'c', 'd'][optIdx];
-                              const optImg = q.optionImages?.[optLetter];
-                              return (
-                                <button
-                                  key={optIdx}
-                                  type="button"
-                                  onClick={() => handleQuizAnswer(q.id, optIdx)}
-                                  className={`w-full text-left p-3 rounded-lg border text-xs sm:text-sm font-medium transition-all flex items-start gap-3 ${
-                                    isSelected
-                                      ? 'bg-blue-50 border-blue-600 text-blue-900'
-                                      : 'bg-white border-slate-200 hover:bg-slate-50 text-slate-800'
-                                  }`}
-                                >
-                                  <span className={`w-6 h-6 rounded-full border flex items-center justify-center shrink-0 text-xs font-bold mt-0.5 ${
-                                    isSelected ? 'bg-blue-600 text-white border-blue-600' : 'border-slate-300 text-slate-500'
-                                  }`}>
-                                    {String.fromCharCode(65 + optIdx)}
-                                  </span>
-                                  <div className="flex-1 space-y-1">
-                                    {opt && <span>{opt}</span>}
-                                    {optImg && (
-                                      <img
-                                        src={optImg}
-                                        alt={`Option ${String.fromCharCode(65 + optIdx)} illustration`}
-                                        onError={(e) => { (e.currentTarget as HTMLElement).style.display = 'none'; }}
-                                        className="max-h-20 rounded-md border bg-slate-50 object-contain mt-1"
-                                      />
-                                    )}
-                                  </div>
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      ))}
+                  {noQuizYet ? (
+                    <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 text-sm text-slate-600 text-center">
+                      {language === 'rw' ? "Nta kizamini cy'iyi nyigisho kirajyaho." : language === 'fr' ? "Pas encore de quiz pour cette leçon." : "No quiz for this lesson yet."}
                     </div>
-
-                    <div className="flex justify-end gap-3 pt-4 border-t border-slate-200">
-                      <button
-                        onClick={() => setQuizState('idle')}
-                        className="px-4 py-2.5 bg-slate-200 hover:bg-slate-300 text-slate-700 font-semibold rounded-[10px] text-xs"
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        onClick={handleQuizSubmit}
-                        disabled={quizLoading || Object.keys(quizAnswers).length === 0}
-                        className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-[10px] text-xs shadow-sm disabled:opacity-50"
-                      >
-                        {quizLoading ? 'Submitting...' : 'Submit Quiz'}
-                      </button>
-                    </div>
-                  </div>
-                ) : quizState === 'submitted' && quizResult ? (
-                  <div className="space-y-6 bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-                    <div className={`p-6 rounded-xl text-center space-y-2 ${
-                      quizResult.passed ? 'bg-emerald-50 border border-emerald-200 text-emerald-900' : 'bg-amber-50 border border-amber-200 text-amber-900'
-                    }`}>
-                      <div className="text-2xl font-bold">
-                        {quizResult.passed ? (language === 'rw' ? "Watsinze Ikizamini!" : language === 'fr' ? "Quiz Réussi !" : "Quiz Passed Successfully!") : (language === 'rw' ? "Ntibihagije, Ongera ugerageze" : language === 'fr' ? "Réessayez" : "Keep practicing!")}
+                  ) : quizState === 'idle' ? (
+                    <div className="p-5 bg-blue-50/60 rounded-xl border border-blue-200 flex flex-col sm:flex-row items-center justify-between gap-4">
+                      <div className="space-y-1 text-center sm:text-left">
+                        <h4 className="font-bold text-slate-900 text-sm">
+                          {language === 'rw' ? "Witeguye kwitoza kuri iyi nyigisho?" : language === 'fr' ? "Prêt à faire le quiz de cette leçon ?" : "Take the quiz for this lesson"}
+                        </h4>
+                        <p className="text-xs text-slate-600">
+                          {language === 'rw' ? "Gerageza ubumenyi bwawe n'ibibazo byihariye." : language === 'fr' ? "Testez vos connaissances." : "Test your understanding with questions specific to this lesson."}
+                        </p>
                       </div>
-                      <p className="text-sm font-medium">
-                        Score: <span className="font-bold">{quizResult.score}</span> / {quizResult.total} ({quizResult.percent}%) — Pass mark: 70%
-                      </p>
+                      <button
+                        onClick={handleStartLessonQuiz}
+                        disabled={quizLoading}
+                        className="min-h-[40px] px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg text-xs shadow-sm transition-colors shrink-0 disabled:opacity-50"
+                      >
+                        {quizLoading ? 'Loading...' : 'Take Quiz'}
+                      </button>
                     </div>
+                  ) : quizState === 'active' ? (
+                    <div className="space-y-6 bg-slate-50 p-5 rounded-xl border border-slate-200">
+                      <div className="flex justify-between items-center text-xs font-semibold text-slate-600 border-b border-slate-200 pb-3">
+                        <span>{quizQuestions.length} Questions</span>
+                        <span className="text-blue-600">Pass mark: 70%</span>
+                      </div>
 
-                    {/* Results review with correct answers and explanations */}
-                    <div className="space-y-4">
-                      <h4 className="font-bold text-slate-900 text-sm">Detailed Review & Explanations</h4>
-                      {quizResult.results.map((resItem: any, rIdx: number) => {
-                        const qObj = quizQuestions.find(q => q.id === resItem.questionId);
-                        const optData = qObj ? getLocalizedQuestionOptions(qObj, language) : { options: [] };
-                        const explData = qObj ? getLocalizedQuestionExplanation(qObj, language) : { explanation: '' };
-
-                        return (
-                          <div key={resItem.questionId} className={`p-5 rounded-2xl border ${resItem.isCorrect ? 'border-emerald-200 bg-emerald-50/30' : 'border-rose-200 bg-rose-50/30'} space-y-4`}>
-                            <div className="font-bold text-slate-900 text-sm flex gap-2">
-                              <span className="w-6 h-6 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center text-xs shrink-0">{rIdx + 1}</span>
-                              <span className="leading-relaxed">{qObj?.text}</span>
+                      <div className="space-y-6">
+                        {quizQuestions.map((q, idx) => (
+                          <div key={q.id} className="bg-white p-4 rounded-xl border border-slate-200 space-y-3 shadow-2xs">
+                            <div className="font-bold text-slate-900 text-xs sm:text-sm flex gap-2">
+                              <span className="text-blue-600">#{idx + 1}</span>
+                              <span>{q.text}</span>
                             </div>
-                            {/* Question Images */}
-                            {Array.isArray(qObj?.images) && qObj.images.length > 0 && (
-                              <div className="flex flex-wrap gap-2 pl-8">
-                                {qObj.images.map((imgUrl: string, i: number) => <img key={i} src={imgUrl} alt="" className="max-h-36 rounded-lg border bg-slate-50 object-contain p-1" />)}
+                            {Array.isArray(q.images) && q.images.length > 0 && (
+                              <div className="flex flex-col sm:flex-row flex-wrap items-center justify-center gap-4 py-3">
+                                {q.images.map((imgUrl: string, i: number) => (
+                                  <div key={i} className="w-full sm:w-auto max-w-md bg-slate-50/90 border border-slate-200/90 rounded-2xl p-4 flex justify-center shadow-xs">
+                                    <img src={imgUrl} alt="" className="max-h-64 sm:max-h-80 w-auto object-contain rounded-xl" />
+                                  </div>
+                                ))}
                               </div>
                             )}
-                            {/* Options */}
-                            <div className="grid grid-cols-1 gap-2 pl-8">
-                              {(qObj?.options || []).map((opt: string, optIdx: number) => {
-                                const isCorrect = optIdx === resItem.correctIndex;
-                                const isUserAnswer = optIdx === resItem.userAnswer;
-                                const optLetter = ['a', 'b', 'c', 'd'][optIdx];
-                                const optImg = qObj?.optionImages?.[optLetter];
+                            <div className="grid grid-cols-1 gap-2 pt-2">
+                              {(q.options || []).map((opt: string, optIdx: number) => {
+                                const isSelected = quizAnswers[q.id] === optIdx;
                                 return (
-                                  <div key={optIdx} className={`p-3 rounded-lg border ${isCorrect ? 'border-emerald-500 bg-emerald-50' : isUserAnswer ? 'border-rose-500 bg-rose-50' : 'border-slate-200 bg-white'}`}>
-                                    <div className="flex items-start gap-3">
-                                      <span className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 text-xs font-bold ${isCorrect ? 'bg-emerald-500 text-white' : isUserAnswer ? 'bg-rose-500 text-white' : 'border border-slate-300 text-slate-500'}`}>
-                                        {String.fromCharCode(65 + optIdx)}
-                                      </span>
-                                      <div className="flex-1 space-y-1">
-                                        <span>{opt}</span>
-                                        {optImg && <img src={optImg} alt="" className="max-h-20 rounded-md border bg-slate-50 object-contain mt-1" />}
-                                      </div>
-                                      {isCorrect && <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />}
-                                      {isUserAnswer && !isCorrect && <XCircle className="w-5 h-5 text-rose-600 shrink-0" />}
-                                    </div>
-                                  </div>
+                                  <button
+                                    key={optIdx}
+                                    type="button"
+                                    onClick={() => handleQuizAnswer(q.id, optIdx)}
+                                    className={`w-full text-left p-2.5 rounded-lg border text-xs font-medium transition-all flex items-start gap-2.5 ${
+                                      isSelected
+                                        ? 'bg-blue-50 border-blue-600 text-blue-900'
+                                        : 'bg-white border-slate-200 hover:bg-slate-50 text-slate-800'
+                                    }`}
+                                  >
+                                    <span className={`w-5 h-5 rounded-full border flex items-center justify-center shrink-0 text-[11px] font-bold ${
+                                      isSelected ? 'bg-blue-600 text-white border-blue-600' : 'border-slate-300 text-slate-500'
+                                    }`}>
+                                      {String.fromCharCode(65 + optIdx)}
+                                    </span>
+                                    <span>{opt}</span>
+                                  </button>
                                 );
                               })}
                             </div>
-                            {/* Explanation */}
-                            {explData.explanation && (
-                              <div className="pl-8 pt-2 border-t border-slate-200/50">
-                                <h4 className="text-xs font-bold text-slate-800 mb-1">
-                                  {language === 'rw' ? 'Ibisobanuro' : language === 'fr' ? 'Explication' : 'Explanation'}
-                                </h4>
-                                <p className="text-xs text-slate-700 leading-relaxed whitespace-pre-line">{explData.explanation}</p>
-                              </div>
-                            )}
-                            {/* Article Link */}
-                            {qObj?.article_id && (
-                              <div className="pl-8 pt-2">
-                                <button 
-                                  onClick={() => {
-                                    const lesson = lessons.find(l => l.id === qObj.article_id);
-                                    if (lesson) handleSelectLesson(lesson);
-                                  }}
-                                  className="text-xs font-bold text-blue-600 hover:text-blue-700 flex items-center gap-1"
-                                >
-                                  {language === 'rw' ? `Soma itegeko: Article ${qObj.article_id}` : language === 'fr' ? `Lire la règle: Article ${qObj.article_id}` : `Read the rule: Article ${qObj.article_id}`}
-                                  <ChevronRight className="w-3 h-3" />
-                                </button>
-                              </div>
-                            )}
                           </div>
-                        );
-                      })}
-                    </div>
+                        ))}
+                      </div>
 
-                    <div className="flex justify-between items-center pt-4 border-t border-slate-200">
-                      <button
-                        onClick={() => setQuizState('idle')}
-                        className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-[10px] text-xs"
-                      >
-                        Back to Lesson
-                      </button>
-                      <button
-                        onClick={handleStartLessonQuiz}
-                        className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-[10px] text-xs shadow-sm flex items-center gap-2"
-                      >
-                        <RefreshCw className="w-3.5 h-3.5" />
-                        <span>Retry Quiz</span>
-                      </button>
+                      <div className="flex justify-end gap-3 pt-3 border-t border-slate-200">
+                        <button
+                          onClick={() => setQuizState('idle')}
+                          className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 font-semibold rounded-lg text-xs"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={handleQuizSubmit}
+                          disabled={quizLoading || Object.keys(quizAnswers).length === 0}
+                          className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg text-xs shadow-sm disabled:opacity-50"
+                        >
+                          {quizLoading ? 'Submitting...' : 'Submit Quiz'}
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                ) : null}
+                  ) : quizState === 'submitted' && quizResult ? (
+                    <div className="space-y-6 bg-white p-5 rounded-xl border border-slate-200">
+                      <div className={`p-5 rounded-xl text-center space-y-2 ${
+                        quizResult.passed ? 'bg-emerald-50 border border-emerald-200 text-emerald-900' : 'bg-amber-50 border border-amber-200 text-amber-900'
+                      }`}>
+                        <div className="text-xl font-bold">
+                          {quizResult.passed ? "Quiz Passed Successfully!" : "Keep practicing!"}
+                        </div>
+                        <p className="text-xs font-medium">
+                          Score: <span className="font-bold">{quizResult.score}</span> / {quizResult.total} ({quizResult.percent}%) — Pass mark: 70%
+                        </p>
+                      </div>
 
-                {quizError && (
-                  <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 rounded-lg text-xs">
-                    {quizError}
-                  </div>
-                )}
+                      <div className="flex justify-between items-center pt-3 border-t border-slate-200">
+                        <button
+                          onClick={() => setQuizState('idle')}
+                          className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-lg text-xs"
+                        >
+                          Back to Lesson
+                        </button>
+                        <button
+                          onClick={handleStartLessonQuiz}
+                          className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg text-xs shadow-sm flex items-center gap-1.5"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5" />
+                          <span>Retry Quiz</span>
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {quizError && (
+                    <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 rounded-lg text-xs">
+                      {quizError}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Mobile Contents Drawer Modal */}
+          {showContentsDrawer && (
+            <div className="fixed inset-0 z-50 bg-black/50 flex items-end sm:items-center justify-center p-0 sm:p-4">
+              <div className="bg-white w-full max-w-md rounded-t-2xl sm:rounded-2xl max-h-[80vh] flex flex-col shadow-xl">
+                <div className="p-4 border-b border-slate-200 flex items-center justify-between">
+                  <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                    <BookOpen className="w-4 h-4 text-blue-600" />
+                    <span>{tr('contents')} ({lessonSegments.length})</span>
+                  </h3>
+                  <button
+                    onClick={() => setShowContentsDrawer(false)}
+                    className="p-1 rounded-lg text-slate-500 hover:bg-slate-100"
+                  >
+                    ✕
+                  </button>
+                </div>
+                <div className="p-4 overflow-y-auto space-y-1">
+                  {lessonSegments.map((seg, sIdx) => {
+                    const isCurrent = !isFinished && currentSegmentIndex === sIdx;
+                    return (
+                      <button
+                        key={seg.id || sIdx}
+                        onClick={() => {
+                          setIsFinished(false);
+                          setCurrentSegmentIndex(sIdx);
+                          setShowContentsDrawer(false);
+                        }}
+                        className={`w-full text-left px-3 py-2.5 rounded-lg text-xs font-medium transition-colors flex items-center justify-between ${
+                          isCurrent
+                            ? 'bg-blue-600 text-white font-bold'
+                            : 'bg-slate-50 text-slate-700 hover:bg-slate-100'
+                        }`}
+                      >
+                        <span className="truncate pr-2">{getSegmentTitle(seg)}</span>
+                        {isCurrent && <ChevronRight className="w-3.5 h-3.5 shrink-0" />}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             </div>
           )}
@@ -760,7 +1001,7 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
                 </div>
 
                 {/* Progress Card */}
-                <div className="bg-white/10 backdrop-blur-md rounded-xl p-4 border border-white/15 min-w-[210px] shrink-0 space-y-2">
+                <div className="bg-white/10 backdrop-blur-md rounded-xl p-4 border border-white/15 w-full sm:w-[220px] sm:shrink-0 space-y-2">
                   <div className="flex items-center justify-between text-xs font-semibold text-blue-100">
                     <span className="flex items-center gap-1.5">
                       <Award className="w-4 h-4 text-amber-300" />
@@ -1067,28 +1308,60 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
             </div>
           )}
 
-          {/* SECTION 2: VIDEOS LIST */}
+          {/* SECTION 2: VIDEO TUTORIALS LIST */}
           {activeSection === 'videos' && (
-            <div className="space-y-3">
+            <div className="space-y-4">
+              {/* Header Pager Strip */}
+              <div className="flex items-center justify-between text-xs text-slate-500 px-1">
+                <div>
+                  {language === 'rw'
+                    ? <>Kwerekana <strong className="text-slate-900 font-mono">{videos.length === 0 ? 0 : (currentPage - 1) * pageSize + 1}–{Math.min(currentPage * pageSize, videos.length)}</strong> muri <strong className="text-slate-900 font-mono">{videos.length}</strong></>
+                    : language === 'fr'
+                    ? <>Affichage de <strong className="text-slate-900 font-mono">{videos.length === 0 ? 0 : (currentPage - 1) * pageSize + 1}–{Math.min(currentPage * pageSize, videos.length)}</strong> sur <strong className="text-slate-900 font-mono">{videos.length}</strong></>
+                    : <>Showing <strong className="text-slate-900 font-mono">{videos.length === 0 ? 0 : (currentPage - 1) * pageSize + 1}–{Math.min(currentPage * pageSize, videos.length)}</strong> of <strong className="text-slate-900 font-mono">{videos.length}</strong> videos</>}
+                </div>
+
+                {Math.max(1, Math.ceil(videos.length / pageSize)) > 1 && (
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-slate-600 font-medium hidden sm:inline">
+                      {language === 'rw' ? 'Ipaji' : language === 'fr' ? 'Page' : 'Page'} {Math.min(currentPage, Math.max(1, Math.ceil(videos.length / pageSize)))} / {Math.max(1, Math.ceil(videos.length / pageSize))}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                      disabled={currentPage <= 1}
+                      className="w-8 h-8 rounded-lg border border-slate-200 bg-white flex items-center justify-center text-slate-700 hover:bg-slate-50 disabled:opacity-30 disabled:pointer-events-none transition-colors shadow-2xs"
+                    >
+                      <ChevronLeft className="w-4 h-4" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCurrentPage(prev => Math.min(prev + 1, Math.ceil(videos.length / pageSize)))}
+                      disabled={currentPage >= Math.ceil(videos.length / pageSize)}
+                      className="w-8 h-8 rounded-lg border border-slate-200 bg-white flex items-center justify-center text-slate-700 hover:bg-slate-50 disabled:opacity-30 disabled:pointer-events-none transition-colors shadow-2xs"
+                    >
+                      <ChevronRight className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
+              </div>
+
               {loading ? (
-                <div className="space-y-3">
-                  {[1, 2, 3, 4].map((i) => (
-                    <div key={i} className="h-24 bg-white rounded-xl border border-slate-200 animate-pulse"></div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {[1, 2, 3, 4, 5, 6].map((i) => (
+                    <div key={i} className="h-48 bg-white rounded-2xl border border-slate-200 animate-pulse"></div>
                   ))}
                 </div>
-              ) : filteredVideos.length === 0 ? (
+              ) : videos.length === 0 ? (
                 <div className="p-12 text-center bg-white rounded-2xl border border-slate-200 space-y-2">
                   <Video className="w-10 h-10 text-slate-300 mx-auto" />
                   <h4 className="font-bold text-slate-900 text-base">
                     {language === 'rw' ? "Nta mavidewo yabonetse" : language === 'fr' ? "Aucune vidéo trouvée" : "No Video Tutorials Found"}
                   </h4>
-                  <p className="text-xs text-slate-500">
-                    {language === 'rw' ? "Hindura icyiciro cyangwa usukure ibyo washakishije." : language === 'fr' ? "Essayez une autre catégorie ou effacez la recherche." : "Try selecting a different category or clearing your search."}
-                  </p>
                 </div>
               ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {filteredVideos.map((video, idx) => {
+                  {videos.slice((currentPage - 1) * pageSize, currentPage * pageSize).map((video, idx) => {
                     const isLocked = !hasLessonVideosAccess && !video.isFreePreview;
                     const localizedTitle =
                       video.title?.[language as Language] || video.title?.en || video.title?.rw || 'Video';
@@ -1125,9 +1398,6 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
                         {/* Card Content */}
                         <div className="p-4 flex-1 flex flex-col justify-between space-y-2">
                           <div>
-                            <span className="text-[11px] font-semibold text-purple-700 bg-purple-50 px-2 py-0.5 rounded inline-block mb-1">
-                              {video.category}
-                            </span>
                             <h3 className="font-bold text-slate-900 text-sm line-clamp-2">
                               {localizedTitle}
                             </h3>

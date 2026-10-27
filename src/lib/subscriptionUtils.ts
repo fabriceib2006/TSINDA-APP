@@ -86,7 +86,8 @@ export function getCombinedAccess(subscriptions: Subscription[]): CombinedAccess
   // - Study plans (has lessonVideos or trafficRules) expire by time
   // - Exams-only plans (limited by number of exams) never expire by time
   const activeSubs = subscriptions.filter(sub => {
-    if (sub.status !== 'active') return false;
+    const status = String(sub.status || 'active').toLowerCase();
+    if (status !== 'active' && status !== 'approved' && status !== 'completed' && status !== 'success') return false;
     const isStudy = Boolean(sub.access?.lessonVideos || sub.access?.trafficRules);
     if (!isStudy) {
       const allowed = typeof sub.examLimit === 'number' ? sub.examLimit : 5;

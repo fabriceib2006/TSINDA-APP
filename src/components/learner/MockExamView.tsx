@@ -410,25 +410,28 @@ export const MockExamView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
                 {getLocalizedQuestionText(examQuestions[currentIndex], language).isFallback && <NotTranslatedBadge />}
               </h2>
               {Array.isArray(examQuestions[currentIndex].images) && examQuestions[currentIndex].images.length > 0 ? (
-                <div className="flex flex-wrap gap-3 pt-2">
+                <div className="flex flex-col sm:flex-row flex-wrap items-center justify-center gap-4 py-3">
                   {examQuestions[currentIndex].images.map((imgUrl, i) => (
-                    <img
-                      key={`q-img-${currentIndex}-${i}`}
-                      src={imgUrl}
-                      alt={`Question illustration ${i+1}`}
-                      onError={(e) => { (e.currentTarget as HTMLElement).style.display = 'none'; }}
-                      className="max-h-48 rounded-xl border border-slate-200 bg-slate-50 object-contain shadow-xs"
-                    />
+                    <div key={`q-img-${currentIndex}-${i}`} className="w-full sm:w-auto max-w-lg bg-slate-50/90 border border-slate-200/90 rounded-2xl p-4 sm:p-6 flex justify-center shadow-xs">
+                      <img
+                        src={imgUrl}
+                        alt={`Question illustration ${i+1}`}
+                        onError={(e) => { (e.currentTarget as HTMLElement).style.display = 'none'; }}
+                        className="max-h-72 sm:max-h-96 w-auto object-contain rounded-xl"
+                      />
+                    </div>
                   ))}
                 </div>
               ) : examQuestions[currentIndex].imageUrl ? (
-                <div className="pt-2">
-                  <img
-                    src={examQuestions[currentIndex].imageUrl}
-                    alt="Question illustration"
-                    onError={(e) => { (e.currentTarget as HTMLElement).style.display = 'none'; }}
-                    className="max-h-48 rounded-xl border border-slate-200 bg-slate-50 object-contain shadow-xs"
-                  />
+                <div className="py-3 flex justify-center">
+                  <div className="w-full max-w-lg bg-slate-50/90 border border-slate-200/90 rounded-2xl p-4 sm:p-6 flex justify-center shadow-xs">
+                    <img
+                      src={examQuestions[currentIndex].imageUrl}
+                      alt="Question illustration"
+                      onError={(e) => { (e.currentTarget as HTMLElement).style.display = 'none'; }}
+                      className="max-h-72 sm:max-h-96 w-auto object-contain rounded-xl"
+                    />
+                  </div>
                 </div>
               ) : null}
             </div>

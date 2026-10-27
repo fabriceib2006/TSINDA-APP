@@ -233,15 +233,26 @@ export const HomePage: React.FC = () => {
       {/* NAVBAR */}
       <header className="sticky top-0 z-50 bg-white/90 backdrop-blur-md border-b border-slate-200">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3 cursor-pointer" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
-            {imageSlots['logo'] || siteSettings?.logoUrl ? (
-              <img src={imageSlots['logo'] || siteSettings?.logoUrl} alt={appName} className="w-10 h-10 object-cover rounded-xl shadow-sm" />
-            ) : (
-              <div className="w-10 h-10 bg-blue-600 text-white rounded-xl flex items-center justify-center font-extrabold text-lg shadow-sm">
-                {appName[0]}
-              </div>
-            )}
-            <span className="text-lg font-black tracking-tight text-slate-900">{appName}</span>
+          <div className="flex items-center gap-2 sm:gap-3">
+            <button
+              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+              className="md:hidden min-h-[44px] min-w-[44px] flex items-center justify-center p-2 rounded-xl text-slate-700 hover:bg-slate-100 transition-colors"
+              aria-label="Toggle mobile menu"
+              aria-expanded={mobileMenuOpen}
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+
+            <div className="flex items-center gap-3 cursor-pointer" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
+              {imageSlots['logo'] || siteSettings?.logoUrl ? (
+                <img src={imageSlots['logo'] || siteSettings?.logoUrl} alt={appName} className="w-10 h-10 object-cover rounded-xl shadow-sm" />
+              ) : (
+                <div className="w-10 h-10 bg-blue-600 text-white rounded-xl flex items-center justify-center font-extrabold text-lg shadow-sm">
+                  {appName[0]}
+                </div>
+              )}
+              <span className="text-lg font-black tracking-tight text-slate-900">{appName}</span>
+            </div>
           </div>
 
           <div className="hidden md:flex items-center gap-6 text-sm font-semibold text-slate-600">
@@ -251,7 +262,7 @@ export const HomePage: React.FC = () => {
             <a href="#faq" className="hover:text-blue-600 transition-colors">{getText(homepageT.faq, language)}</a>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="hidden md:flex items-center gap-3">
             {/* Language Switcher */}
             <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
               {(['en', 'rw', 'fr'] as Language[]).map((lang) => (
@@ -274,7 +285,7 @@ export const HomePage: React.FC = () => {
                 }}
                 className="min-h-[38px] px-4 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-xl shadow-sm transition-colors flex items-center gap-1.5"
               >
-                {t[language].dashboard || 'Dashboard'} ({userProfile.role === 'admin' ? (t[language].roleAdmin || 'Admin') : (t[language].roleLearner || 'Student')})
+                {t[language].dashboard || 'Dashboard'}
               </button>
             ) : (
               <>
@@ -295,6 +306,93 @@ export const HomePage: React.FC = () => {
             )}
           </div>
         </div>
+
+        {/* Mobile Navigation Dropdown Menu */}
+        {mobileMenuOpen && (
+          <div className="md:hidden bg-white border-t border-slate-200 px-4 py-4 space-y-4 shadow-xl animate-in fade-in slide-in-from-top-2 duration-150">
+            {/* Language Switcher in Mobile Menu */}
+            <div className="flex items-center justify-between bg-slate-50 p-2.5 rounded-xl border border-slate-200">
+              <span className="text-xs font-bold text-slate-500 uppercase tracking-wider px-2">Language</span>
+              <div className="flex items-center gap-1 bg-white p-1 rounded-lg border border-slate-200">
+                {(['en', 'rw', 'fr'] as Language[]).map((lang) => (
+                  <button
+                    key={lang}
+                    onClick={() => {
+                      setLanguage(lang);
+                    }}
+                    className={`px-3 py-1 rounded-md text-xs font-bold uppercase transition-colors ${
+                      language === lang ? 'bg-blue-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    {lang}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <nav className="flex flex-col space-y-1 text-sm font-bold text-slate-700">
+              <a 
+                href="#features" 
+                onClick={() => setMobileMenuOpen(false)}
+                className="px-3 py-2.5 rounded-xl hover:bg-slate-50 text-slate-800 transition-colors"
+              >
+                {getText(homepageT.features, language)}
+              </a>
+              <a 
+                href="#howItWorks" 
+                onClick={() => setMobileMenuOpen(false)}
+                className="px-3 py-2.5 rounded-xl hover:bg-slate-50 text-slate-800 transition-colors"
+              >
+                {getText(homepageT.howItWorks, language)}
+              </a>
+              <a 
+                href="#plans" 
+                onClick={() => setMobileMenuOpen(false)}
+                className="px-3 py-2.5 rounded-xl hover:bg-slate-50 text-slate-800 transition-colors"
+              >
+                {getText(homepageT.pricing, language)}
+              </a>
+              <a 
+                href="#faq" 
+                onClick={() => setMobileMenuOpen(false)}
+                className="px-3 py-2.5 rounded-xl hover:bg-slate-50 text-slate-800 transition-colors"
+              >
+                {getText(homepageT.faq, language)}
+              </a>
+            </nav>
+
+            <div className="pt-3 border-t border-slate-100 flex flex-col gap-2">
+              {userProfile ? (
+                <button
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                    window.location.href = userProfile.role === 'admin' ? '/admin' : '/student';
+                  }}
+                  className="w-full text-center py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs shadow-sm transition-colors flex items-center justify-center gap-2"
+                >
+                  <span>{t[language].dashboard || 'Dashboard'}</span>
+                </button>
+              ) : (
+                <>
+                  <a
+                    href="/student"
+                    onClick={() => setMobileMenuOpen(false)}
+                    className="w-full text-center py-3 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold rounded-xl text-xs transition-colors"
+                  >
+                    {t[language].signIn || 'Sign In'}
+                  </a>
+                  <a
+                    href="/student?mode=signup"
+                    onClick={() => setMobileMenuOpen(false)}
+                    className="w-full text-center py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs shadow-sm transition-colors"
+                  >
+                    {t[language].getStarted || 'Get Started'}
+                  </a>
+                </>
+              )}
+            </div>
+          </div>
+        )}
       </header>
 
       {/* ACTIVE ANNOUNCEMENTS BANNER */}
