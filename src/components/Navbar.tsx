@@ -115,7 +115,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 T
               </div>
             )}
-            <div className="flex flex-col justify-center">
+            <div className="hidden md:flex flex-col justify-center">
               <div className="flex items-center gap-2">
                 <span className="text-base sm:text-lg font-extrabold tracking-tight text-slate-900 leading-tight">
                   {dict.appName}
@@ -127,7 +127,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   </span>
                 )}
               </div>
-              <span className="text-[11px] text-slate-500 hidden sm:block leading-none mt-0.5 font-medium whitespace-nowrap">
+              <span className="text-[11px] text-slate-500 hidden md:block leading-none mt-0.5 font-medium whitespace-nowrap">
                 {dict.subtitle}
               </span>
             </div>
@@ -138,11 +138,19 @@ export const Navbar: React.FC<NavbarProps> = ({
         <div className="flex items-center gap-2 sm:gap-3.5 shrink-0">
           <a
             href="/"
-            className="min-h-[40px] px-3 py-2 bg-slate-100 hover:bg-slate-200/80 border border-slate-200/70 text-slate-800 text-xs font-bold rounded-xl flex items-center gap-1.5 transition-colors shadow-2xs"
+            className="hidden sm:flex min-h-[40px] px-3 py-2 bg-slate-100 hover:bg-slate-200/80 border border-slate-200/70 text-slate-800 text-xs font-bold rounded-xl items-center gap-1.5 transition-colors shadow-2xs"
             title="Return to Homepage"
           >
             <Home className="w-3.5 h-3.5 text-blue-600" />
             <span className="hidden sm:inline">{language === 'rw' ? 'Ahabanza' : language === 'fr' ? 'Accueil' : 'Home'}</span>
+          </a>
+          
+          <a
+            href="/"
+            className="xs:hidden min-h-[40px] px-3 py-2 bg-slate-100 hover:bg-slate-200/80 border border-slate-200/70 text-slate-800 text-xs font-bold rounded-xl flex items-center justify-center transition-colors shadow-2xs"
+            title="Return to Homepage"
+          >
+            <Home className="w-3.5 h-3.5 text-blue-600" />
           </a>
           
           {/* Desktop Segmented Language Switcher (>= 1024px) */}
@@ -229,9 +237,9 @@ export const Navbar: React.FC<NavbarProps> = ({
                   {getInitials(userProfile.name)}
                 </div>
 
-                {/* Name & Role (Visible on Tablet/Laptop/Desktop) */}
-                <div className="hidden sm:flex flex-col text-left leading-tight pr-1">
-                  <span className="text-xs font-bold text-slate-900 truncate max-w-[150px] lg:max-w-[190px]" title={userProfile.name}>
+                {/* Name & Role (Visible on Tablet/Laptop/Desktop, hidden on very small screens) */}
+                <div className="hidden xs:flex flex-col text-left leading-tight pr-1">
+                  <span className="text-xs font-bold text-slate-900 truncate max-w-[100px] sm:max-w-[150px] lg:max-w-[190px]" title={userProfile.name}>
                     {userProfile.name}
                   </span>
                   <span className="text-[10px] font-semibold text-slate-500 capitalize flex items-center gap-1">

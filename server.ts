@@ -809,6 +809,7 @@ async function startServer() {
     }
 
     const eventData = body?.data || body;
+    const eventKind = body?.event_kind || '';
     const paypackRef = eventData?.ref;
     const reportedStatus = String(eventData?.status || '').toLowerCase();
     const reportedAmount = eventData?.amount;
@@ -826,21 +827,26 @@ async function startServer() {
 
     const paymentDoc = paymentsQuery.docs[0];
 
-    if (reportedStatus === 'successful' || reportedStatus === 'success') {
-      try {
-        await processSuccessfulPayment(paymentDoc, reportedAmount);
-      } catch (err) {
-        console.error('Error processing payment success:', err);
-        res.status(500).send('Internal Error');
-        return;
+    // Transaction processed + status successful = success
+    // Transaction processed + status failed = failed
+    if (eventKind === 'transaction:processed') {
+      if (reportedStatus === 'successful' || reportedStatus === 'success') {
+        try {
+          await processSuccessfulPayment(paymentDoc, reportedAmount);
+        } catch (err) {
+          console.error('Error processing payment success:', err);
+          res.status(500).send('Internal Error');
+          return;
+        }
+      } else if (reportedStatus === 'failed') {
+        await paymentDoc.ref.update({
+          status: 'failed',
+          failureReason: eventData?.failure_reason || eventData?.message || 'Transaction failed or rejected',
+          updatedAt: FieldValue.serverTimestamp(),
+        });
       }
-    } else if (reportedStatus === 'failed') {
-      await paymentDoc.ref.update({
-        status: 'failed',
-        failureReason: eventData?.failure_reason || eventData?.message || 'Transaction failed or rejected',
-        updatedAt: FieldValue.serverTimestamp(),
-      });
     }
+
 
     res.status(200).json({ received: true, paypackRef, status: reportedStatus });
   };

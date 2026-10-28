@@ -140,7 +140,22 @@ export const HomePage: React.FC = () => {
         const statsData = statsSnap && statsSnap.exists() ? statsSnap.data() : null;
 
 
-        if (secSnap) setSections(secSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter((s: any) => s.isVisible).sort((a: any, b: any) => (a.order || 0) - (b.order || 0)));
+        if (secSnap) {
+          const rawSections = secSnap.docs.map(d => ({ id: d.id, ...d.data() } as any)).filter((s: any) => s.isVisible).sort((a: any, b: any) => (a.order || 0) - (b.order || 0));
+          const uniqueSections: any[] = [];
+          let hasFaq = false;
+          for (const s of rawSections) {
+            if (s.type === 'faq') {
+              if (!hasFaq) {
+                uniqueSections.push(s);
+                hasFaq = true;
+              }
+            } else {
+              uniqueSections.push(s);
+            }
+          }
+          setSections(uniqueSections);
+        }
         if (itemSnap) setItems(itemSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter((i: any) => i.isVisible));
         if (annSnap) setAnnouncements(annSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter((a: any) => a.isActive));
         if (fgSnap) setFooterGroups(fgSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter((g: any) => g.isVisible).sort((a: any, b: any) => (a.order || 0) - (b.order || 0)));
