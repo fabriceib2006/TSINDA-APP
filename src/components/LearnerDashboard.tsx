@@ -125,43 +125,47 @@ export const LearnerDashboard: React.FC = () => {
       <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-5xl mx-auto w-full space-y-6">
         {activeTab === 'overview' && (
           <div className="space-y-6">
-          <div className="space-y-6">
-            {/* Referral Section */}
-            <div className="bg-white p-6 rounded-2xl border border-slate-200 flex flex-col sm:flex-row justify-between items-center gap-4">
-              <div>
-                <div className="flex items-center gap-3">
-                  <h3 className="font-bold text-slate-900">{getText(learnerDashboardT.inviteFriends, language)}</h3>
-                  <span className="text-sm text-slate-500">·</span>
-                  <span className="text-sm font-semibold text-amber-700">🪙 {points} {getText(learnerDashboardT.coins, language)}</span>
+            {/* Stunning Referral & Earn Banner */}
+            <div className="bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-700 p-6 sm:p-8 rounded-3xl text-white shadow-md relative overflow-hidden flex flex-col lg:flex-row justify-between items-center gap-6">
+              <div className="absolute -right-10 -bottom-10 w-48 h-48 bg-white/10 rounded-full blur-2xl pointer-events-none"></div>
+              <div className="space-y-2 relative z-10 text-center lg:text-left">
+                <div className="inline-flex items-center gap-2 bg-white/20 backdrop-blur-md px-3 py-1 rounded-full text-xs font-bold tracking-wide">
+                  <span>🪙 {points} {getText(learnerDashboardT.coins, language)} Available</span>
                 </div>
-                <p className="text-sm text-slate-600 mt-1">{getText(learnerDashboardT.inviteDesc, language)}</p>
+                <h3 className="text-xl sm:text-2xl font-extrabold tracking-tight">{getText(learnerDashboardT.inviteFriends, language)}</h3>
+                <p className="text-xs sm:text-sm text-blue-100 max-w-xl leading-relaxed">{getText(learnerDashboardT.inviteDesc, language)}</p>
               </div>
-              <div className="flex gap-2 w-full sm:w-auto">
-                <input type="text" readOnly value={`${domain.replace(/\/$/, '')}/student?mode=signup&ref=${userProfile?.referralCode || ''}`} className="bg-white border rounded px-3 py-2 text-sm font-mono flex-1 sm:w-72 min-w-0" />
+
+              <div className="flex flex-col sm:flex-row gap-2 w-full lg:w-auto relative z-10 shrink-0">
+                <input 
+                  type="text" 
+                  readOnly 
+                  value={`${domain.replace(/\/$/, '')}/student?mode=signup&ref=${userProfile?.referralCode || ''}`} 
+                  className="bg-white/10 backdrop-blur-md border border-white/30 text-white placeholder-blue-200 rounded-xl px-4 py-2.5 text-xs font-mono w-full sm:w-72 focus:outline-none" 
+                />
                 <button 
                   onClick={() => {
                     navigator.clipboard.writeText(`${domain.replace(/\/$/, '')}/student?mode=signup&ref=${userProfile?.referralCode || ''}`);
                     setCopied(true);
                     setTimeout(() => setCopied(false), 2000);
                   }} 
-                  className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded text-sm font-bold shrink-0 transition-colors"
+                  className="bg-white text-blue-700 hover:bg-blue-50 px-5 py-2.5 rounded-xl text-xs sm:text-sm font-bold shadow-sm transition-all shrink-0 flex items-center justify-center gap-2"
                 >
-                  {copied ? getText(learnerDashboardT.copied, language) : getText(learnerDashboardT.copyLink, language)}
+                  <span>{copied ? getText(learnerDashboardT.copied, language) : getText(learnerDashboardT.copyLink, language)}</span>
                 </button>
               </div>
             </div>
 
             {/* Streamlined Greeting Section */}
-            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 py-2">
+            <div className="bg-white p-6 sm:p-8 rounded-2xl border border-slate-200 shadow-xs flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
               <div>
+                <div className="inline-block text-[11px] font-bold uppercase tracking-wider text-blue-600 bg-blue-50 px-2.5 py-1 rounded-md mb-2">
+                  {getText(learnerDashboardT.student, language)}
+                </div>
                 <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
                   {dict.welcomeBack}, {userProfile?.name}
                 </h1>
-                <p className="text-sm text-slate-500 mt-2">
-                  <span className="font-medium text-slate-900">
-                    {getText(learnerDashboardT.student, language)}
-                  </span>
-                  <span className="mx-2 text-slate-300">|</span>
+                <p className="text-xs sm:text-sm text-slate-500 mt-1 leading-relaxed">
                   {getText(learnerDashboardT.learnerDashboardDesc, language)}
                 </p>
               </div>
@@ -169,13 +173,13 @@ export const LearnerDashboard: React.FC = () => {
               <div className="flex flex-wrap items-center gap-3">
                 {access?.hasActiveSubscription ? (
                   <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2">
-                    <span className="min-h-[44px] text-xs font-semibold text-emerald-800 bg-emerald-50 px-4 py-2 rounded-xl flex items-center gap-2 border border-emerald-200">
+                    <span className="min-h-[44px] text-xs font-semibold text-emerald-800 bg-emerald-50 px-4 py-2.5 rounded-xl flex items-center gap-2 border border-emerald-200 shadow-2xs">
                       <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" /> 
                       <span>{getText(learnerDashboardT.passActive, language)} • {getText(learnerDashboardT.validTo, language)} {expiryFormatted || getText(learnerDashboardT.noExpiry, language)}</span>
                     </span>
 
                     {access.exams && (
-                      <span className="min-h-[44px] text-xs font-bold text-blue-800 bg-blue-50 px-3.5 py-2 rounded-xl flex items-center gap-1.5 border border-blue-200">
+                      <span className="min-h-[44px] text-xs font-bold text-blue-800 bg-blue-50 px-4 py-2.5 rounded-xl flex items-center gap-1.5 border border-blue-200 shadow-2xs">
                         <Award className="w-4 h-4 text-blue-600 shrink-0" />
                         <span>
                           {getText(learnerDashboardT.examsUsed, language)}: {access.examsUsed} {getText(learnerDashboardT.of, language)} {access.isUnlimitedExams ? getText(learnerDashboardT.unlimited, language) : access.totalExamsAllowed}
@@ -186,7 +190,7 @@ export const LearnerDashboard: React.FC = () => {
                 ) : (
                   <button
                     onClick={() => setIsSubModalOpen(true)}
-                    className="min-h-[44px] px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-[10px] text-xs sm:text-sm shadow-sm transition-colors flex items-center gap-2"
+                    className="min-h-[44px] px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs sm:text-sm shadow-sm transition-all flex items-center gap-2"
                   >
                     <span>{getText(learnerDashboardT.upgradeToPro, language)}</span>
                   </button>
@@ -194,28 +198,32 @@ export const LearnerDashboard: React.FC = () => {
               </div>
             </div>
 
-            {/* Quick Navigation Cards - 12px rounded cards */}
+            {/* Quick Navigation Cards */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
               {/* Traffic Lessons Card */}
               <div
                 onClick={() => setActiveTab('lessons')}
-                className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm hover:border-blue-300 hover:shadow-md cursor-pointer transition-all space-y-3 group relative"
+                className="bg-white p-7 rounded-2xl border border-slate-200 shadow-xs hover:border-blue-300 hover:shadow-md cursor-pointer transition-all space-y-4 group relative flex flex-col justify-between"
               >
-                <div className="flex items-center justify-between">
-                  <div className="w-12 h-12 bg-blue-50 text-blue-600 rounded-[10px] flex items-center justify-center group-hover:scale-105 transition-transform">
-                    <BookOpen className="w-6 h-6" />
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="w-12 h-12 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center group-hover:scale-105 transition-transform">
+                      <BookOpen className="w-6 h-6" />
+                    </div>
+                    {access && !access.trafficRules && (
+                      <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full flex items-center gap-1">
+                        <Lock className="w-3 h-3" /> {getText(learnerDashboardT.locked, language)}
+                      </span>
+                    )}
                   </div>
-                  {access && !access.trafficRules && (
-                    <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded flex items-center gap-1">
-                      <Lock className="w-3 h-3" /> {getText(learnerDashboardT.locked, language)}
-                    </span>
-                  )}
+                  <h3 className="font-bold text-slate-900 text-base">{getText(learnerDashboardT.trafficLessons, language)}</h3>
+                  <p className="text-xs text-slate-500 leading-relaxed">{getText(learnerDashboardT.trafficLessonsDesc, language)}</p>
                 </div>
-                <h3 className="font-bold text-slate-900 text-base">{getText(learnerDashboardT.trafficLessons, language)}</h3>
-                <p className="text-xs text-slate-500 leading-relaxed">{getText(learnerDashboardT.trafficLessonsDesc, language)}</p>
+                <div className="pt-2 text-xs font-bold text-blue-600 flex items-center gap-1 group-hover:translate-x-1 transition-transform">
+                  <span>Start Learning</span>
+                  <span>→</span>
+                </div>
               </div>
-
-
 
               {/* Mock Exam Card */}
               {(() => {
@@ -242,32 +250,32 @@ export const LearnerDashboard: React.FC = () => {
                       }
                       setActiveTab('exam');
                     }}
-                    className={`bg-white p-6 rounded-xl border shadow-sm transition-all space-y-3 group relative ${
+                    className={`bg-white p-7 rounded-2xl border shadow-xs transition-all space-y-4 group relative flex flex-col justify-between ${
                       hasExamAccess
                         ? 'border-slate-200 hover:border-purple-300 hover:shadow-md cursor-pointer'
                         : 'border-slate-200 bg-slate-50/70 hover:border-amber-300 cursor-pointer'
                     }`}
                   >
-                    <div className="flex items-center justify-between">
-                      <div className={`w-12 h-12 rounded-[10px] flex items-center justify-center transition-transform ${
-                        hasExamAccess ? 'bg-purple-50 text-purple-600 group-hover:scale-105' : 'bg-slate-100 text-slate-400'
-                      }`}>
-                        {hasExamAccess ? <Play className="w-6 h-6" /> : <Lock className="w-6 h-6 text-amber-600" />}
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className={`w-12 h-12 rounded-xl flex items-center justify-center transition-transform ${
+                          hasExamAccess ? 'bg-purple-50 text-purple-600 group-hover:scale-105' : 'bg-amber-50 text-amber-600'
+                        }`}>
+                          {hasExamAccess ? <Play className="w-6 h-6" /> : <Lock className="w-6 h-6" />}
+                        </div>
+                        {!hasExamAccess ? (
+                          <span className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full flex items-center gap-1">
+                            <Lock className="w-3 h-3" /> {getText(learnerDashboardT.locked, language)}
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-bold text-purple-700 bg-purple-50 border border-purple-200 px-2.5 py-0.5 rounded-full">
+                            {access?.isUnlimitedExams ? getText(learnerDashboardT.unlimited, language) : `${access?.examsRemaining ?? 0} ${getText(learnerDashboardT.left, language)}`}
+                          </span>
+                        )}
                       </div>
-                      {!hasExamAccess ? (
-                        <span className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded flex items-center gap-1">
-                          <Lock className="w-3 h-3" /> {getText(learnerDashboardT.locked, language)}
-                        </span>
-                      ) : (
-                        <span className="text-[10px] font-bold text-purple-700 bg-purple-50 border border-purple-200 px-2 py-0.5 rounded">
-                          {access?.isUnlimitedExams ? getText(learnerDashboardT.unlimited, language) : `${access?.examsRemaining ?? 0} ${getText(learnerDashboardT.left, language)}`}
-                        </span>
-                      )}
-                    </div>
-                    <div>
                       <h3 className="font-bold text-slate-900 text-base">{getText(learnerDashboardT.nationalMockExam, language)}</h3>
                       {hasExamAccess && planName ? (
-                        <div className="mt-2 pt-2 border-t border-slate-100 space-y-0.5">
+                        <div className="pt-2 border-t border-slate-100 space-y-1">
                           <div className="text-xs font-semibold text-purple-900 truncate">
                             {getText(learnerDashboardT.plan, language)}: {planName}
                           </div>
@@ -277,8 +285,12 @@ export const LearnerDashboard: React.FC = () => {
                           </div>
                         </div>
                       ) : (
-                        <p className="text-xs text-slate-500 leading-relaxed mt-1">{getText(learnerDashboardT.mockExamDesc, language)}</p>
+                        <p className="text-xs text-slate-500 leading-relaxed">{getText(learnerDashboardT.mockExamDesc, language)}</p>
                       )}
+                    </div>
+                    <div className="pt-2 text-xs font-bold text-purple-600 flex items-center gap-1 group-hover:translate-x-1 transition-transform">
+                      <span>{hasExamAccess ? 'Take Mock Exam' : 'Unlock Access'}</span>
+                      <span>→</span>
                     </div>
                   </div>
                 );
@@ -287,14 +299,19 @@ export const LearnerDashboard: React.FC = () => {
               {/* Results History Card */}
               <div
                 onClick={() => setActiveTab('history')}
-                className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm hover:border-blue-300 hover:shadow-md cursor-pointer transition-all space-y-3 group"
+                className="bg-white p-7 rounded-2xl border border-slate-200 shadow-xs hover:border-amber-300 hover:shadow-md cursor-pointer transition-all space-y-4 group flex flex-col justify-between"
               >
-                <div className="w-12 h-12 bg-amber-50 text-amber-600 rounded-[10px] flex items-center justify-center group-hover:scale-105 transition-transform">
-                  <History className="w-6 h-6" />
+                <div className="space-y-3">
+                  <div className="w-12 h-12 bg-amber-50 text-amber-600 rounded-xl flex items-center justify-center group-hover:scale-105 transition-transform">
+                    <History className="w-6 h-6" />
+                  </div>
+                  <h3 className="font-bold text-slate-900 text-base">{getText(learnerDashboardT.resultsHistory, language)}</h3>
+                  <p className="text-xs text-slate-500 leading-relaxed">{getText(learnerDashboardT.resultsHistoryDesc, language)}</p>
                 </div>
-                <h3 className="font-bold text-slate-900 text-base">{getText(learnerDashboardT.resultsHistory, language)}</h3>
-                <p className="text-xs text-slate-500 leading-relaxed">{getText(learnerDashboardT.resultsHistoryDesc, language)}</p>
-              </div>
+                <div className="pt-2 text-xs font-bold text-amber-600 flex items-center gap-1 group-hover:translate-x-1 transition-transform">
+                  <span>View History</span>
+                  <span>→</span>
+                </div>
               </div>
             </div>
           </div>

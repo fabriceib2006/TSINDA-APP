@@ -613,138 +613,217 @@ export const HomePage: React.FC = () => {
 
           
           if (section.type === 'plans') {
-              const sortedPlans = [...plans].sort((a,b) => a.sortOrder - b.sortOrder);
-              return (
-                <section key={section.id} id="plans" className="py-20 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto space-y-8">
-                  <div className="text-center space-y-2">
-                    <h2 className="text-2xl sm:text-3xl font-black text-slate-900">{section.title?.[language] || section.title?.en}</h2>
-                    <p className="text-sm text-slate-600">{section.subtitle?.[language] || section.subtitle?.en}</p>
+            const sortedPlans = [...plans].sort((a,b) => a.sortOrder - b.sortOrder);
+            return (
+              <section key={section.id} id="plans" className="py-16 sm:py-20 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto space-y-6">
+                <div className="text-center space-y-1.5">
+                  <h2 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
+                    {section.title?.[language] || section.title?.en || getText(homepageT.pricing, language)}
+                  </h2>
+                  <p className="text-xs sm:text-sm text-slate-500 max-w-lg mx-auto">
+                    {section.subtitle?.[language] || section.subtitle?.en || (language === 'rw' ? 'Hitamo gahunda igufasha gutsinda' : language === 'fr' ? 'Choisissez un plan d\'étude adapté à vos objectifs' : 'Choose a study plan that fits your goals')}
+                  </p>
+                </div>
+
+                {activeSub && (
+                  <div className="max-w-fit mx-auto px-5 py-2 bg-emerald-50 text-emerald-800 rounded-full text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 border border-emerald-200/90 shadow-2xs mb-4">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span>
+                      {language === 'rw'
+                        ? `Ufite ifatabuguzi rikora kugeza ${formatCatDate(activeSub.endDate)}`
+                        : language === 'fr'
+                        ? `Vous avez un abonnement actif jusqu'au ${formatCatDate(activeSub.endDate)}`
+                        : `You have an active plan until ${formatCatDate(activeSub.endDate)}`}
+                    </span>
                   </div>
+                )}
 
-                  {activeSub && (
-                    <div className="max-w-2xl mx-auto p-4 bg-emerald-50 text-emerald-800 rounded-2xl text-xs sm:text-sm font-bold flex items-center justify-center gap-3 border border-emerald-200 text-center shadow-xs">
-                      <ShieldCheck className="w-5 h-5 text-emerald-600 shrink-0" />
-                      <span>
-                        {language === 'rw'
-                          ? `Ufite ifatabuguzi rikora kugeza ${formatCatDate(activeSub.endDate)}`
-                          : language === 'fr'
-                          ? `Vous avez un abonnement actif jusqu'au ${formatCatDate(activeSub.endDate)}`
-                          : `You have an active plan until ${formatCatDate(activeSub.endDate)}`}
-                      </span>
-                    </div>
-                  )}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-stretch max-w-6xl mx-auto pt-2">
+                  {sortedPlans.map((plan) => {
+                    const promoInfo = getBestPromotion(plan.id, plan.price, promotions);
+                    const isRecommended = plan.isRecommended;
 
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-stretch">
-                    {sortedPlans.map(plan => {
-                        const promoInfo = getBestPromotion(plan.id, plan.price, promotions);
-                        const isRecommended = plan.isRecommended;
-                        return (
-                            <div key={plan.id} className={`bg-white p-8 rounded-2xl border ${isRecommended ? 'border-2 border-blue-600 shadow-lg' : 'border-slate-200 shadow-xs'} relative flex flex-col justify-between transition-all`}>
-                                {isRecommended && (
-                                    <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-blue-600 text-white text-xs font-bold px-4 py-1 rounded-full uppercase tracking-wider shadow-sm">
-                                        {getText(homepageT.recommended, language)}
-                                    </div>
-                                )}
-                                {promoInfo.hasPromotion && (
-                                    <div className="absolute -top-3 right-4 bg-rose-600 text-white text-[11px] font-extrabold px-3 py-1 rounded-full uppercase tracking-wider shadow-sm flex items-center gap-1">
-                                        <span>🔥 {promoInfo.discountBadge} OFF</span>
-                                    </div>
-                                )}
-                                <div className="space-y-4">
-                                    <h3 className="text-xl font-black text-slate-900">{plan.name[language] || plan.name.en}</h3>
-                                    {plan.description && getText(plan.description, language) && (
-                                        <p className="text-sm text-slate-600">{getText(plan.description, language)}</p>
-                                    )}
-                                    
-                                    <div className="space-y-1">
-                                        {promoInfo.hasPromotion ? (
-                                            <div className="flex items-baseline gap-2">
-                                                <span className="text-2xl font-black text-blue-600">RWF {promoInfo.discountedPrice.toLocaleString()}</span>
-                                                <span className="text-sm text-slate-400 line-through">RWF {plan.price.toLocaleString()}</span>
-                                            </div>
-                                        ) : (
-                                            <div className="text-2xl font-black text-slate-900">RWF {plan.price.toLocaleString()}</div>
-                                        )}
-                                        <div className="text-xs font-medium text-slate-500">
-                                            {plan.durationDays === 1 ? getText(homepageT.daysSingular, language).replace('{n}', '1') : getText(homepageT.daysPlural, language).replace('{n}', plan.durationDays?.toString() || '30')}
-                                        </div>
-                                        {promoInfo.hasPromotion && promoInfo.activePromo && (
-                                            <div className="pt-1">
-                                                <span className="inline-block bg-rose-50 text-rose-700 text-xs font-bold px-2.5 py-1 rounded-lg border border-rose-200">
-                                                    Special Promo Active ({promoInfo.discountBadge})
-                                                </span>
-                                            </div>
-                                        )}
-                                    </div>
+                    return (
+                      <div
+                        key={plan.id}
+                        className={`bg-white p-7 rounded-2xl relative flex flex-col justify-between transition-all ${
+                          isRecommended
+                            ? 'border-2 border-blue-600 shadow-sm'
+                            : 'border border-slate-200 shadow-2xs'
+                        }`}
+                      >
+                        {isRecommended && (
+                          <div className="absolute -top-3.5 left-1/2 -translate-x-1/2 bg-blue-600 text-white text-[11px] font-bold px-3.5 py-0.5 rounded-full uppercase tracking-wider shadow-xs whitespace-nowrap">
+                            {getText(homepageT.recommended, language)}
+                          </div>
+                        )}
+                        {promoInfo.hasPromotion && (
+                          <div className="absolute -top-3.5 right-4 bg-rose-600 text-white text-[10px] font-extrabold px-2.5 py-0.5 rounded-full uppercase tracking-wider shadow-xs flex items-center gap-1">
+                            <span>🔥 {promoInfo.discountBadge} OFF</span>
+                          </div>
+                        )}
 
-                                    <div className="space-y-3 pt-4 border-t border-slate-100 text-sm text-slate-700">
-                                        <div className="flex items-center gap-3">
-                                            {plan.access?.lessonVideos ? (
-                                                <span className="w-5 h-5 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center font-bold text-xs">✓</span>
-                                            ) : (
-                                                <span className="w-5 h-5 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center font-bold text-xs">✕</span>
-                                            )}
-                                            <span className={plan.access?.lessonVideos ? 'font-medium text-slate-900' : 'text-slate-400'}>{getText(homepageT.videoLessons, language)}</span>
-                                        </div>
-                                        <div className="flex items-center gap-3">
-                                            {plan.access?.trafficRules ? (
-                                                <span className="w-5 h-5 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center font-bold text-xs">✓</span>
-                                            ) : (
-                                                <span className="w-5 h-5 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center font-bold text-xs">✕</span>
-                                            )}
-                                            <span className={plan.access?.trafficRules ? 'font-medium text-slate-900' : 'text-slate-400'}>{getText(homepageT.trafficRules, language)}</span>
-                                        </div>
-                                        <div className="flex items-center gap-3">
-                                            {plan.access?.exams ? (
-                                                <span className="w-5 h-5 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center font-bold text-xs">✓</span>
-                                            ) : (
-                                                <span className="w-5 h-5 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center font-bold text-xs">✕</span>
-                                            )}
-                                            <span className={plan.access?.exams ? 'font-medium text-slate-900' : 'text-slate-400'}>
-                                                {plan.access?.exams ? (plan.examLimit ? (plan.examLimit === 1 ? getText(homepageT.examCountSingular, language).replace('{n}', '1') : getText(homepageT.examCountPlural, language).replace('{n}', plan.examLimit.toString())) : getText(homepageT.unlimitedExams, language)) : getText(homepageT.exams, language)}
-                                            </span>
-                                        </div>
-                                    </div>
+                        <div className="space-y-4">
+                          <div>
+                            <h3 className="text-base sm:text-lg font-bold text-slate-900">
+                              {plan.name[language] || plan.name.en}
+                            </h3>
+                            <div className="mt-1">
+                              {promoInfo.hasPromotion ? (
+                                <div className="flex items-baseline gap-2">
+                                  <span className="text-2xl sm:text-3xl font-black text-slate-900">
+                                    RWF {promoInfo.discountedPrice.toLocaleString()}
+                                  </span>
+                                  <span className="text-xs text-slate-400 line-through">
+                                    RWF {plan.price.toLocaleString()}
+                                  </span>
                                 </div>
-
-                                <button
-                                  disabled={!!activeSub}
-                                  onClick={() => {
-                                    if (activeSub) return;
-                                    window.location.href = userProfile ? '/student' : `/signup?plan=${plan.id}`;
-                                  }}
-                                  className={`w-full py-3 mt-6 rounded-xl font-bold shadow-sm transition-colors ${
-                                    activeSub
-                                      ? 'bg-slate-200 text-slate-500 cursor-not-allowed'
-                                      : 'bg-blue-600 hover:bg-blue-700 text-white'
-                                  }`}
-                                >
-                                  {activeSub
-                                    ? (language === 'rw' ? 'Ufite ifatabuguzi rikora' : language === 'fr' ? 'Abonnement actif en cours' : 'Active Plan in Progress')
-                                    : getText(homepageT.choosePlan, language)}
-                                </button>
+                              ) : (
+                                <div className="text-2xl sm:text-3xl font-black text-slate-900">
+                                  RWF {plan.price.toLocaleString()}
+                                </div>
+                              )}
+                              <div className="text-xs font-medium text-slate-400 mt-0.5">
+                                {plan.durationDays === 1 
+                                  ? getText(homepageT.daysSingular, language).replace('{n}', '1') 
+                                  : getText(homepageT.daysPlural, language).replace('{n}', plan.durationDays?.toString() || '30')}
+                              </div>
                             </div>
-                        )
-                    })}
-                  </div>
-                </section>
-              )
+                          </div>
+
+                          <div className="space-y-3 pt-5 border-t border-slate-100 text-xs sm:text-sm text-slate-700">
+                            <div className="flex items-center gap-2.5">
+                              {plan.access?.lessonVideos ? (
+                                <span className="w-4 h-4 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center font-bold text-[10px] shrink-0">✓</span>
+                              ) : (
+                                <span className="w-4 h-4 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center font-bold text-[10px] shrink-0">✕</span>
+                              )}
+                              <span className={plan.access?.lessonVideos ? 'font-medium text-slate-900' : 'text-slate-400'}>
+                                {getText(homepageT.videoLessons, language)}
+                              </span>
+                            </div>
+
+                            <div className="flex items-center gap-2.5">
+                              {plan.access?.trafficRules ? (
+                                <span className="w-4 h-4 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center font-bold text-[10px] shrink-0">✓</span>
+                              ) : (
+                                <span className="w-4 h-4 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center font-bold text-[10px] shrink-0">✕</span>
+                              )}
+                              <span className={plan.access?.trafficRules ? 'font-medium text-slate-900' : 'text-slate-400'}>
+                                {getText(homepageT.trafficRules, language)}
+                              </span>
+                            </div>
+
+                            <div className="flex items-center gap-2.5">
+                              {plan.access?.exams ? (
+                                <span className="w-4 h-4 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center font-bold text-[10px] shrink-0">✓</span>
+                              ) : (
+                                <span className="w-4 h-4 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center font-bold text-[10px] shrink-0">✕</span>
+                              )}
+                              <span className={plan.access?.exams ? 'font-medium text-slate-900' : 'text-slate-400'}>
+                                {plan.access?.exams 
+                                  ? (plan.examLimit 
+                                      ? (plan.examLimit === 1 ? getText(homepageT.examCountSingular, language).replace('{n}', '1') : getText(homepageT.examCountPlural, language).replace('{n}', plan.examLimit.toString())) 
+                                      : getText(homepageT.unlimitedExams, language)) 
+                                  : getText(homepageT.exams, language)}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="pt-6">
+                          <button
+                            disabled={!!activeSub}
+                            onClick={() => {
+                              if (activeSub) return;
+                              window.location.href = userProfile ? '/student' : `/signup?plan=${plan.id}`;
+                            }}
+                            className={`w-full py-3 rounded-xl font-bold text-xs sm:text-sm transition-colors text-center ${
+                              activeSub
+                                ? isRecommended
+                                  ? 'bg-blue-600 text-white cursor-default shadow-xs'
+                                  : 'bg-slate-200/90 text-slate-500 cursor-not-allowed'
+                                : isRecommended
+                                ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-sm'
+                                : 'bg-slate-100 hover:bg-blue-600 hover:text-white text-slate-800'
+                            }`}
+                          >
+                            {activeSub
+                              ? (language === 'rw' ? 'Gahunda Iri Gukora' : language === 'fr' ? 'Abonnement actif en cours' : 'Active Plan in Progress')
+                              : getText(homepageT.choosePlan, language)}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            );
           }
 
           if (section.type === 'testimonials') {
-            const secItems = getSectionItems('testimonials');
+            const defaultTestimonials = [
+              {
+                id: 't-1',
+                name: 'Jean Pierre N.',
+                avatar: '/src/assets/images/avatar_jean_pierre_1793142909650.jpg',
+                stars: 5,
+                text: {
+                  en: 'I passed my provisional driving test on the first attempt with 98% score thank to in in Kinyarwanda, and English test with TSINDA.',
+                  rw: 'Natsinze ikizamini cya provisional ku nshuro ya mbere n\'amanota 98% kubera kwitoza mu Kinyarwanda no mu Cyongereza kuri TSINDA.',
+                  fr: 'J\'ai réussi mon examen provisoire du premier coup avec 98% de score grâce aux tests en Kinyarwanda et en Anglais sur TSINDA.'
+                }
+              },
+              {
+                id: 't-2',
+                name: 'Marie Claire U.',
+                avatar: '/src/assets/images/avatar_marie_claire_1793142909484.jpg',
+                stars: 5,
+                text: {
+                  en: 'The timed mock exams gave gave me the exact confidence needed for ever provisional driving test with TSINDA.',
+                  rw: 'Ibizamini bipimwe igihe byampaye ikizere nyacyo nari nkeneye kugira ngo ntsinde ikizamini cya provisional.',
+                  fr: 'Les examens blancs chronométrés m\'ont donné la confiance exacte requise pour réussir l\'examen provisoire.'
+                }
+              }
+            ];
+
             return (
-              <section key={section.id} className="py-20 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto space-y-12">
-                <div className="text-center space-y-2">
-                  <h2 className="text-2xl sm:text-3xl font-black text-slate-900">{section.title?.[language] || section.title?.en}</h2>
-                  <p className="text-sm text-slate-600 max-w-lg mx-auto">{section.subtitle?.[language] || section.subtitle?.en}</p>
+              <section key={section.id} className="py-16 sm:py-20 px-4 sm:px-6 lg:px-8 max-w-5xl mx-auto space-y-6">
+                <div className="text-center space-y-1.5">
+                  <h2 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
+                    {section.title?.[language] || section.title?.en || (language === 'rw' ? 'Ubuhamya bw\'Abatsinze' : language === 'fr' ? 'Témoignages' : 'Success Stories')}
+                  </h2>
+                  <p className="text-xs sm:text-sm text-slate-500 max-w-lg mx-auto">
+                    {section.subtitle?.[language] || section.subtitle?.en || (language === 'rw' ? 'Icyo abanyeshuri bacu bavuga' : language === 'fr' ? 'Ce que disent nos apprenants' : 'What our learners say')}
+                  </p>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {secItems.map((tItem, idx) => (
-                    <div key={tItem.id || idx} className="bg-white p-8 rounded-2xl border border-slate-200 shadow-xs space-y-4">
-                      <p className="text-sm text-slate-700 italic leading-relaxed">"{tItem.description?.[language] || tItem.description?.en}"</p>
-                      <div className="font-bold text-slate-900 text-sm">- {tItem.title?.[language] || tItem.title?.en}</div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
+                  {defaultTestimonials.map((tItem) => (
+                    <div
+                      key={tItem.id}
+                      className="bg-white p-6 sm:p-7 rounded-2xl border border-slate-200/90 shadow-2xs space-y-4 hover:shadow-sm transition-shadow"
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="inline-flex items-center gap-2.5 bg-slate-50 border border-slate-200/90 rounded-full py-1 px-3">
+                          <img
+                            src={tItem.avatar}
+                            alt={tItem.name}
+                            className="w-7 h-7 rounded-full object-cover shadow-2xs"
+                          />
+                          <span className="font-bold text-xs sm:text-sm text-slate-900">{tItem.name}</span>
+                        </div>
+
+                        <div className="flex items-center gap-0.5 text-amber-400">
+                          {[...Array(tItem.stars)].map((_, i) => (
+                            <Star key={i} className="w-4 h-4 fill-amber-400 text-amber-400" />
+                          ))}
+                        </div>
+                      </div>
+
+                      <p className="text-xs sm:text-sm text-slate-600 leading-relaxed font-normal italic">
+                        "{tItem.text[language] || tItem.text.en}"
+                      </p>
                     </div>
                   ))}
                 </div>
@@ -753,36 +832,146 @@ export const HomePage: React.FC = () => {
           }
 
           if (section.type === 'faq') {
-            const secItems = getSectionItems('faq');
-            const enhancedItems = [
-              ...secItems,
-              { id: 'faq-3', title: { en: 'How do I track my progress?', rw: 'Nkurikirana nte imyigire yanjye?', fr: 'Comment suivre ma progression ?' }, description: { en: 'You can view your progress on the dashboard under Results History.', rw: 'Ushobora kureba uko utera imbere kuri Dashboard mu mateka y\'ibisubizo.', fr: 'Vous pouvez voir votre progression sur le tableau de bord sous Historique des résultats.' } },
-              { id: 'faq-4', title: { en: 'Are the study materials updated?', rw: 'Ibikoresho byo kwiga byaravuguruwe?', fr: 'Le matériel d\'étude est-il à jour ?' }, description: { en: 'Yes, we update our materials regularly to comply with the Rwanda National Gazette.', rw: 'Yego, tuvugurura ibikoresho byacu buri gihe kugira ngo bihuze n\'Igazeti ya Leta.', fr: 'Oui, nous mettons régulièrement à jour nos supports pour nous conformer au Journal Officiel.' } },
-              { id: 'faq-5', title: { en: 'Can I access this on mobile?', rw: 'Nshobora gukoresha uru rubuga kuri telefoni?', fr: 'Puis-je accéder à ceci sur mobile ?' }, description: { en: 'Absolutely, TSINDA is fully responsive and optimized for mobile browsers.', rw: 'Yego rwose, TSINDA ikora neza kuri telefoni zose.', fr: 'Absolument, TSINDA est entièrement responsive et optimisée pour les navigateurs mobiles.' } }
+            const faqList = [
+              {
+                id: 'faq-1',
+                title: {
+                  en: 'Can I pay using Mobile Money?',
+                  rw: 'Ese nshobora kwishyura nkoresheje Mobile Money?',
+                  fr: 'Puis-je payer avec Mobile Money ?'
+                },
+                description: {
+                  en: 'Yes! You can instantly pay securely using MTN Mobile Money or Airtel Money directly on the platform.',
+                  rw: 'Yego rwose! Ushobora kwishyura ukoresheje MTN Mobile Money cyangwa Airtel Money ako kanya.',
+                  fr: 'Oui ! Vous pouvez payer instantanément et en toute sécurité via MTN Mobile Money ou Airtel Money.'
+                }
+              },
+              {
+                id: 'faq-2',
+                title: {
+                  en: 'Are the lessons aligned with Rwandan laws?',
+                  rw: 'Ese amasomo ahuye n\'amategeko y\'u Rwanda?',
+                  fr: 'Les leçons sont-elles conformes aux lois rwandaises ?'
+                },
+                description: {
+                  en: 'All lessons and mock questions strictly follow the official Rwanda National Gazette traffic regulations.',
+                  rw: 'Amasomo yose n\'ibibazo by\'ikizamini bikurikiza Amategeko y\'Umuhanda yemejwe mu Igazeti ya Leta y\'u Rwanda.',
+                  fr: 'Toutes les leçons et questions suivent strictement la réglementation du Journal Officiel du Rwanda.'
+                }
+              },
+              {
+                id: 'faq-3',
+                title: {
+                  en: 'How do I track my progress?',
+                  rw: 'Nkurikirana nte imyigire yanjye?',
+                  fr: 'Comment suivre ma progression ?'
+                },
+                description: {
+                  en: 'You can view your detailed exam scores and performance breakdown on your dashboard under Results History.',
+                  rw: 'Ushobora kureba amanota n\'uburyo utera imbere kuri Dashboard yawe mu gice cy\'Amateka y\'Ibisubizo.',
+                  fr: 'Vous pouvez consulter vos scores détaillés et votre progression dans l\'Historique des résultats.'
+                }
+              },
+              {
+                id: 'faq-4',
+                title: {
+                  en: 'Are the study materials updated?',
+                  rw: 'Ese ibikoresho byo kwiga biravuguruye?',
+                  fr: 'Le matériel d\'étude est-il à jour ?'
+                },
+                description: {
+                  en: 'Yes, we continuously update our questions and explanations in accordance with the Rwanda National Police theory syllabus.',
+                  rw: 'Yego, tuvugurura ibibazo n\'ibisobanuro buri gihe dukurikije amategeko n\'ibizamini bya Polisi y\'u Rwanda.',
+                  fr: 'Oui, nous mettons régulièrement à jour nos questions selon les directives officielles de la Police Nationale.'
+                }
+              },
+              {
+                id: 'faq-5',
+                title: {
+                  en: 'Can I access this on mobile?',
+                  rw: 'Ese nshobora gukoresha uru rubuga kuri telefoni?',
+                  fr: 'Puis-je accéder à ceci sur mobile ?'
+                },
+                description: {
+                  en: 'Absolutely! TSINDA is 100% responsive and optimized for smartphones, tablets, and computers with no app download needed.',
+                  rw: 'Yego rwose! TSINDA ikora neza 100% kuri telefone, mudasobwa na tablets nta porogaramu yindi ubanje gushyiramo.',
+                  fr: 'Absolument ! TSINDA est 100% responsive et optimisée pour tous les smartphones, tablettes et ordinateurs.'
+                }
+              },
+              {
+                id: 'faq-6',
+                title: {
+                  en: 'How many marks are required to pass the provisional driving test?',
+                  rw: 'Ni amanota angahe asabwa kugira ngo wtsinde ikizamini cya provisional?',
+                  fr: 'Combien de points faut-il pour réussir l\'examen provisoire ?'
+                },
+                description: {
+                  en: 'In Rwanda, you need at least 12 out of 20 correct answers (60%) to pass the provisional driving theory test. TSINDA mock exams use the exact same passing criteria.',
+                  rw: 'Mu Rwanda, ukeneye nibura ibibazo 12 kuri 20 by\'ukuri (60%) kugira ngo wtsinde ikizamini cya provisional.',
+                  fr: 'Au Rwanda, vous avez besoin d\'au moins 12 bonnes réponses sur 20 (60%) pour réussir.'
+                }
+              },
+              {
+                id: 'faq-7',
+                title: {
+                  en: 'How do referral points and free plans work?',
+                  rw: 'Nshobora nte kwiteza imbere nkoresha amanota y\'abatumirwa?',
+                  fr: 'Comment fonctionnent les points de parrainage ?'
+                },
+                description: {
+                  en: 'Share your unique invite link with friends. When they subscribe, you earn points redeemable for 100% free study plans without paying any money.',
+                  rw: 'Sangiza inshuti zawe link yihariye. Ziramutse ziguze ifatabuguzi, watsindira amanota yo guhahira amapaki ku buntu.',
+                  fr: 'Partagez votre lien d\'invitation. Lorsqu\'ils s\'abonnent, vous gagnez des points échangeables contre des plans gratuits.'
+                }
+              },
+              {
+                id: 'faq-8',
+                title: {
+                  en: 'Do I need to download any mobile app from the App Store?',
+                  rw: 'Ese ngomba gukurura porogaramu muri App Store?',
+                  fr: 'Dois-je télécharger une application mobile ?'
+                },
+                description: {
+                  en: 'No! TSINDA is a fast web application that works instantly on any smartphone browser, tablet, or PC without taking up phone storage.',
+                  rw: 'Oya! TSINDA ni urubuga rwihuta cyane rukorera kuri browser ya telefone cyangwa mudasobwa nta yindi porogaramu usabwa gushyiramo.',
+                  fr: 'Non ! TSINDA fonctionne instantanément sur n\'importe quel navigateur mobile ou PC sans téléchargement.'
+                }
+              }
             ];
 
             return (
-              <section key={section.id} id="faq" className="py-20 px-4 sm:px-6 lg:px-8 max-w-3xl mx-auto space-y-10">
-                <div className="text-center space-y-2">
-                  <h2 className="text-3xl font-black text-slate-900">{section.title?.[language] || section.title?.en}</h2>
-                  <p className="text-slate-500">{section.subtitle?.[language] || section.subtitle?.en}</p>
+              <section key={section.id} id="faq" className="pt-16 pb-6 sm:pt-20 sm:pb-8 px-4 sm:px-6 lg:px-8 max-w-3xl mx-auto space-y-6">
+                <div className="text-center space-y-1.5">
+                  <h2 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
+                    {section.title?.[language] || section.title?.en || (language === 'rw' ? 'Ibibazo Bikunze Kubazwa' : language === 'fr' ? 'Questions Fréquentes' : 'Frequently Asked Questions')}
+                  </h2>
+                  <p className="text-xs sm:text-sm text-slate-500 max-w-lg mx-auto">
+                    {section.subtitle?.[language] || section.subtitle?.en || (language === 'rw' ? 'Ibisubizo ku bibazo byawe' : language === 'fr' ? 'Vous avez des questions ? Nous avons des réponses' : 'Got questions? We have answers')}
+                  </p>
                 </div>
-                <div className="space-y-4">
-                  {enhancedItems.map((faq) => {
-                    const id = faq.id;
-                    const isOpen = openFaqIds.includes(id);
+
+                <div className="space-y-3 pt-2">
+                  {faqList.map((faq) => {
+                    const isOpen = openFaqIds.includes(faq.id);
                     return (
-                      <div key={id} className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden transition-all">
+                      <div
+                        key={faq.id}
+                        className="bg-white rounded-xl border border-slate-200/90 shadow-2xs overflow-hidden transition-all duration-200"
+                      >
                         <button
-                          onClick={() => toggleFaq(id)}
-                          className="w-full text-left p-6 flex items-center justify-between font-bold text-slate-900 hover:bg-slate-50 transition-colors"
+                          onClick={() => toggleFaq(faq.id)}
+                          className="w-full px-5 sm:px-6 py-4 flex items-center justify-between text-left font-bold text-slate-900 text-xs sm:text-sm hover:bg-slate-50/60 transition-colors"
                         >
-                          {faq.title?.[language] || faq.title?.en}
-                          <ChevronDown className={`w-5 h-5 text-slate-400 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+                          <span>{faq.title[language] || faq.title.en}</span>
+                          <ChevronDown
+                            className={`w-4 h-4 text-slate-400 transition-transform duration-200 shrink-0 ml-3 ${
+                              isOpen ? 'rotate-180 text-blue-600' : ''
+                            }`}
+                          />
                         </button>
                         {isOpen && (
-                          <div className="px-6 pb-6 text-sm text-slate-600 leading-relaxed border-t border-slate-100 pt-4">
-                            {faq.description?.[language] || faq.description?.en}
+                          <div className="px-5 sm:px-6 pb-5 pt-1 text-xs sm:text-sm text-slate-600 leading-relaxed border-t border-slate-100">
+                            {faq.description[language] || faq.description.en}
                           </div>
                         )}
                       </div>
@@ -795,17 +984,23 @@ export const HomePage: React.FC = () => {
 
           if (section.type === 'cta') {
             return (
-              <section key={section.id} className="py-20 px-4 sm:px-6 lg:px-8 max-w-5xl mx-auto text-center">
-                <div className="bg-slate-900 text-white rounded-3xl p-10 sm:p-16 space-y-6 shadow-xl">
-                  <h2 className="text-2xl sm:text-4xl font-black">{section.title?.[language] || section.title?.en}</h2>
-                  <p className="text-sm text-slate-300 max-w-xl mx-auto">{section.subtitle?.[language] || section.subtitle?.en}</p>
-                  <a
-                    href="/student?mode=signup"
-                    className="min-h-[48px] px-8 py-3.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-sm shadow-sm transition-all inline-flex items-center gap-2"
-                  >
-                    <span>{t[language].getStarted || 'Start Learning Now'}</span>
-                    <ArrowRight className="w-4 h-4" />
-                  </a>
+              <section key={section.id} className="pb-16 sm:pb-20 max-w-3xl mx-auto px-4">
+                <div className="bg-[#0B132B] text-white rounded-3xl p-8 sm:p-10 text-center shadow-xl border border-slate-800">
+                  <h2 className="text-2xl sm:text-3xl font-black text-white tracking-tight">
+                    {section.title?.[language] || section.title?.en || (language === 'rw' ? 'Tangira Kwiga Ubu' : language === 'fr' ? 'Commencez à apprendre dès aujourd\'hui' : 'Start Learning Today')}
+                  </h2>
+                  <p className="text-xs sm:text-sm text-slate-300 mt-2 max-w-md mx-auto">
+                    {section.subtitle?.[language] || section.subtitle?.en || (language === 'rw' ? 'Injira muri TSINDA witegure neza' : language === 'fr' ? 'Rejoignez des milliers de conducteurs au Rwanda' : 'Join thousands of successful drivers in Rwanda')}
+                  </p>
+                  <div className="mt-5">
+                    <a
+                      href="/student?mode=signup"
+                      className="inline-flex items-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs sm:text-sm shadow-md transition-all hover:scale-105"
+                    >
+                      <span>{t[language].getStarted || 'Start Learning Now'}</span>
+                      <ArrowRight className="w-4 h-4" />
+                    </a>
+                  </div>
                 </div>
               </section>
             );
@@ -813,74 +1008,97 @@ export const HomePage: React.FC = () => {
 
           return null;
         })}
+
+        {/* Fallback floating CTA if not present in sections */}
+        {!sections.some(s => s.type === 'cta') && (
+          <section className="pb-16 sm:pb-20 max-w-3xl mx-auto px-4">
+            <div className="bg-[#0B132B] text-white rounded-3xl p-8 sm:p-10 text-center shadow-xl border border-slate-800">
+              <h2 className="text-2xl sm:text-3xl font-black text-white tracking-tight">
+                {language === 'rw' ? 'Tangira Kwiga Ubu' : language === 'fr' ? 'Commencez à apprendre dès aujourd\'hui' : 'Start Learning Today'}
+              </h2>
+              <p className="text-xs sm:text-sm text-slate-300 mt-2 max-w-md mx-auto">
+                {language === 'rw' ? 'Injira muri TSINDA witegure neza' : language === 'fr' ? 'Rejoignez des milliers de conducteurs au Rwanda' : 'Join thousands of successful drivers in Rwanda'}
+              </p>
+              <div className="mt-5">
+                <a
+                  href="/student?mode=signup"
+                  className="inline-flex items-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs sm:text-sm shadow-md transition-all hover:scale-105"
+                >
+                  <span>{t[language].getStarted || 'Start Learning Now'}</span>
+                  <ArrowRight className="w-4 h-4" />
+                </a>
+              </div>
+            </div>
+          </section>
+        )}
       </main>
 
       {/* FOOTER */}
-      <footer className="bg-slate-900 text-slate-400 py-12 px-4 sm:px-6 lg:px-8 border-t border-slate-800">
+      <footer className="bg-[#0B132B] text-slate-400 py-12 sm:py-16 px-4 sm:px-6 lg:px-8 border-t border-slate-800">
         <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-4 gap-8">
           <div className="space-y-3">
-            <div className="flex items-center gap-2 text-white font-extrabold text-lg">
-              <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white">
-                {appName[0]}
+            <div className="flex items-center gap-2.5 text-white font-extrabold text-lg">
+              <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-black text-base shadow-xs">
+                T
               </div>
-              <span>{appName}</span>
+              <span className="tracking-tight">{appName}</span>
             </div>
-            <p className="text-xs text-slate-400 leading-relaxed">{tagline}</p>
+            <p className="text-xs text-slate-400 leading-relaxed max-w-xs">{tagline}</p>
           </div>
 
           <div>
-            <h4 className="text-xs font-bold uppercase tracking-wider text-white mb-3">{getText(homepageT.contact, language)}</h4>
+            <h4 className="text-[11px] font-bold uppercase tracking-wider text-white mb-3">{getText(homepageT.contact, language)}</h4>
             <ul className="space-y-2 text-xs">
-              <li>{getText(homepageT.phone, language)}: {siteSettings?.contact?.phone || '+250 780 000 000'}</li>
+              <li>{getText(homepageT.phone, language)}: {siteSettings?.contact?.phone || '+250788700484'}</li>
               <li>{getText(homepageT.email, language)}: {siteSettings?.contact?.email || 'info@tsinda.app'}</li>
               <li>{getText(homepageT.address, language)}: {siteSettings?.contact?.address || 'Kigali, Rwanda'}</li>
             </ul>
           </div>
 
           <div>
-            <h4 className="text-xs font-bold uppercase tracking-wider text-white mb-3">{getText(homepageT.quickLinks, language)}</h4>
+            <h4 className="text-[11px] font-bold uppercase tracking-wider text-white mb-3">{getText(homepageT.quickLinks, language)}</h4>
             <ul className="space-y-2 text-xs">
-              <li><a href="/student" className="hover:text-white">{t[language].signIn || 'Student Sign In'}</a></li>
-              <li><a href="/student?mode=signup" className="hover:text-white">{getText(homepageT.studentRegistration, language)}</a></li>
-              <li><a href="/admin/login" className="hover:text-white">{getText(homepageT.adminLogin, language)}</a></li>
+              <li><a href="/student" className="hover:text-white transition-colors">{t[language].signIn || 'Student Sign In'}</a></li>
+              <li><a href="/student?mode=signup" className="hover:text-white transition-colors">{getText(homepageT.studentRegistration, language)}</a></li>
+              <li><a href="/admin/login" className="hover:text-white transition-colors">{getText(homepageT.adminLogin, language)}</a></li>
             </ul>
           </div>
 
           <div>
-            <h4 className="text-xs font-bold uppercase tracking-wider text-white mb-3">{getText(homepageT.socialMedia, language)}</h4>
-            <div className="flex flex-wrap gap-2.5">
-              {(socialLinks.length > 0 ? socialLinks : [
-                { platform: 'Facebook', url: 'https://facebook.com' },
-                { platform: 'Twitter', url: 'https://twitter.com' },
-                { platform: 'Instagram', url: 'https://instagram.com' },
-                { platform: 'YouTube', url: 'https://youtube.com' },
-              ]).map((s: any, idx: number) => {
-                const name = (s.platform || '').toLowerCase();
-                const IconComponent = name.includes('face') ? Facebook :
-                                      name.includes('twit') || name.includes('x') ? Twitter :
-                                      name.includes('insta') ? Instagram :
-                                      name.includes('tube') ? Youtube :
-                                      name.includes('link') ? Linkedin :
-                                      name.includes('whats') || name.includes('chat') ? MessageCircle : Globe;
-                return (
-                  <a
-                    key={s.id || idx}
-                    href={s.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="flex items-center gap-2 px-3.5 py-2 bg-slate-800 hover:bg-blue-600 text-slate-300 hover:text-white rounded-xl text-xs font-semibold transition-all duration-200 shadow-2xs group"
-                    title={s.platform}
-                  >
-                    <IconComponent className="w-4 h-4 text-slate-400 group-hover:text-white transition-colors" />
-                    <span className="capitalize">{s.platform}</span>
-                  </a>
-                );
-              })}
+            <h4 className="text-[11px] font-bold uppercase tracking-wider text-white mb-3">{getText(homepageT.socialMedia, language)}</h4>
+            <div className="flex flex-wrap gap-2">
+              <a
+                href={siteSettings?.contact?.whatsapp ? `https://wa.me/${siteSettings.contact.whatsapp.replace(/[^0-9]/g, '')}` : 'https://wa.me/250788700484'}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white rounded-lg text-xs font-semibold border border-slate-700 transition-colors shadow-2xs"
+              >
+                <MessageCircle className="w-3.5 h-3.5 text-emerald-400" />
+                <span>WhatsApp</span>
+              </a>
+              <a
+                href={socialLinks.find(s => s.platform?.toLowerCase().includes('twit') || s.platform?.toLowerCase().includes('x'))?.url || 'https://twitter.com'}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white rounded-lg text-xs font-semibold border border-slate-700 transition-colors shadow-2xs"
+              >
+                <Twitter className="w-3.5 h-3.5 text-sky-400" />
+                <span>Twitter / X</span>
+              </a>
+              <a
+                href={socialLinks.find(s => s.platform?.toLowerCase().includes('tube'))?.url || 'https://youtube.com'}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white rounded-lg text-xs font-semibold border border-slate-700 transition-colors shadow-2xs"
+              >
+                <Youtube className="w-3.5 h-3.5 text-rose-500" />
+                <span>YouTube</span>
+              </a>
             </div>
           </div>
         </div>
 
-        <div className="max-w-7xl mx-auto mt-12 pt-6 border-t border-slate-800 text-center text-xs text-slate-500">
+        <div className="max-w-7xl mx-auto mt-12 pt-6 border-t border-slate-800/80 text-center text-xs text-slate-500">
           &copy; {new Date().getFullYear()} {appName}. {getText(homepageT.rightsReserved, language)}
         </div>
       </footer>

@@ -211,15 +211,22 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
     setIsFinished(false);
   }, [selectedLesson, language]);
 
-  // Mark lesson as completed when finished
+  // Mark lesson as completed and passed when finished reading segments
   useEffect(() => {
     if (isFinished && selectedLesson && userProfile) {
       const progressRef = doc(db, 'users', userProfile.uid, 'progress', selectedLesson.id);
       setDoc(progressRef, {
         lessonId: selectedLesson.id,
         completed: true,
-        lastAccessed: new Date().toISOString()
-      }, { merge: true }).catch(() => {});
+        passed: true,
+        score: 100,
+        total: 100,
+        percent: 100,
+        lastAccessed: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      }, { merge: true }).catch((err) => {
+        console.error('Failed to save lesson progress:', err);
+      });
     }
   }, [isFinished, selectedLesson, userProfile]);
 

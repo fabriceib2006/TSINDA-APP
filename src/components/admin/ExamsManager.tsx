@@ -856,10 +856,10 @@ export const ExamsManager: React.FC = () => {
                               setCorrectIdx(q.correctIndex ?? 0);
                               setQCategory(q.category || 'General');
                               setImageUrl(q.imageUrl || '');
-                              setOptionImageA(q.optionImages?.a || '');
-                              setOptionImageB(q.optionImages?.b || '');
-                              setOptionImageC(q.optionImages?.c || '');
-                              setOptionImageD(q.optionImages?.d || '');
+                              setOptionImageA(q.optionImages?.a || q.optionImages?.A || q.optionImages?.['a'] || q.optionImages?.['A'] || '');
+                              setOptionImageB(q.optionImages?.b || q.optionImages?.B || q.optionImages?.['b'] || q.optionImages?.['B'] || '');
+                              setOptionImageC(q.optionImages?.c || q.optionImages?.C || q.optionImages?.['c'] || q.optionImages?.['C'] || '');
+                              setOptionImageD(q.optionImages?.d || q.optionImages?.D || q.optionImages?.['d'] || q.optionImages?.['D'] || '');
                               setQPublished(q.isPublished ?? true);
                               setIsModalOpen(true);
                             }}
