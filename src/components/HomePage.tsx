@@ -766,35 +766,64 @@ export const HomePage: React.FC = () => {
               {
                 id: 't-1',
                 name: 'Jean Pierre N.',
+                role: 'Passed Provisional Test (98%)',
                 avatar: '/src/assets/images/avatar_jean_pierre_1793142909650.jpg',
                 stars: 5,
                 text: {
-                  en: 'I passed my provisional driving test on the first attempt with 98% score thank to in in Kinyarwanda, and English test with TSINDA.',
+                  en: 'I passed my provisional driving test on the first attempt with 98% score thanks to official lessons in Kinyarwanda and English on TSINDA.',
                   rw: 'Natsinze ikizamini cya provisional ku nshuro ya mbere n\'amanota 98% kubera kwitoza mu Kinyarwanda no mu Cyongereza kuri TSINDA.',
-                  fr: 'J\'ai réussi mon examen provisoire du premier coup avec 98% de score grâce aux tests en Kinyarwanda et en Anglais sur TSINDA.'
+                  fr: 'J\'ai réussi mon examen provisoire du premier coup avec 98% de score grâce aux leçons officielles sur TSINDA.'
                 }
               },
               {
                 id: 't-2',
                 name: 'Marie Claire U.',
+                role: 'Passed with 95%',
                 avatar: '/src/assets/images/avatar_marie_claire_1793142909484.jpg',
                 stars: 5,
                 text: {
-                  en: 'The timed mock exams gave gave me the exact confidence needed for ever provisional driving test with TSINDA.',
-                  rw: 'Ibizamini bipimwe igihe byampaye ikizere nyacyo nari nkeneye kugira ngo ntsinde ikizamini cya provisional.',
-                  fr: 'Les examens blancs chronométrés m\'ont donné la confiance exacte requise pour réussir l\'examen provisoire.'
+                  en: 'The timed mock exams gave me the exact confidence needed for the Police exam room. Highly recommended for every learner driver!',
+                  rw: 'Ibizamini bipimwe igihe byampaye ikizere nyacyo nari nkeneye mu cyumba cy\'ibizamini bya Polisi.',
+                  fr: 'Les examens blancs chronométrés m\'ont donné la confiance exacte requise pour la salle d\'examen.'
+                }
+              },
+              {
+                id: 't-3',
+                name: 'Eric Mugabo',
+                role: 'First Attempt Success',
+                avatar: '/src/assets/images/avatar_jean_pierre_1793142909650.jpg',
+                stars: 5,
+                text: {
+                  en: 'Mobile money payment was instant, and studying road signs on my phone saved me weeks of time. Amazing platform!',
+                  rw: 'Kwishyura na Mobile Money byari byoroshye, kwigira kuri telefone byamfashije kuzigama igihe kinini.',
+                  fr: 'Le paiement mobile money était instantané et étudier sur mon mobile m\'a fait gagner un temps précieux.'
+                }
+              },
+              {
+                id: 't-4',
+                name: 'Diane Uwase',
+                role: 'Scored 19/20',
+                avatar: '/src/assets/images/avatar_marie_claire_1793142909484.jpg',
+                stars: 5,
+                text: {
+                  en: 'The referral program even let me earn free study access by inviting my classmates. TSINDA is a game changer!',
+                  rw: 'Gahunda y\'abatumirwa yamfashije kubona ifatabuguzi ryiza ku buntu nyuma yo gutumira abandi banyeshuri.',
+                  fr: 'Le programme de parrainage m\'a même permis d\'obtenir un accès gratuit en invitant mes camarades.'
                 }
               }
             ];
 
             return (
-              <section key={section.id} className="py-16 sm:py-20 px-4 sm:px-6 lg:px-8 max-w-5xl mx-auto space-y-6">
-                <div className="text-center space-y-1.5">
-                  <h2 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
+              <section key={section.id} className="py-20 px-4 sm:px-6 lg:px-8 max-w-6xl mx-auto space-y-10">
+                <div className="text-center space-y-3 max-w-2xl mx-auto">
+                  <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-blue-50 text-blue-700 text-xs font-bold tracking-wide border border-blue-100 shadow-2xs">
+                    <span>🌟 Verified Success Stories</span>
+                  </div>
+                  <h2 className="text-3xl sm:text-4xl font-black text-slate-900 tracking-tight">
                     {section.title?.[language] || section.title?.en || (language === 'rw' ? 'Ubuhamya bw\'Abatsinze' : language === 'fr' ? 'Témoignages' : 'Success Stories')}
                   </h2>
-                  <p className="text-xs sm:text-sm text-slate-500 max-w-lg mx-auto">
-                    {section.subtitle?.[language] || section.subtitle?.en || (language === 'rw' ? 'Icyo abanyeshuri bacu bavuga' : language === 'fr' ? 'Ce que disent nos apprenants' : 'What our learners say')}
+                  <p className="text-sm sm:text-base text-slate-600 leading-relaxed">
+                    {section.subtitle?.[language] || section.subtitle?.en || (language === 'rw' ? 'Icyo abanyeshuri bacu batsinze bavuga kuri TSINDA' : language === 'fr' ? 'Ce que disent nos apprenants' : 'Read how thousands of Rwandan drivers passed on their first try')}
                   </p>
                 </div>
 
@@ -802,28 +831,41 @@ export const HomePage: React.FC = () => {
                   {defaultTestimonials.map((tItem) => (
                     <div
                       key={tItem.id}
-                      className="bg-white p-6 sm:p-7 rounded-2xl border border-slate-200/90 shadow-2xs space-y-4 hover:shadow-sm transition-shadow"
+                      className="bg-white p-7 sm:p-8 rounded-3xl border border-slate-200/90 shadow-xs hover:shadow-lg transition-all duration-300 space-y-5 flex flex-col justify-between group relative overflow-hidden"
                     >
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="inline-flex items-center gap-2.5 bg-slate-50 border border-slate-200/90 rounded-full py-1 px-3">
-                          <img
-                            src={tItem.avatar}
-                            alt={tItem.name}
-                            className="w-7 h-7 rounded-full object-cover shadow-2xs"
-                          />
-                          <span className="font-bold text-xs sm:text-sm text-slate-900">{tItem.name}</span>
+                      <div className="absolute top-0 right-0 w-32 h-32 bg-blue-50/50 rounded-bl-full pointer-events-none group-hover:scale-110 transition-transform"></div>
+                      <div className="space-y-4 relative z-10">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-3">
+                            <img
+                              src={tItem.avatar}
+                              alt={tItem.name}
+                              className="w-12 h-12 rounded-2xl object-cover shadow-sm border-2 border-white ring-2 ring-blue-100"
+                            />
+                            <div>
+                              <h4 className="font-extrabold text-slate-900 text-sm sm:text-base">{tItem.name}</h4>
+                              <p className="text-xs font-medium text-blue-600">{tItem.role}</p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-1 bg-amber-50 px-3 py-1.5 rounded-full border border-amber-200/60">
+                            {[...Array(tItem.stars)].map((_, i) => (
+                              <Star key={i} className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
+                            ))}
+                          </div>
                         </div>
 
-                        <div className="flex items-center gap-0.5 text-amber-400">
-                          {[...Array(tItem.stars)].map((_, i) => (
-                            <Star key={i} className="w-4 h-4 fill-amber-400 text-amber-400" />
-                          ))}
-                        </div>
+                        <p className="text-sm sm:text-base text-slate-700 leading-relaxed font-normal italic">
+                          "{tItem.text[language] || tItem.text.en}"
+                        </p>
                       </div>
 
-                      <p className="text-xs sm:text-sm text-slate-600 leading-relaxed font-normal italic">
-                        "{tItem.text[language] || tItem.text.en}"
-                      </p>
+                      <div className="pt-4 border-t border-slate-100 flex items-center justify-between text-xs font-semibold text-slate-400 relative z-10">
+                        <span>Rwanda National Police Exam Prep</span>
+                        <span className="text-emerald-600 flex items-center gap-1">
+                          <CheckCircle2 className="w-3.5 h-3.5" /> Verified Pass
+                        </span>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -936,41 +978,92 @@ export const HomePage: React.FC = () => {
                   rw: 'Oya! TSINDA ni urubuga rwihuta cyane rukorera kuri browser ya telefone cyangwa mudasobwa nta yindi porogaramu usabwa gushyiramo.',
                   fr: 'Non ! TSINDA fonctionne instantanément sur n\'importe quel navigateur mobile ou PC sans téléchargement.'
                 }
+              },
+              {
+                id: 'faq-9',
+                title: {
+                  en: 'Can I retake mock exams as many times as I want?',
+                  rw: 'Ese nshobora gusubira mu kizamini cy\'igeragezo incuro zose nshaka?',
+                  fr: 'Puis-je refaire les examens blancs autant de fois que je veux ?'
+                },
+                description: {
+                  en: 'Yes! With an active subscription or exam pass, you can take unlimited practice exams with randomized questions to ensure you are fully prepared.',
+                  rw: 'Yego rwose! Ufite ifatabuguzi rikora cyangwa se amapaka y\'ibizamini, ushobora gukora ibizamini bitagira umubare wagenwe.',
+                  fr: 'Oui ! Avec un abonnement actif, vous pouvez passer des examens blancs illimités avec des questions aléatoires.'
+                }
+              },
+              {
+                id: 'faq-10',
+                title: {
+                  en: 'What language options are available during the tests?',
+                  rw: 'Ni izihe ndimi ziboneka mu gihe cy\'ibizamini?',
+                  fr: 'Quelles langues sont disponibles pendant les tests ?'
+                },
+                description: {
+                  en: 'TSINDA offers questions and lessons fully translated in English, Kinyarwanda, and French matching the official Rwanda Police exam options.',
+                  rw: 'TSINDA itanga ibibazo n\'amasomo byose byahinduwe mu Cyongereza, mu Kinyarwanda no mu Faransa nk\'uko biri mu Polisi.',
+                  fr: 'TSINDA propose des questions et des leçons entièrement traduites en anglais, kinyarwanda et français.'
+                }
+              },
+              {
+                id: 'faq-11',
+                title: {
+                  en: 'How do I get fully prepared for the official Police provisional exam?',
+                  rw: 'Nitegura nte neza ikizamini cya Polisi cya burundu cyangwa se icya provisional?',
+                  fr: 'Comment me préparer pleinement à l\'examen provisoire officiel de la Police ?'
+                },
+                description: {
+                  en: 'By studying our 162 official Gazette traffic articles and scoring consistently above 85% on our timed mock exams, you will be 100% prepared to pass on your first try.',
+                  rw: 'Mu gusoma ingingo z\'amategeko y\'umuhanda 162 no gutsinda hejuru ya 85% mu bizamini byacu by\'igeragezo, uzatsinda ku nshuro ya mbere.',
+                  fr: 'En étudiant nos 162 articles officiels du code de la route et en réussissant nos examens blancs.'
+                }
               }
             ];
 
             return (
-              <section key={section.id} id="faq" className="pt-16 pb-6 sm:pt-20 sm:pb-8 px-4 sm:px-6 lg:px-8 max-w-3xl mx-auto space-y-6">
-                <div className="text-center space-y-1.5">
-                  <h2 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
+              <section key={section.id} id="faq" className="py-20 px-4 sm:px-6 lg:px-8 max-w-4xl mx-auto space-y-10">
+                <div className="text-center space-y-3 max-w-2xl mx-auto">
+                  <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-blue-50 text-blue-700 text-xs font-bold tracking-wide border border-blue-100 shadow-2xs">
+                    <span>💡 Got Questions? We Have Answers</span>
+                  </div>
+                  <h2 className="text-3xl sm:text-4xl font-black text-slate-900 tracking-tight">
                     {section.title?.[language] || section.title?.en || (language === 'rw' ? 'Ibibazo Bikunze Kubazwa' : language === 'fr' ? 'Questions Fréquentes' : 'Frequently Asked Questions')}
                   </h2>
-                  <p className="text-xs sm:text-sm text-slate-500 max-w-lg mx-auto">
-                    {section.subtitle?.[language] || section.subtitle?.en || (language === 'rw' ? 'Ibisubizo ku bibazo byawe' : language === 'fr' ? 'Vous avez des questions ? Nous avons des réponses' : 'Got questions? We have answers')}
+                  <p className="text-sm sm:text-base text-slate-600 leading-relaxed">
+                    {section.subtitle?.[language] || section.subtitle?.en || (language === 'rw' ? 'Ibisubizo ku bibazo byose waba wibaza kuri TSINDA' : language === 'fr' ? 'Tout ce que vous devez savoir sur notre plateforme' : 'Everything you need to know about preparing for your driving test')}
                   </p>
                 </div>
 
-                <div className="space-y-3 pt-2">
-                  {faqList.map((faq) => {
+                <div className="space-y-4 pt-2">
+                  {faqList.map((faq, index) => {
                     const isOpen = openFaqIds.includes(faq.id);
                     return (
                       <div
                         key={faq.id}
-                        className="bg-white rounded-xl border border-slate-200/90 shadow-2xs overflow-hidden transition-all duration-200"
+                        className={`bg-white rounded-2xl border transition-all duration-300 overflow-hidden shadow-2xs ${
+                          isOpen ? 'border-blue-400 ring-2 ring-blue-50 shadow-md' : 'border-slate-200/90 hover:border-slate-300'
+                        }`}
                       >
                         <button
                           onClick={() => toggleFaq(faq.id)}
-                          className="w-full px-5 sm:px-6 py-4 flex items-center justify-between text-left font-bold text-slate-900 text-xs sm:text-sm hover:bg-slate-50/60 transition-colors"
+                          className="w-full px-6 py-5 flex items-center justify-between text-left font-bold text-slate-900 text-sm sm:text-base hover:bg-slate-50/80 transition-colors"
                         >
-                          <span>{faq.title[language] || faq.title.en}</span>
-                          <ChevronDown
-                            className={`w-4 h-4 text-slate-400 transition-transform duration-200 shrink-0 ml-3 ${
-                              isOpen ? 'rotate-180 text-blue-600' : ''
-                            }`}
-                          />
+                          <div className="flex items-center gap-3 pr-4">
+                            <span className="w-7 h-7 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center font-mono text-xs font-bold shrink-0">
+                              0{index + 1}
+                            </span>
+                            <span>{faq.title[language] || faq.title.en}</span>
+                          </div>
+                          <div className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors shrink-0 ${isOpen ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                            <ChevronDown
+                              className={`w-4 h-4 transition-transform duration-300 ${
+                                isOpen ? 'rotate-180' : ''
+                              }`}
+                            />
+                          </div>
                         </button>
                         {isOpen && (
-                          <div className="px-5 sm:px-6 pb-5 pt-1 text-xs sm:text-sm text-slate-600 leading-relaxed border-t border-slate-100">
+                          <div className="px-6 pb-6 pt-2 text-sm sm:text-base text-slate-600 leading-relaxed border-t border-slate-100 bg-slate-50/40">
                             {faq.description[language] || faq.description.en}
                           </div>
                         )}

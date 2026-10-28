@@ -631,6 +631,13 @@ export const AuthScreen: React.FC = () => {
                         className="w-full min-h-[44px] pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-600"
                       />
                     </div>
+                    <span className="text-[11px] text-slate-500 mt-1 block">
+                      {{
+                        en: "Auto-filled from your invite link if applicable. You can keep it, enter a friend's referral code, or skip.",
+                        rw: "Cyuzuzwa na link yawe ya ref niba yari ihari. Ushobora kuyireka, ugashyiramo indi, cyangwa ukabisiba.",
+                        fr: "Pré-rempli depuis votre lien d'invitation si applicable. Vous pouvez le garder ou laisser vide."
+                      }[language] || "Auto-filled from your invite link. You can keep it or leave it blank."}
+                    </span>
                   </div>
 
                   <button

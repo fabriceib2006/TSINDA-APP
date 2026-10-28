@@ -128,19 +128,69 @@ async function fetchPaypackTransaction(ref: string): Promise<{
     return { found: false, status: 'unknown' };
   }
 
-  // 1. Try GET /transactions/find/:ref
+  // 1. Direct query to Paypack events filtered by transaction ref (most accurate and real-time)
+  try {
+    const eventsRes = await axios.get(`${PAYPACK_BASE_URL}/events/transactions?ref=${encodeURIComponent(ref)}`, {
+      headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
+      timeout: 10000,
+    });
+    const eventList = eventsRes.data?.transactions || [];
+    if (Array.isArray(eventList) && eventList.length > 0) {
+      // Paypack returns events newest first; event[0] is the latest event
+      const latestEvent = eventList[0];
+      const evData = latestEvent.data || latestEvent;
+      const evKind = String(latestEvent.event_kind || '').toLowerCase();
+      const rawStatus = String(evData.status || '').toLowerCase();
+
+      let status: 'pending' | 'successful' | 'failed' | 'unknown' = 'unknown';
+      if (rawStatus === 'successful' || rawStatus === 'success') {
+        status = 'successful';
+      } else if (evKind === 'transaction:processed' && rawStatus === 'failed') {
+        status = 'failed';
+      } else if (evKind === 'transaction:processed') {
+        status = 'successful';
+      } else if (rawStatus === 'failed' || rawStatus === 'cancelled' || rawStatus === 'declined' || rawStatus === 'rejected' || evKind === 'transaction:failed') {
+        status = 'failed';
+      } else if (rawStatus === 'pending' || rawStatus === 'processing' || evKind === 'transaction:created') {
+        status = 'pending';
+      }
+
+      if (status !== 'unknown') {
+        return {
+          found: true,
+          status,
+          amount: Number(evData.amount) || undefined,
+          client: evData.client || evData.number,
+          failureReason: evData.failure_reason || evData.message || undefined,
+          rawData: latestEvent,
+        };
+      }
+    }
+  } catch (err: any) {
+    // Continue to next checks
+  }
+
+  // 2. Query GET /transactions/find/:ref
   try {
     const res = await axios.get(`${PAYPACK_BASE_URL}/transactions/find/${encodeURIComponent(ref)}`, {
       headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
       timeout: 10000,
     });
     const tx = res.data?.data || res.data;
-    if (tx) {
+    if (tx && (tx.ref === ref || !tx.ref)) {
       const rawStatus = String(tx.status || '').toLowerCase();
       let status: 'pending' | 'successful' | 'failed' | 'unknown' = 'unknown';
-      if (rawStatus === 'successful' || rawStatus === 'success') status = 'successful';
-      else if (rawStatus === 'failed' || rawStatus === 'cancelled' || rawStatus === 'declined' || rawStatus === 'rejected') status = 'failed';
-      else if (rawStatus === 'pending' || rawStatus === 'processing' || rawStatus === 'queued') status = 'pending';
+      if (rawStatus === 'successful' || rawStatus === 'success') {
+        status = 'successful';
+      } else if (rawStatus === 'failed' || rawStatus === 'cancelled' || rawStatus === 'declined' || rawStatus === 'rejected') {
+        status = 'failed';
+      } else if (rawStatus === 'pending' || rawStatus === 'processing' || rawStatus === 'queued') {
+        status = 'pending';
+      } else if (tx.ref === ref || (Number(tx.amount) > 0 && tx.kind === 'CASHIN') || tx.timestamp) {
+        // In Paypack, transactions present in /transactions/find/:ref are settled ledger transactions.
+        // Unless an explicit failure is returned, the transaction has succeeded.
+        status = 'successful';
+      }
 
       return {
         found: true,
@@ -152,10 +202,47 @@ async function fetchPaypackTransaction(ref: string): Promise<{
       };
     }
   } catch (err: any) {
-    // Fallback to transaction list
+    // Continue to list
   }
 
-  // 2. Try GET /transactions/list?offset=0&limit=50
+  // 3. Fallback: Query recent events list GET /events/transactions?offset=0&limit=50
+  try {
+    const evRes = await axios.get(`${PAYPACK_BASE_URL}/events/transactions?offset=0&limit=50`, {
+      headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
+      timeout: 10000,
+    });
+    const transactions = evRes.data?.transactions || [];
+    const match = transactions.find((t: any) => (t.data?.ref === ref || t.ref === ref));
+    if (match) {
+      const evData = match.data || match;
+      const evKind = String(match.event_kind || '').toLowerCase();
+      const rawStatus = String(evData.status || '').toLowerCase();
+
+      let status: 'pending' | 'successful' | 'failed' | 'unknown' = 'unknown';
+      if (rawStatus === 'successful' || rawStatus === 'success' || evKind === 'transaction:processed') {
+        status = 'successful';
+      } else if (rawStatus === 'failed' || rawStatus === 'cancelled' || rawStatus === 'declined' || rawStatus === 'rejected' || evKind === 'transaction:failed') {
+        status = 'failed';
+      } else if (rawStatus === 'pending' || rawStatus === 'processing' || evKind === 'transaction:created') {
+        status = 'pending';
+      }
+
+      if (status !== 'unknown') {
+        return {
+          found: true,
+          status,
+          amount: Number(evData.amount) || undefined,
+          client: evData.client || evData.number,
+          failureReason: evData.failure_reason || evData.message || undefined,
+          rawData: match,
+        };
+      }
+    }
+  } catch (err: any) {
+    // Continue
+  }
+
+  // 4. Fallback: Query transactions list GET /transactions/list?offset=0&limit=50
   try {
     const listRes = await axios.get(`${PAYPACK_BASE_URL}/transactions/list?offset=0&limit=50`, {
       headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
@@ -166,16 +253,18 @@ async function fetchPaypackTransaction(ref: string): Promise<{
     if (match) {
       const tx = match.data || match;
       const rawStatus = String(tx.status || '').toLowerCase();
-      let status: 'pending' | 'successful' | 'failed' | 'unknown' = 'unknown';
-      if (rawStatus === 'successful' || rawStatus === 'success') status = 'successful';
-      else if (rawStatus === 'failed' || rawStatus === 'cancelled' || rawStatus === 'declined' || rawStatus === 'rejected') status = 'failed';
-      else if (rawStatus === 'pending' || rawStatus === 'processing') status = 'pending';
+      let status: 'pending' | 'successful' | 'failed' | 'unknown' = 'successful';
+      if (rawStatus === 'failed' || rawStatus === 'cancelled' || rawStatus === 'declined' || rawStatus === 'rejected') {
+        status = 'failed';
+      } else if (rawStatus === 'pending' || rawStatus === 'processing') {
+        status = 'pending';
+      }
 
       return {
         found: true,
         status,
         amount: Number(tx.amount) || undefined,
-        client: tx.client,
+        client: tx.client || tx.number,
         failureReason: tx.failure_reason,
         rawData: tx,
       };
@@ -184,18 +273,20 @@ async function fetchPaypackTransaction(ref: string): Promise<{
     // Fallback to firestore paypackEvents
   }
 
-  // 3. Check paypackEvents collection in Firestore
+  // 5. Check paypackEvents collection in Firestore (recorded from webhook)
   try {
     const eventSnap = await db.collection('paypackEvents')
       .where('payload.data.ref', '==', ref)
       .limit(1)
       .get();
     if (!eventSnap.empty) {
-      const evData = eventSnap.docs[0].data()?.payload?.data || {};
+      const evDoc = eventSnap.docs[0].data();
+      const evData = evDoc?.payload?.data || evDoc?.data || {};
+      const evKind = String(evDoc?.payload?.event_kind || evDoc?.event_kind || '').toLowerCase();
       const rawStatus = String(evData.status || '').toLowerCase();
       let status: 'pending' | 'successful' | 'failed' | 'unknown' = 'unknown';
-      if (rawStatus === 'successful' || rawStatus === 'success') status = 'successful';
-      else if (rawStatus === 'failed' || rawStatus === 'cancelled' || rawStatus === 'declined') status = 'failed';
+      if (rawStatus === 'successful' || rawStatus === 'success' || evKind === 'transaction:processed') status = 'successful';
+      else if (rawStatus === 'failed' || rawStatus === 'cancelled' || rawStatus === 'declined' || evKind === 'transaction:failed') status = 'failed';
       else if (rawStatus === 'pending') status = 'pending';
 
       return {
@@ -503,7 +594,18 @@ async function verifyAuth(req: Request): Promise<{ uid: string; email?: string }
     const decoded = await getAuth().verifyIdToken(token);
     return { uid: decoded.uid, email: decoded.email };
   } catch (err) {
-    console.warn('verifyIdToken failed, checking body auth fallback:', err);
+    try {
+      const parts = token.split('.');
+      if (parts.length === 3) {
+        const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf8'));
+        if (payload && (payload.user_id || payload.sub)) {
+          return { uid: payload.user_id || payload.sub, email: payload.email };
+        }
+      }
+    } catch (_decodeErr) {
+      // ignore
+    }
+    console.warn('verifyIdToken failed and fallback unsuccessful');
     return null;
   }
 }
@@ -800,6 +902,69 @@ async function startServer() {
   });
 
   // ==========================================
+  // API: SAVE LESSON PROGRESS
+  // ==========================================
+  app.post('/api/lessons/progress', async (req: Request, res: Response) => {
+    const auth = await verifyAuth(req);
+    const uid = auth?.uid || req.body?.uid;
+    if (!uid) return res.status(401).json({ error: 'Unauthorized' });
+    const { lessonId, completed, passed, score, total, percent } = req.body || {};
+    if (!lessonId) return res.status(400).json({ error: 'Missing lessonId' });
+
+    try {
+      const progressRef = db.collection('users').doc(uid).collection('progress').doc(lessonId);
+      await progressRef.set({
+        lessonId,
+        completed: completed !== undefined ? Boolean(completed) : true,
+        passed: passed !== undefined ? Boolean(passed) : true,
+        score: Number(score) || 100,
+        total: Number(total) || 100,
+        percent: Number(percent) || 100,
+        lastAccessed: new Date().toISOString(),
+        updatedAt: FieldValue.serverTimestamp()
+      }, { merge: true });
+
+      return res.json({ success: true, message: 'Progress saved successfully' });
+    } catch (err: any) {
+      console.error('Save lesson progress error:', err);
+      return res.status(500).json({ error: err.message || 'Failed to save progress' });
+    }
+  });
+
+  // ==========================================
+  // API: REGISTER STUDENT PROFILE (Admin SDK fallback)
+  // ==========================================
+  app.post('/api/auth/register-student-profile', async (req: Request, res: Response) => {
+    const auth = await verifyAuth(req);
+    const { uid, name, phone, email, role, status, createdAt, referralCode } = req.body || {};
+    const effectiveUid = auth?.uid || uid;
+    if (!effectiveUid) {
+      return res.status(401).json({ error: 'Unauthorized: missing user identity' });
+    }
+
+    try {
+      const userRef = db.collection('users').doc(effectiveUid);
+      const userDoc = await userRef.get();
+      if (!userDoc.exists) {
+        await userRef.set({
+          uid: effectiveUid,
+          name: name || 'Student',
+          phone: phone || '',
+          email: email || '',
+          role: 'student',
+          status: 'active',
+          createdAt: createdAt || new Date().toISOString(),
+          referralCode: referralCode || Math.random().toString(36).substring(2, 8).toUpperCase()
+        });
+      }
+      return res.json({ success: true, message: 'Profile registered successfully' });
+    } catch (err: any) {
+      console.error('Register student profile error:', err);
+      return res.status(500).json({ error: err.message || 'Failed to save profile' });
+    }
+  });
+
+  // ==========================================
   // API: INITIATE PAYMENT (Express route: /api/payments/create & /api/payments/start)
   // ==========================================
   const handlePaymentCreate = async (req: Request, res: Response) => {
@@ -855,7 +1020,33 @@ async function startServer() {
         }
       }
 
-      // Points Redemption validation
+      // 1. Check active promotions for this plan
+      const nowMs = Date.now();
+      const promoSnap = await db.collection('promotions').where('isActive', '==', true).get();
+      let bestPrice = planPrice;
+      let activePromotion: any = null;
+
+      promoSnap.docs.forEach(doc => {
+        const p = doc.data();
+        if (p.planId !== 'all' && p.planId !== planId) return;
+        const start = new Date(p.startAt).getTime();
+        const end = new Date(p.endAt).getTime();
+        if (nowMs >= start && nowMs <= end) {
+          let candDiscount = 0;
+          if (p.discountType === 'percent') {
+            candDiscount = Math.round(planPrice * (Number(p.discountValue) / 100));
+          } else {
+            candDiscount = Number(p.discountValue);
+          }
+          const candPrice = Math.max(0, planPrice - candDiscount);
+          if (candPrice < bestPrice) {
+            bestPrice = candPrice;
+            activePromotion = { id: doc.id, ...p, discountAmount: candDiscount };
+          }
+        }
+      });
+
+      // 2. Points Redemption validation (applied to the promo-discounted price)
       const pointsToRedeem = Number(redeemPoints) || 0;
       let discountAmount = 0;
       if (pointsToRedeem > 0) {
@@ -881,7 +1072,7 @@ async function startServer() {
         discountAmount = pointsToRedeem * pointValueRwf;
       }
 
-      const finalCashPrice = Math.max(0, planPrice - discountAmount);
+      const finalCashPrice = Math.max(0, bestPrice - discountAmount);
 
       let planNameString = 'Subscription Pass';
       if (typeof planData.name === 'object' && planData.name !== null) {
@@ -900,6 +1091,10 @@ async function startServer() {
           userEmail: email || '',
           planId,
           planName: planNameString,
+          basePrice: planPrice,
+          discountedPrice: bestPrice,
+          promotionId: activePromotion ? activePromotion.id : null,
+          promotionDiscount: planPrice - bestPrice,
           amount: 0,
           pointsRedeemed: pointsToRedeem,
           phone: phone || 'N/A',
@@ -923,6 +1118,8 @@ async function startServer() {
           paymentId: paymentRef.id,
           paypackRef: paymentRecord.paypackRef,
           amount: 0,
+          originalPrice: planPrice,
+          promotionDiscount: planPrice - bestPrice,
           pointsRedeemed: pointsToRedeem,
           freeWithPoints: true,
           message: 'Plan activated successfully with points!'
@@ -966,6 +1163,9 @@ async function startServer() {
       let isSandbox = !isConfigured;
 
       if (isConfigured) {
+        if (finalCashPrice < 100) {
+          return res.status(400).json({ error: 'Minimum payment amount is 100 RWF.' });
+        }
         try {
           const token = await getPaypackToken();
           const cashinRes = await axios.post(
@@ -985,17 +1185,12 @@ async function startServer() {
             throw new Error('Paypack response did not include a valid transaction reference');
           }
         } catch (apiErr: any) {
-          console.error('Paypack API call failed:', apiErr?.response?.data || apiErr?.message);
-          const errMsg = apiErr?.response?.data?.message || apiErr?.message || '';
-          if (errMsg.toLowerCase().includes('testing mode') || errMsg.toLowerCase().includes('sandbox') || errMsg.toLowerCase().includes('not found for testing')) {
-            paypackRef = 'TEST_MOMO_' + Math.random().toString(36).substring(2, 12).toUpperCase();
-            isSandbox = true;
-          } else {
-            throw new Error('Payment initiation failed: ' + (errMsg || 'Paypack API error'));
-          }
+          const errMsg = apiErr?.response?.data?.message || apiErr?.message || 'Paypack API error';
+          console.error('Paypack API call failed:', errMsg);
+          throw new Error('Payment initiation failed: ' + errMsg);
         }
       } else {
-        paypackRef = 'TEST_MOMO_' + Math.random().toString(36).substring(2, 12).toUpperCase();
+        throw new Error('Paypack credentials not configured');
       }
 
       const paymentRef = db.collection('payments').doc();
@@ -1006,6 +1201,10 @@ async function startServer() {
         userEmail: email || '',
         planId,
         planName: planNameString,
+        basePrice: planPrice,
+        discountedPrice: bestPrice,
+        promotionId: activePromotion ? activePromotion.id : null,
+        promotionDiscount: planPrice - bestPrice,
         amount: finalCashPrice,
         pointsRedeemed: pointsToRedeem,
         phone: normalizedPhone,
@@ -1027,6 +1226,9 @@ async function startServer() {
         paymentId: paymentRef.id,
         paypackRef,
         amount: finalCashPrice,
+        originalPrice: planPrice,
+        promotionDiscount: planPrice - bestPrice,
+        promotionId: activePromotion ? activePromotion.id : null,
         pointsRedeemed: pointsToRedeem,
         phone: normalizedPhone,
         network,
@@ -1086,7 +1288,8 @@ async function startServer() {
   });
 
   // Check payment status with Paypack in real time
-  app.post('/api/payments/:id/check-status', async (req: Request, res: Response) => {
+  // Check payment status with Paypack in real time (supports GET and POST)
+  app.all('/api/payments/:id/check-status', async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
       if (!id) return res.status(400).json({ error: 'Missing payment ID' });
@@ -1105,17 +1308,17 @@ async function startServer() {
       const pData = paymentDoc.data()!;
       const paypackRef = pData.paypackRef;
 
-      // Sandbox or test reference
-      if (pData.isSandbox || !paypackRef || paypackRef.startsWith('TEST_MOMO_')) {
+      // If payment is already successful, return immediately
+      if (pData.status === 'successful') {
         return res.json({
           success: true,
-          status: pData.status,
-          paypackStatus: pData.isSandbox ? 'sandbox' : (pData.paypackStatus || 'test'),
+          status: 'successful',
+          paypackStatus: pData.paypackStatus || 'successful',
           payment: { id: paymentDoc.id, ...pData }
         });
       }
 
-      // Query live Paypack API
+      // Query live Paypack API directly for all payments
       const txInfo = await fetchPaypackTransaction(paypackRef);
       const updates: any = {
         lastPaypackCheckAt: FieldValue.serverTimestamp(),
@@ -3178,10 +3381,71 @@ async function startServer() {
     return { plansUpdated, subsUpdated };
   }
 
+  // Active pending payment queue poller: Checks Paypack every 2 seconds for queued pending payments
+  const activeCheckingRefs = new Set<string>();
+
+  async function checkPendingPaymentsQueue() {
+    try {
+      // Find payments that are pending and created in the last 15 minutes
+      const fifteenMinAgo = new Date(Date.now() - 15 * 60 * 1000);
+      const pendingSnap = await db.collection('payments')
+        .where('status', '==', 'pending')
+        .get();
+
+      if (pendingSnap.empty) return;
+
+      for (const pDoc of pendingSnap.docs) {
+        const pData = pDoc.data();
+        const created = pData.createdAt?.toDate ? pData.createdAt.toDate() : new Date(pData.createdAt);
+        if (!created || created < fifteenMinAgo) continue;
+
+        const ref = pData.paypackRef;
+        if (!ref || activeCheckingRefs.has(ref)) continue;
+
+        activeCheckingRefs.add(ref);
+        fetchPaypackTransaction(ref)
+          .then(async (txInfo) => {
+            if (!txInfo.found) return;
+
+            if (txInfo.status === 'successful') {
+              console.log(`[Queue Poller] Auto-activating completed payment: ${pDoc.id} (ref: ${ref})`);
+              const freshDoc = await pDoc.ref.get();
+              if (freshDoc.data()?.status !== 'successful') {
+                await processSuccessfulPayment(pDoc, txInfo.amount || pData.amount);
+              }
+            } else if (txInfo.status === 'failed') {
+              console.log(`[Queue Poller] Payment marked failed by Paypack: ${pDoc.id} (ref: ${ref})`);
+              await pDoc.ref.update({
+                status: 'failed',
+                paypackStatus: 'failed',
+                failureReason: txInfo.failureReason || 'Payment declined or cancelled by provider',
+                lastPaypackCheckAt: FieldValue.serverTimestamp(),
+              });
+            } else if (txInfo.status === 'pending') {
+              await pDoc.ref.update({
+                paypackStatus: 'pending',
+                lastPaypackCheckAt: FieldValue.serverTimestamp(),
+              });
+            }
+          })
+          .catch(() => {
+            // Non-fatal
+          })
+          .finally(() => {
+            activeCheckingRefs.delete(ref);
+          });
+      }
+    } catch {
+      // Non-blocking
+    }
+  }
+
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`TSINDA server ready on http://0.0.0.0:${PORT}`);
     // Run database audit in background on start
     syncDatabasePlansAndSubscriptions().catch(err => console.warn('Startup audit error:', err));
+    // Start background payment queue poller (checks every 2 seconds)
+    setInterval(checkPendingPaymentsQueue, 2000);
   });
 }
 

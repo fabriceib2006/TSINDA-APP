@@ -74,6 +74,12 @@ export const ContentManager: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+
+  const showToast = (message: string, type: 'success' | 'error' = 'success') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 4000);
+  };
 
   // Lesson Modals & Form
   const [isLessonModalOpen, setIsLessonModalOpen] = useState(false);
@@ -249,8 +255,10 @@ export const ContentManager: React.FC = () => {
         urls.push(dataUrl);
       }
       setLessonImages((prev) => [...prev, ...urls]);
+      showToast("Images successfully uploaded and attached!");
     } catch (err) {
       console.error('Error uploading image to storage:', err);
+      showToast("Failed to upload image.", "error");
     } finally {
       setUploadingImage(false);
     }
@@ -258,6 +266,7 @@ export const ContentManager: React.FC = () => {
 
   const handleRemoveLessonImage = (idxToRemove: number) => {
     setLessonImages((prev) => prev.filter((_, i) => i !== idxToRemove));
+    showToast("Image removed.");
   };
 
   const handleSaveLesson = async (e: React.FormEvent) => {
@@ -288,17 +297,20 @@ export const ContentManager: React.FC = () => {
         setLessons((prev) =>
           prev.map((l) => (l.id === editingLesson.id ? { ...l, ...lessonData } : l))
         );
+        showToast("Lesson successfully updated in database!");
       } else {
         const docRef = await addDoc(collection(db, 'lessons'), {
           ...lessonData,
           createdAt: serverTimestamp(),
         });
         setLessons((prev) => [...prev, { id: docRef.id, ...lessonData, createdAt: new Date().toISOString() }]);
+        showToast("New lesson successfully saved to database!");
       }
       setIsLessonModalOpen(false);
     } catch (err) {
       console.error('Error saving lesson:', err);
       handleFirestoreError(err, editingLesson ? OperationType.UPDATE : OperationType.CREATE, 'lessons');
+      showToast("Error saving lesson to database.", "error");
     }
   };
 
@@ -894,6 +906,16 @@ export const ContentManager: React.FC = () => {
 
   return (
     <div className="space-y-6">
+      {/* Toast Notification Banner */}
+      {toast && (
+        <div className={`p-4 rounded-xl text-xs sm:text-sm font-bold flex items-center justify-between shadow-md transition-all ${
+          toast.type === 'error' ? 'bg-rose-50 text-rose-900 border border-rose-200' : 'bg-emerald-50 text-emerald-900 border border-emerald-200'
+        }`}>
+          <span>{toast.message}</span>
+          <button onClick={() => setToast(null)} className="text-slate-500 hover:text-slate-900 font-bold ml-2">✕</button>
+        </div>
+      )}
+
       {/* Top Header */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>

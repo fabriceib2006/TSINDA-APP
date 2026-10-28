@@ -68,8 +68,38 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
 
 
   // Real-time subscriptions, purchases, access & progress listeners
+  // Real-time subscriptions, purchases, access & progress listeners
   useEffect(() => {
-    if (!userProfile) return;
+    const effectiveUid = userProfile?.uid || firebaseUser?.uid;
+    if (!effectiveUid) return;
+
+    // Load any locally cached progress for instant zero-latency display
+    try {
+      const cached = localStorage.getItem(`tsinda_progress_${effectiveUid}`);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (parsed && typeof parsed === 'object') {
+          setProgressMap(parsed);
+        }
+      }
+    } catch (_e) {}
+
+    // Immediate direct fetch for progress without waiting for websocket
+    getDocs(collection(db, 'users', effectiveUid, 'progress')).then((snap) => {
+      if (snap && !snap.empty) {
+        const pMap: Record<string, any> = {};
+        snap.docs.forEach(d => {
+          pMap[d.id] = d.data();
+        });
+        setProgressMap(prev => {
+          const next = { ...prev, ...pMap };
+          try {
+            localStorage.setItem(`tsinda_progress_${effectiveUid}`, JSON.stringify(next));
+          } catch (_e) {}
+          return next;
+        });
+      }
+    }).catch(() => null);
 
     let latestSubs: any[] = [];
     let latestPurchases: any[] = [];
@@ -94,27 +124,33 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
       setAccess(combined);
     };
 
-    const unsubSubs = onSnapshot(query(collection(db, 'subscriptions'), where('userId', '==', userProfile.uid)), (snap) => {
+    const unsubSubs = onSnapshot(query(collection(db, 'subscriptions'), where('userId', '==', effectiveUid)), (snap) => {
       latestSubs = snap.docs;
       updateCombined();
     }, () => {});
 
-    const unsubPurchases = onSnapshot(query(collection(db, 'users', userProfile.uid, 'purchases')), (snap) => {
+    const unsubPurchases = onSnapshot(query(collection(db, 'users', effectiveUid, 'purchases')), (snap) => {
       latestPurchases = snap.docs;
       updateCombined();
     }, () => {});
 
-    const unsubAccess = onSnapshot(collection(db, 'users', userProfile.uid, 'access'), (snap) => {
+    const unsubAccess = onSnapshot(collection(db, 'users', effectiveUid, 'access'), (snap) => {
       latestAccessDocs = snap.docs;
       updateCombined();
     }, () => {});
 
-    const unsubProgress = onSnapshot(collection(db, 'users', userProfile.uid, 'progress'), (snap) => {
+    const unsubProgress = onSnapshot(collection(db, 'users', effectiveUid, 'progress'), (snap) => {
       const pMap: Record<string, any> = {};
       snap.docs.forEach(d => {
         pMap[d.id] = d.data();
       });
-      setProgressMap(pMap);
+      setProgressMap(prev => {
+        const next = { ...prev, ...pMap };
+        try {
+          localStorage.setItem(`tsinda_progress_${effectiveUid}`, JSON.stringify(next));
+        } catch (_e) {}
+        return next;
+      });
     }, () => {});
 
     return () => {
@@ -123,7 +159,7 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
       unsubAccess();
       unsubProgress();
     };
-  }, [userProfile]);
+  }, [userProfile, firebaseUser]);
 
   // Fetch published lessons and videos on mount
   useEffect(() => {
@@ -213,22 +249,57 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
 
   // Mark lesson as completed and passed when finished reading segments
   useEffect(() => {
-    if (isFinished && selectedLesson && userProfile) {
-      const progressRef = doc(db, 'users', userProfile.uid, 'progress', selectedLesson.id);
-      setDoc(progressRef, {
+    if (isFinished && selectedLesson) {
+      const uid = firebaseUser?.uid || userProfile?.uid;
+      if (!uid) return;
+
+      const progressRecord = {
         lessonId: selectedLesson.id,
         completed: true,
         passed: true,
         score: 100,
         total: 100,
         percent: 100,
-        lastAccessed: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      }, { merge: true }).catch((err) => {
-        console.error('Failed to save lesson progress:', err);
+        lastAccessed: new Date().toISOString()
+      };
+
+      // 1. Instant optimistic state update
+      setProgressMap(prev => {
+        const next = { ...prev, [selectedLesson.id]: progressRecord };
+        try {
+          localStorage.setItem(`tsinda_progress_${uid}`, JSON.stringify(next));
+        } catch (_e) {}
+        return next;
+      });
+
+      // 2. Direct Firestore save via client SDK
+      setDoc(doc(db, 'users', uid, 'progress', selectedLesson.id), progressRecord, { merge: true }).catch((err) => {
+        console.warn('Direct Firestore save failed, fallback to server API:', err);
+      });
+
+      // 3. Server API save for guaranteed persistence
+      getToken().then(token => {
+        fetch('/api/lessons/progress', {
+          method: 'POST',
+          headers: {
+            'Authorization': token ? `Bearer ${token}` : '',
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            uid,
+            lessonId: selectedLesson.id,
+            completed: true,
+            passed: true,
+            score: 100,
+            total: 100,
+            percent: 100
+          })
+        }).catch((err) => {
+          console.error('Failed to save lesson progress via API:', err);
+        });
       });
     }
-  }, [isFinished, selectedLesson, userProfile]);
+  }, [isFinished, selectedLesson, firebaseUser, userProfile]);
 
   const getSegmentTitle = (seg: any) => {
     if (!seg) return '';
@@ -325,7 +396,7 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
   const endLessonIndex = Math.min(startLessonIndex + pageSize, totalLessons);
   const paginatedLessons = filteredLessons.slice(startLessonIndex, endLessonIndex);
 
-  const passedLessonsCount = lessons.filter(l => progressMap[l.id]?.passed).length;
+  const passedLessonsCount = lessons.filter(l => Boolean(progressMap[l.id]?.passed || progressMap[l.id]?.completed)).length;
   const progressPercent = lessons.length > 0 ? Math.round((passedLessonsCount / lessons.length) * 100) : 0;
 
   // Category counts map for interactive chips
@@ -434,6 +505,29 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
       const resultData = await res.json();
       setQuizResult(resultData);
       setQuizState('submitted');
+
+      if (resultData.passed) {
+        const uid = firebaseUser?.uid || userProfile?.uid;
+        if (uid) {
+          const progressRecord = {
+            lessonId: selectedLesson.id,
+            completed: true,
+            passed: true,
+            score: resultData.score,
+            total: resultData.total,
+            percent: resultData.percent,
+            lastAccessed: new Date().toISOString()
+          };
+          setProgressMap(prev => {
+            const next = { ...prev, [selectedLesson.id]: progressRecord };
+            try {
+              localStorage.setItem(`tsinda_progress_${uid}`, JSON.stringify(next));
+            } catch (_e) {}
+            return next;
+          });
+          setDoc(doc(db, 'users', uid, 'progress', selectedLesson.id), progressRecord, { merge: true }).catch(() => null);
+        }
+      }
       checkSubAndFetch();
     } catch (err: any) {
       console.error('Error submitting quiz:', err);
@@ -487,10 +581,10 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
                     Ref: {selectedLesson.gazetteReference}
                   </span>
                 )}
-                {progressMap[selectedLesson.id]?.passed && (
+                {(progressMap[selectedLesson.id]?.passed || progressMap[selectedLesson.id]?.completed) && (
                   <span className="text-xs font-semibold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full flex items-center gap-1">
                     <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                    <span>Quiz Passed</span>
+                    <span>{language === 'rw' ? 'Byarangiye' : language === 'fr' ? 'Complétée' : 'Completed'}</span>
                   </span>
                 )}
               </div>
@@ -704,10 +798,10 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
                       <BookOpen className="w-5 h-5 text-blue-600" />
                       <span>{language === 'rw' ? "Ikizamini cy'iyi Nyigisho" : language === 'fr' ? "Quiz de la Leçon" : "Lesson Quiz"}</span>
                     </h3>
-                    {progressMap[selectedLesson.id]?.passed && (
+                    {(progressMap[selectedLesson.id]?.passed || progressMap[selectedLesson.id]?.completed) && (
                       <span className="text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-1 rounded-full flex items-center gap-1.5">
                         <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                        <span>Quiz Passed</span>
+                        <span>{language === 'rw' ? 'Byarangiye' : language === 'fr' ? 'Réussi' : 'Passed'}</span>
                       </span>
                     )}
                   </div>
@@ -1173,7 +1267,7 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
                     const isLocked = !hasTrafficRulesAccess;
                     const localizedTitle =
                       lesson.title?.[language as Language] || lesson.title?.en || lesson.title?.rw || 'Lesson';
-                    const hasPassed = progressMap[lesson.id]?.passed;
+                    const hasPassed = Boolean(progressMap[lesson.id]?.passed || progressMap[lesson.id]?.completed);
 
                     return (
                       <div

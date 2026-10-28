@@ -239,29 +239,59 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       referralCode: Math.random().toString(36).substring(2, 8).toUpperCase()
     };
 
+    let profileCreated = false;
+    let idToken = '';
+    try {
+      idToken = await cred.user.getIdToken();
+    } catch (_tErr) {
+      // ignore
+    }
+
     try {
       await setDoc(doc(db, 'users', cred.user.uid), profile);
-      
-      // Complete referral
-      const idToken = await cred.user.getIdToken();
-      await fetch('/api/referral/signup-complete', {
-        method: 'POST',
-        headers: { 
-          'Authorization': `Bearer ${idToken}`,
-          'Content-Type': 'application/json' 
-        },
-        body: JSON.stringify({ refCode: referralCode || new URLSearchParams(window.location.search).get('ref') })
-      });
-
+      profileCreated = true;
     } catch (err: any) {
+      console.warn('[signUpWithPhone] Client setDoc failed, attempting server API fallback...', err);
+      try {
+        const resp = await fetch('/api/auth/register-student-profile', {
+          method: 'POST',
+          headers: {
+            'Authorization': idToken ? `Bearer ${idToken}` : '',
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(profile)
+        });
+        if (resp.ok) {
+          profileCreated = true;
+        }
+      } catch (serverErr) {
+        console.error('[signUpWithPhone] Server registration fallback failed:', serverErr);
+      }
+    }
+
+    if (!profileCreated) {
       const maskedPhone = phone ? phone.replace(/^(\d{3})\d{6}(\d{2})$/, '$1******$2') : 'null';
-      console.error(`[signUpWithPhone] Firestore write error code: ${err.code || 'unknown'} for phone ${maskedPhone}. Rolling back auth user.`);
+      console.error(`[signUpWithPhone] Failed to create user profile for phone ${maskedPhone}. Rolling back auth user.`);
       try {
         await cred.user.delete();
       } catch (delErr) {
         console.error("Failed to delete auth user during rollback:", delErr);
       }
       throw new Error("Could not create account. Please try again.");
+    }
+
+    // Attempt referral in background without blocking signup
+    if (idToken) {
+      fetch('/api/referral/signup-complete', {
+        method: 'POST',
+        headers: { 
+          'Authorization': `Bearer ${idToken}`,
+          'Content-Type': 'application/json' 
+        },
+        body: JSON.stringify({ refCode: referralCode || new URLSearchParams(window.location.search).get('ref') })
+      }).catch((refErr) => {
+        console.warn('Referral signup-complete notice (non-fatal):', refErr);
+      });
     }
 
     setUserProfile(profile);
