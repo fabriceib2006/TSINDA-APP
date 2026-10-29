@@ -31,6 +31,7 @@ export const AuthScreen: React.FC = () => {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [referralCode, setReferralCode] = useState('');
+  const [acceptTerms, setAcceptTerms] = useState(false);
   
   // New password state for reset link
   const [newPassword, setNewPassword] = useState('');
@@ -84,6 +85,15 @@ export const AuthScreen: React.FC = () => {
   const handleStudentSignup = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+
+    if (!acceptTerms) {
+      setError({
+        en: "You must accept the Terms & Conditions and Privacy Policy to create an account.",
+        rw: "Ugomba kwemeza Amategeko n'Amabwiriza ndetse na Politiki y'Ubwitege kugira ngo ufungure konti.",
+        fr: "Vous devez accepter les conditions générales et la politique de confidentialité."
+      }[language] || "You must accept the Terms & Conditions and Privacy Policy.");
+      return;
+    }
 
     if (password !== confirmPassword) {
       setError({
@@ -638,6 +648,40 @@ export const AuthScreen: React.FC = () => {
                         fr: "Pré-rempli depuis votre lien d'invitation si applicable. Vous pouvez le garder ou laisser vide."
                       }[language] || "Auto-filled from your invite link. You can keep it or leave it blank."}
                     </span>
+                  </div>
+
+                  <div className="flex items-start gap-2.5 pt-1">
+                    <input
+                      type="checkbox"
+                      id="acceptTerms"
+                      required
+                      checked={acceptTerms}
+                      onChange={(e) => setAcceptTerms(e.target.checked)}
+                      className="mt-1 w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
+                    />
+                    <label htmlFor="acceptTerms" className="text-xs text-slate-600 leading-relaxed">
+                      {{
+                        en: (
+                          <>
+                            I agree to the <a href="/terms" target="_blank" className="text-blue-600 font-bold hover:underline">Terms & Conditions</a> and <a href="/terms?tab=privacy" target="_blank" className="text-blue-600 font-bold hover:underline">Privacy Policy</a> *
+                          </>
+                        ),
+                        rw: (
+                          <>
+                            Nemeye <a href="/terms" target="_blank" className="text-blue-600 font-bold hover:underline">Amategeko n'Amabwiriza</a> ndetse na <a href="/terms?tab=privacy" target="_blank" className="text-blue-600 font-bold hover:underline">Politiki y'Ubwitege</a> *
+                          </>
+                        ),
+                        fr: (
+                          <>
+                            J'accepte les <a href="/terms" target="_blank" className="text-blue-600 font-bold hover:underline">Conditions Générales</a> et la <a href="/terms?tab=privacy" target="_blank" className="text-blue-600 font-bold hover:underline">Politique de Confidentialité</a> *
+                          </>
+                        )
+                      }[language] || (
+                        <>
+                          I agree to the <a href="/terms" target="_blank" className="text-blue-600 font-bold hover:underline">Terms & Conditions</a> and <a href="/terms?tab=privacy" target="_blank" className="text-blue-600 font-bold hover:underline">Privacy Policy</a> *
+                        </>
+                      )}
+                    </label>
                   </div>
 
                   <button

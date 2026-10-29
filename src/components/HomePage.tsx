@@ -422,40 +422,39 @@ export const HomePage: React.FC = () => {
 
 
       {/* MAIN SECTIONS FROM FIRESTORE */}
-      <main className="flex-1">
+      <main className="flex-1 space-y-10 lg:space-y-14 pb-12">
         {sections.map((section) => {
           if (section.type === 'hero') {
             return (
-              <section key={section.id} className="relative py-16 lg:py-24 px-4 sm:px-6 lg:px-8 bg-gradient-to-b from-blue-50/80 via-indigo-50/20 to-white overflow-hidden">
+              <section key={section.id} className="relative py-10 lg:py-16 px-4 sm:px-6 lg:px-8 bg-gradient-to-b from-blue-50/90 via-indigo-50/30 to-slate-50 overflow-hidden">
+                  {/* Decorative background blur blobs */}
+                  <div className="absolute top-10 left-1/2 -translate-x-1/2 w-[500px] h-[250px] bg-blue-400/10 blur-[100px] rounded-full pointer-events-none"></div>
+                  
                   {/* Two-column hero */}
-                  <div className="flex flex-col lg:flex-row items-center justify-between gap-12 max-w-7xl mx-auto py-12 lg:py-16">
-                    <div className="flex-1 text-center lg:text-left space-y-6">
-                      <div className="inline-flex items-center gap-2 px-3.5 py-1.5 bg-blue-50 text-blue-700 rounded-full text-xs font-bold border border-blue-200 shadow-2xs">
-                        <ShieldCheck className="w-4 h-4 text-blue-600" />
+                  <div className="flex flex-col lg:flex-row items-center justify-between gap-8 lg:gap-12 max-w-7xl mx-auto relative z-10">
+                    <div className="flex-1 text-center lg:text-left space-y-5">
+                      <div className="inline-flex items-center gap-2 px-3 py-1 bg-blue-100/80 text-blue-800 rounded-full text-xs font-extrabold border border-blue-200/80 shadow-2xs">
+                        <ShieldCheck className="w-3.5 h-3.5 text-blue-600" />
                         <span>{t[language].certifiedBadge || 'Rwanda National Gazette Certified'}</span>
                       </div>
-                      <h1 className="text-3xl sm:text-5xl lg:text-6xl font-black text-slate-900 tracking-tight leading-tight">
+                      <h1 className="text-3xl sm:text-4xl lg:text-5xl font-black text-slate-900 tracking-tight leading-[1.1]">
                         {section.title?.[language] || section.title?.en || tagline}
                       </h1>
-                      <p className="text-base sm:text-lg text-slate-600 max-w-2xl mx-auto lg:mx-0 leading-relaxed">
+                      <p className="text-sm sm:text-base text-slate-600 max-w-2xl mx-auto lg:mx-0 leading-relaxed font-normal">
                         {section.subtitle?.[language] || section.subtitle?.en}
                       </p>
 
-                      {/* Three small trust chips */}
-                      <div className="flex flex-wrap items-center justify-center lg:justify-start gap-3 pt-2">
-                      </div>
-
-                      <div className="pt-2 flex flex-col sm:flex-row items-center justify-center lg:justify-start gap-3">
+                      <div className="pt-1 flex flex-col sm:flex-row items-center justify-center lg:justify-start gap-3">
                         <a
                           href="/student?mode=signup"
-                          className="w-full sm:w-auto min-h-[48px] px-8 py-3.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-sm shadow-sm flex items-center justify-center gap-2 transition-all"
+                          className="w-full sm:w-auto min-h-[46px] px-7 py-3 bg-blue-600 hover:bg-blue-700 text-white font-extrabold rounded-xl text-xs sm:text-sm shadow-md shadow-blue-500/20 flex items-center justify-center gap-2 transition-all hover:scale-102"
                         >
                           <span>{t[language].getStarted || 'Start Learning Now'}</span>
                           <ArrowRight className="w-4 h-4" />
                         </a>
                         <a
                           href="/student"
-                          className="w-full sm:w-auto min-h-[48px] px-8 py-3.5 bg-white hover:bg-slate-100 text-slate-800 font-bold rounded-xl text-sm border border-slate-200 transition-all text-center flex items-center justify-center"
+                          className="w-full sm:w-auto min-h-[46px] px-7 py-3 bg-white hover:bg-slate-100 text-slate-800 font-extrabold rounded-xl text-xs sm:text-sm border border-slate-200/90 shadow-2xs transition-all text-center flex items-center justify-center"
                         >
                           {t[language].signIn || 'Student Sign In'}
                         </a>
@@ -467,9 +466,9 @@ export const HomePage: React.FC = () => {
                       {imageSlots['hero'] || section.imageUrl ? (
                         <img src={imageSlots['hero'] || section.imageUrl} alt="Hero" className="max-w-full lg:max-w-md h-auto rounded-3xl shadow-xl border border-slate-200" />
                       ) : (
-                        <div className="w-full max-w-[280px] lg:max-w-sm bg-slate-900 rounded-[40px] p-4 shadow-2xl border-4 border-slate-800 transform lg:rotate-1 lg:hover:rotate-0 transition-transform duration-300">
-                          <div className="w-32 h-4 bg-slate-800 rounded-full mx-auto mb-4"></div>
-                          <div className="bg-white rounded-[28px] p-5 text-left space-y-4 shadow-inner">
+                        <div className="w-full max-w-[320px] lg:max-w-[360px] bg-slate-900 rounded-[36px] p-3.5 shadow-2xl border-4 border-slate-800 transform lg:rotate-1 lg:hover:rotate-0 transition-transform duration-300">
+                          <div className="w-28 h-3.5 bg-slate-800 rounded-full mx-auto mb-3"></div>
+                          <div className="bg-white rounded-[26px] p-4 text-left space-y-3 shadow-inner">
                             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
                               <div>
                                 <span className="text-[10px] font-extrabold uppercase tracking-wider text-blue-600 bg-blue-50 px-2.5 py-1 rounded-md">{heroPreview?.label?.[language] || heroPreview?.label?.en || t[language].provisionalExam || 'Provisional Exam'}</span>
@@ -533,8 +532,8 @@ export const HomePage: React.FC = () => {
               BookOpen, Award, Play, UserPlus, CreditCard, CheckCircle2, TrendingUp, Users, ShieldCheck, Globe, Star, Gift, Sparkles
             };
             return (
-              <section key={section.id} id="features" className="py-20 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto space-y-12">
-                <div className="text-center space-y-2">
+              <section key={section.id} id="features" className="py-10 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto space-y-6">
+                <div className="text-center space-y-1.5">
                   <h2 className="text-2xl sm:text-3xl font-black text-slate-900">{section.title?.[language] || section.title?.en}</h2>
                   <p className="text-sm text-slate-600 max-w-lg mx-auto">{section.subtitle?.[language] || section.subtitle?.en}</p>
                 </div>
@@ -597,8 +596,8 @@ export const HomePage: React.FC = () => {
           if (section.type === 'howItWorks') {
             const secItems = getSectionItems('howItWorks').sort((a: any, b: any) => (a.order || 0) - (b.order || 0));
             return (
-              <section key={section.id} id="howItWorks" className="py-20 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto bg-slate-100/70 rounded-3xl my-10 space-y-12 relative overflow-hidden">
-                <div className="text-center space-y-2">
+              <section key={section.id} id="howItWorks" className="py-10 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto bg-slate-100/70 rounded-3xl my-6 space-y-6 relative overflow-hidden">
+                <div className="text-center space-y-1.5">
                   <h2 className="text-2xl sm:text-3xl font-black text-slate-900">{section.title?.[language] || section.title?.en}</h2>
                   <p className="text-sm text-slate-600 max-w-lg mx-auto">{section.subtitle?.[language] || section.subtitle?.en}</p>
                 </div>
@@ -1168,6 +1167,8 @@ export const HomePage: React.FC = () => {
             <ul className="space-y-2 text-xs">
               <li><a href="/student" className="hover:text-white transition-colors">{t[language].signIn || 'Student Sign In'}</a></li>
               <li><a href="/student?mode=signup" className="hover:text-white transition-colors">{getText(homepageT.studentRegistration, language)}</a></li>
+              <li><a href="/terms" className="hover:text-white transition-colors">{language === 'rw' ? "Amategeko n'Amabwiriza" : language === 'fr' ? "Termes et Conditions" : "Terms & Conditions"}</a></li>
+              <li><a href="/terms?tab=privacy" className="hover:text-white transition-colors">{language === 'rw' ? "Politiki y'Ubwitege" : language === 'fr' ? "Politique de Confidentialité" : "Privacy Policy"}</a></li>
               <li><a href="/admin/login" className="hover:text-white transition-colors">{getText(homepageT.adminLogin, language)}</a></li>
             </ul>
           </div>

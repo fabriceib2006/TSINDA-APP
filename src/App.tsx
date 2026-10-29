@@ -11,6 +11,7 @@ import { AdminAuthScreen } from './components/AdminAuthScreen';
 import { AdminLayout } from './components/AdminLayout';
 import { LearnerDashboard } from './components/LearnerDashboard';
 import { HomePage } from './components/HomePage';
+import { TermsAndPrivacyPage } from './components/TermsAndPrivacyPage';
 import { useAuth } from './context/AuthContext';
 
 const AppContent: React.FC = () => {
@@ -28,6 +29,10 @@ const AppContent: React.FC = () => {
     );
   }
 
+  if (path.startsWith('/terms')) {
+    return <TermsAndPrivacyPage />;
+  }
+
   // 1. Admin route (/admin...)
   if (path.startsWith('/admin')) {
     if (!firebaseUser || !userProfile || userProfile.role !== 'admin') {
@@ -36,7 +41,6 @@ const AppContent: React.FC = () => {
     return <AdminLayout />;
   }
 
-  // 2. Student route (/student...)
   // 2. Student route (/student...)
   if (path.startsWith('/student')) {
     if (!firebaseUser || !userProfile) {

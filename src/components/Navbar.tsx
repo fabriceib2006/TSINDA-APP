@@ -145,14 +145,6 @@ export const Navbar: React.FC<NavbarProps> = ({
             <span className="hidden sm:inline">{language === 'rw' ? 'Ahabanza' : language === 'fr' ? 'Accueil' : 'Home'}</span>
           </a>
           
-          <a
-            href="/"
-            className="xs:hidden min-h-[40px] px-3 py-2 bg-slate-100 hover:bg-slate-200/80 border border-slate-200/70 text-slate-800 text-xs font-bold rounded-xl flex items-center justify-center transition-colors shadow-2xs"
-            title="Return to Homepage"
-          >
-            <Home className="w-3.5 h-3.5 text-blue-600" />
-          </a>
-          
           {/* Desktop Segmented Language Switcher (>= 1024px) */}
           <div className="hidden lg:flex items-center bg-slate-100/90 border border-slate-200/70 p-0.5 rounded-xl shadow-2xs">
             <div className="pl-2 pr-1.5 text-slate-400 flex items-center">

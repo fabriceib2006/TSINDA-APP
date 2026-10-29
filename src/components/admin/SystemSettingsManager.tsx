@@ -48,7 +48,9 @@ export const SystemSettingsManager: React.FC = () => {
     copyrightText: '',
     contact: { phone: '', whatsapp: '', email: '', address: '' },
     seo: { title: '', description: '' },
-    maintenanceMode: false
+    maintenanceMode: false,
+    termsContent: { rw: '', en: '', fr: '' },
+    privacyContent: { rw: '', en: '', fr: '' }
   });
 
   const [referralSettings, setReferralSettings] = useState({
@@ -754,6 +756,44 @@ export const SystemSettingsManager: React.FC = () => {
                 className="w-full p-3 rounded-xl border border-slate-200 text-xs sm:text-sm"
               />
             </div>
+          </div>
+
+          <div className="border-t border-slate-100 pt-5 space-y-4">
+            <h4 className="text-sm font-bold text-slate-900">Terms & Conditions Content (3 Languages)</h4>
+            {(['rw', 'en', 'fr'] as Language[]).map((lang) => (
+              <div key={lang} className="space-y-1">
+                <label className="block text-xs font-bold uppercase text-blue-600">{lang.toUpperCase()} Terms & Conditions</label>
+                <textarea
+                  rows={4}
+                  value={settings.termsContent?.[lang] || ''}
+                  onChange={(e) => setSettings({
+                    ...settings,
+                    termsContent: { ...settings.termsContent, [lang]: e.target.value }
+                  })}
+                  placeholder={`Terms and conditions in ${lang.toUpperCase()}`}
+                  className="w-full p-3 rounded-xl border border-slate-200 text-xs sm:text-sm focus:ring-2 focus:ring-blue-600 focus:outline-none"
+                />
+              </div>
+            ))}
+          </div>
+
+          <div className="border-t border-slate-100 pt-5 space-y-4">
+            <h4 className="text-sm font-bold text-slate-900">Privacy Policy Content (3 Languages)</h4>
+            {(['rw', 'en', 'fr'] as Language[]).map((lang) => (
+              <div key={lang} className="space-y-1">
+                <label className="block text-xs font-bold uppercase text-blue-600">{lang.toUpperCase()} Privacy Policy</label>
+                <textarea
+                  rows={4}
+                  value={settings.privacyContent?.[lang] || ''}
+                  onChange={(e) => setSettings({
+                    ...settings,
+                    privacyContent: { ...settings.privacyContent, [lang]: e.target.value }
+                  })}
+                  placeholder={`Privacy policy in ${lang.toUpperCase()}`}
+                  className="w-full p-3 rounded-xl border border-slate-200 text-xs sm:text-sm focus:ring-2 focus:ring-blue-600 focus:outline-none"
+                />
+              </div>
+            ))}
           </div>
 
           <div className="border-t border-slate-100 pt-5 flex items-center justify-between">
