@@ -2507,6 +2507,7 @@ async function startServer() {
     const auth = await verifyAuth(req);
     if (!auth) return res.status(401).json({ error: 'Unauthorized: Sign in required.' });
     const { uid } = auth;
+    const { wrongQuestionIds } = req.body || {};
     try {
       const attemptsRef = db.collection('users').doc(uid).collection('examAttempts');
       const purchasesRef = db.collection('users').doc(uid).collection('purchases');
@@ -2670,13 +2671,19 @@ async function startServer() {
           targetPurchase = validCountPurchases[0];
         }
 
-        // Prepare shuffled questions
-        const shuffledQuestions = [...allQuestions];
-        for (let i = shuffledQuestions.length - 1; i > 0; i--) {
-          const j = Math.floor(Math.random() * (i + 1));
-          [shuffledQuestions[i], shuffledQuestions[j]] = [shuffledQuestions[j], shuffledQuestions[i]];
+        // Prepare questions
+        let selected: any[] = [];
+        if (Array.isArray(wrongQuestionIds) && wrongQuestionIds.length > 0) {
+          selected = allQuestions.filter(q => wrongQuestionIds.includes(q.id));
         }
-        const selected = shuffledQuestions.slice(0, settings.numQuestions || 20);
+        if (selected.length === 0) {
+          const shuffledQuestions = [...allQuestions];
+          for (let i = shuffledQuestions.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [shuffledQuestions[i], shuffledQuestions[j]] = [shuffledQuestions[j], shuffledQuestions[i]];
+          }
+          selected = shuffledQuestions.slice(0, settings.numQuestions || 20);
+        }
         const durationMinutes = settings.durationMinutes || 20;
         const expiresAt = Timestamp.fromDate(new Date(now.getTime() + durationMinutes * 60000));
         const newAttemptRef = attemptsRef.doc();

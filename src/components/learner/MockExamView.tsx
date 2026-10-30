@@ -69,9 +69,37 @@ export const MockExamView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     const wrongQuestionIds = serverResult.results.filter(r => !r.isCorrect).map(r => r.questionId);
     if (wrongQuestionIds.length === 0) return;
     
-    // Simplification: In a real app, this would require a specific API call. 
-    // For now, inform the user or implement a basic retry mechanism.
-    alert(`Retry functionality would start a new exam with ${wrongQuestionIds.length} wrong questions.`);
+    setLoading(true);
+    setErrorMsg(null);
+    try {
+      const token = await getToken();
+      const res = await fetch('/api/exams/start', { 
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ wrongQuestionIds })
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        if (errData.code === 'NO_PLAN' || errData.code === 'NO_CREDITS') {
+          setErrorCode(errData.code);
+        }
+        throw new Error(errData.error || 'Failed to start retry exam');
+      }
+      const data = await res.json();
+      setExamQuestions(data.questions);
+      setCurrentAttemptId(data.attemptId);
+      
+      const expiresAt = new Date(data.expiresAt).getTime();
+      const remaining = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
+      setTimeLeft(remaining);
+      setUserAnswers({});
+      setExamState('running');
+    } catch (err: any) {
+      console.error("Error starting retry exam:", err);
+      setErrorMsg(err.message || 'Failed to start retry exam');
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
