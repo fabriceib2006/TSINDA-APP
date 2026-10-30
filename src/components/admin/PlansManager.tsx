@@ -23,7 +23,8 @@ import {
   Star,
   Percent,
   Clock,
-  Calendar
+  Calendar,
+  GripVertical
 } from 'lucide-react';
 import { ConfirmModal } from '../common/ConfirmModal';
 
@@ -127,6 +128,26 @@ export const PlansManager: React.FC = () => {
       (!s.examLimit || (s.examsUsed ?? 0) < s.examLimit) &&
       users.some(u => u.uid === s.userId)
     ).length;
+  };
+
+  const handleReorder = async (draggedId: string, targetId: string) => {
+    if (draggedId === targetId) return;
+    const draggedIndex = plans.findIndex(p => p.id === draggedId);
+    const targetIndex = plans.findIndex(p => p.id === targetId);
+    if (draggedIndex === -1 || targetIndex === -1) return;
+
+    const newPlans = [...plans];
+    const [removed] = newPlans.splice(draggedIndex, 1);
+    newPlans.splice(targetIndex, 0, removed);
+
+    const updated = newPlans.map((p, idx) => ({ ...p, sortOrder: idx + 1 }));
+    setPlans(updated);
+
+    try {
+      await Promise.all(updated.map(p => updateDoc(doc(db, 'plans', p.id), { sortOrder: p.sortOrder })));
+    } catch (err) {
+      console.error('Error updating plan sort orders:', err);
+    }
   };
 
   const openCreateModal = () => {
@@ -401,9 +422,20 @@ export const PlansManager: React.FC = () => {
             {plans.map((plan) => {
               const activeCount = getActiveSubscriberCount(plan.id);
               return (
-                <div key={plan.id} className={`bg-white rounded-2xl border p-6 shadow-xs space-y-4 relative flex flex-col justify-between ${
-                  plan.isRecommended ? 'border-blue-500 ring-2 ring-blue-500/10' : 'border-slate-200'
-                }`}>
+                <div 
+                  key={plan.id}
+                  draggable
+                  onDragStart={(e) => e.dataTransfer.setData('text/plain', plan.id)}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    const draggedId = e.dataTransfer.getData('text/plain');
+                    handleReorder(draggedId, plan.id);
+                  }}
+                  className={`bg-white rounded-2xl border p-6 shadow-xs space-y-4 relative flex flex-col justify-between cursor-grab active:cursor-grabbing hover:shadow-md transition-all ${
+                    plan.isRecommended ? 'border-blue-500 ring-2 ring-blue-500/10' : 'border-slate-200'
+                  }`}
+                >
                   {plan.isRecommended && (
                     <span className="absolute -top-3 right-6 bg-blue-600 text-white text-[10px] font-extrabold uppercase px-3 py-1 rounded-full shadow-xs flex items-center gap-1">
                       <Star className="w-3 h-3 fill-current" />
@@ -412,10 +444,13 @@ export const PlansManager: React.FC = () => {
                   )}
 
                   <div className="space-y-3">
-                    <div className="flex justify-between items-start">
-                      <div>
-                        <h4 className="text-lg font-bold text-slate-900">{plan.name.en}</h4>
-                        <p className="text-xs text-slate-500 line-clamp-2 mt-0.5">{plan.description.en}</p>
+                    <div className="flex justify-between items-start gap-2">
+                      <div className="flex items-start gap-2">
+                        <GripVertical className="w-5 h-5 text-slate-400 shrink-0 mt-0.5 cursor-grab" />
+                        <div>
+                          <h4 className="text-lg font-bold text-slate-900">{plan.name.en}</h4>
+                          <p className="text-xs text-slate-500 line-clamp-2 mt-0.5">{plan.description.en}</p>
+                        </div>
                       </div>
                       <span className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase ${
                         plan.isActive ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'
