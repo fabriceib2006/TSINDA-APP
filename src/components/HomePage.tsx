@@ -14,6 +14,8 @@ import { useLanguage } from '../context/LanguageContext';
 import { getText } from '../lib/i18n';
 import { getBestPromotion } from '../lib/promotionUtils';
 import { formatCountdown } from '../lib/timeUtils';
+import { ScrollReveal, StaggerContainer, StaggerItem } from './common/ScrollReveal';
+import { motion } from 'motion/react';
 
 export const HomePage: React.FC = () => {
   const { userProfile } = useAuth();
@@ -422,29 +424,49 @@ export const HomePage: React.FC = () => {
 
 
       {/* MAIN SECTIONS FROM FIRESTORE */}
-      <main className="flex-1 space-y-10 lg:space-y-14 pb-12">
+      <main className="flex-1 space-y-6 sm:space-y-8 pb-8">
         {sections.map((section) => {
           if (section.type === 'hero') {
             return (
-              <section key={section.id} className="relative py-10 lg:py-16 px-4 sm:px-6 lg:px-8 bg-gradient-to-b from-blue-50/90 via-indigo-50/30 to-slate-50 overflow-hidden">
+              <section key={section.id} className="relative py-8 sm:py-12 px-4 sm:px-6 lg:px-8 bg-gradient-to-b from-blue-50/90 via-indigo-50/30 to-slate-50 overflow-hidden">
                   {/* Decorative background blur blobs */}
                   <div className="absolute top-10 left-1/2 -translate-x-1/2 w-[500px] h-[250px] bg-blue-400/10 blur-[100px] rounded-full pointer-events-none"></div>
                   
                   {/* Two-column hero */}
                   <div className="flex flex-col lg:flex-row items-center justify-between gap-8 lg:gap-12 max-w-7xl mx-auto relative z-10">
                     <div className="flex-1 text-center lg:text-left space-y-5">
-                      <div className="inline-flex items-center gap-2 px-3 py-1 bg-blue-100/80 text-blue-800 rounded-full text-xs font-extrabold border border-blue-200/80 shadow-2xs">
+                      <motion.div
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: 0.5 }}
+                        className="inline-flex items-center gap-2 px-3 py-1 bg-blue-100/80 text-blue-800 rounded-full text-xs font-extrabold border border-blue-200/80 shadow-2xs"
+                      >
                         <ShieldCheck className="w-3.5 h-3.5 text-blue-600" />
                         <span>{t[language].certifiedBadge || 'Rwanda National Gazette Certified'}</span>
-                      </div>
-                      <h1 className="text-3xl sm:text-4xl lg:text-5xl font-black text-slate-900 tracking-tight leading-[1.1]">
+                      </motion.div>
+                      <motion.h1
+                        initial={{ opacity: 0, y: 30 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: 0.6, delay: 0.1 }}
+                        className="text-3xl sm:text-4xl lg:text-5xl font-black text-slate-900 tracking-tight leading-[1.1]"
+                      >
                         {section.title?.[language] || section.title?.en || tagline}
-                      </h1>
-                      <p className="text-sm sm:text-base text-slate-600 max-w-2xl mx-auto lg:mx-0 leading-relaxed font-normal">
+                      </motion.h1>
+                      <motion.p
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: 0.6, delay: 0.25 }}
+                        className="text-sm sm:text-base text-slate-600 max-w-2xl mx-auto lg:mx-0 leading-relaxed font-normal"
+                      >
                         {section.subtitle?.[language] || section.subtitle?.en}
-                      </p>
+                      </motion.p>
 
-                      <div className="pt-1 flex flex-col sm:flex-row items-center justify-center lg:justify-start gap-3">
+                      <motion.div
+                        initial={{ opacity: 0, scale: 0.9 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        transition={{ duration: 0.5, delay: 0.4 }}
+                        className="pt-1 flex flex-col sm:flex-row items-center justify-center lg:justify-start gap-3"
+                      >
                         <a
                           href="/student?mode=signup"
                           className="w-full sm:w-auto min-h-[46px] px-7 py-3 bg-blue-600 hover:bg-blue-700 text-white font-extrabold rounded-xl text-xs sm:text-sm shadow-md shadow-blue-500/20 flex items-center justify-center gap-2 transition-all hover:scale-102"
@@ -458,11 +480,16 @@ export const HomePage: React.FC = () => {
                         >
                           {t[language].signIn || 'Student Sign In'}
                         </a>
-                      </div>
+                      </motion.div>
                     </div>
 
                     {/* Right column: image slot or phone preview */}
-                    <div className="flex-none flex justify-center w-full lg:w-auto">
+                    <motion.div
+                      initial={{ opacity: 0, x: 30 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ duration: 0.6, delay: 0.3 }}
+                      className="flex-none flex justify-center w-full lg:w-auto"
+                    >
                       {imageSlots['hero'] || section.imageUrl ? (
                         <img src={imageSlots['hero'] || section.imageUrl} alt="Hero" className="max-w-full lg:max-w-md h-auto rounded-3xl shadow-xl border border-slate-200" />
                       ) : (
@@ -499,7 +526,7 @@ export const HomePage: React.FC = () => {
                           <div className="w-28 h-1 bg-slate-700 rounded-full mx-auto mt-4"></div>
                         </div>
                       )}
-                    </div>
+                    </motion.div>
                   </div>
               </section>
             );
@@ -532,13 +559,13 @@ export const HomePage: React.FC = () => {
               BookOpen, Award, Play, UserPlus, CreditCard, CheckCircle2, TrendingUp, Users, ShieldCheck, Globe, Star, Gift, Sparkles
             };
             return (
-              <section key={section.id} id="features" className="py-10 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto space-y-6">
-                <div className="text-center space-y-1.5">
+              <section key={section.id} id="features" className="py-8 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto space-y-6">
+                <ScrollReveal className="text-center space-y-1.5">
                   <h2 className="text-2xl sm:text-3xl font-black text-slate-900">{section.title?.[language] || section.title?.en}</h2>
                   <p className="text-sm text-slate-600 max-w-lg mx-auto">{section.subtitle?.[language] || section.subtitle?.en}</p>
-                </div>
+                </ScrollReveal>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                <StaggerContainer className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6" staggerDelay={0.15}>
                   {secItems.map((item, idx) => {
                     const IconComponent = featureIconMap[item.iconName] || Star;
                     const slotKey = idx === 0 ? 'feature-lessons' : idx === 1 ? 'feature-exams' : idx === 2 ? 'feature-videos' : null;
@@ -546,49 +573,50 @@ export const HomePage: React.FC = () => {
                     const isPromoCard = Boolean((item as any).isReferralCard || item.iconName === 'Gift');
 
                     return (
-                      <div 
-                        key={item.id || idx} 
-                        className={`p-8 rounded-2xl border shadow-xs space-y-4 hover:-translate-y-1 transition-all duration-300 hover:shadow-md relative flex flex-col justify-between ${
-                          isPromoCard 
-                            ? 'bg-gradient-to-b from-amber-50/70 to-white border-amber-300 ring-1 ring-amber-200' 
-                            : 'bg-white border-slate-200'
-                        }`}
-                      >
-                        {isPromoCard && (
-                          <div className="absolute -top-3 right-4 bg-amber-500 text-white text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full shadow-xs flex items-center gap-1">
-                            <Sparkles className="w-3 h-3" />
-                            <span>100% Free Pass</span>
-                          </div>
-                        )}
-                        <div className="space-y-4">
-                          {cardImg ? (
-                            <img src={cardImg} alt="" className="w-12 h-12 rounded-2xl object-cover border border-slate-200" />
-                          ) : (
-                            <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${
-                              isPromoCard ? 'bg-amber-100 text-amber-700' : 'bg-blue-50 text-blue-600'
-                            }`}>
-                              <IconComponent className="w-6 h-6" />
+                      <StaggerItem key={item.id || idx}>
+                        <div 
+                          className={`p-6 rounded-2xl border shadow-xs space-y-4 hover:-translate-y-1 transition-all duration-300 hover:shadow-md relative flex flex-col justify-between h-full ${
+                            isPromoCard 
+                              ? 'bg-gradient-to-b from-amber-50/70 to-white border-amber-300 ring-1 ring-amber-200' 
+                              : 'bg-white border-slate-200'
+                          }`}
+                        >
+                          {isPromoCard && (
+                            <div className="absolute -top-3 right-4 bg-amber-500 text-white text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full shadow-xs flex items-center gap-1">
+                              <Sparkles className="w-3 h-3" />
+                              <span>100% Free Pass</span>
                             </div>
                           )}
-                          <h3 className="text-lg font-bold text-slate-900">{item.title?.[language] || item.title?.en}</h3>
-                          <p className="text-sm text-slate-600 leading-relaxed">{item.description?.[language] || item.description?.en}</p>
-                        </div>
-
-                        {isPromoCard && (
-                          <div className="pt-2">
-                            <a
-                              href={userProfile ? '/student' : '/student?mode=signup'}
-                              className="inline-flex items-center gap-1 text-xs font-bold text-amber-700 hover:text-amber-800 transition-colors"
-                            >
-                              <span>{language === 'rw' ? 'Tangira Gutsindira Amapaki' : language === 'fr' ? 'Commencer à Parrainer' : 'Start Referring & Earning'}</span>
-                              <ArrowRight className="w-3.5 h-3.5" />
-                            </a>
+                          <div className="space-y-4">
+                            {cardImg ? (
+                              <img src={cardImg} alt="" className="w-12 h-12 rounded-2xl object-cover border border-slate-200" />
+                            ) : (
+                              <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${
+                                isPromoCard ? 'bg-amber-100 text-amber-700' : 'bg-blue-50 text-blue-600'
+                              }`}>
+                                <IconComponent className="w-6 h-6" />
+                              </div>
+                            )}
+                            <h3 className="text-lg font-bold text-slate-900">{item.title?.[language] || item.title?.en}</h3>
+                            <p className="text-sm text-slate-600 leading-relaxed">{item.description?.[language] || item.description?.en}</p>
                           </div>
-                        )}
-                      </div>
+
+                          {isPromoCard && (
+                            <div className="pt-2">
+                              <a
+                                href={userProfile ? '/student' : '/student?mode=signup'}
+                                className="inline-flex items-center gap-1 text-xs font-bold text-amber-700 hover:text-amber-800 transition-colors"
+                              >
+                                <span>{language === 'rw' ? 'Tangira Gutsindira Amapaki' : language === 'fr' ? 'Commencer à Parrainer' : 'Start Referring & Earning'}</span>
+                                <ArrowRight className="w-3.5 h-3.5" />
+                              </a>
+                            </div>
+                          )}
+                        </div>
+                      </StaggerItem>
                     );
                   })}
-                </div>
+                </StaggerContainer>
               </section>
             );
           }
@@ -596,32 +624,62 @@ export const HomePage: React.FC = () => {
           if (section.type === 'howItWorks') {
             const secItems = getSectionItems('howItWorks').sort((a: any, b: any) => (a.order || 0) - (b.order || 0));
             return (
-              <section key={section.id} id="howItWorks" className="py-10 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto bg-slate-100/70 rounded-3xl my-6 space-y-6 relative overflow-hidden">
-                <div className="text-center space-y-1.5">
-                  <h2 className="text-2xl sm:text-3xl font-black text-slate-900">{section.title?.[language] || section.title?.en}</h2>
-                  <p className="text-sm text-slate-600 max-w-lg mx-auto">{section.subtitle?.[language] || section.subtitle?.en}</p>
-                </div>
+              <React.Fragment key={section.id}>
+                <section id="howItWorks" className="py-8 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto bg-slate-100/70 rounded-3xl my-4 space-y-6 relative overflow-hidden">
+                  <ScrollReveal className="text-center space-y-1.5">
+                    <h2 className="text-2xl sm:text-3xl font-black text-slate-900">{section.title?.[language] || section.title?.en}</h2>
+                    <p className="text-sm text-slate-600 max-w-lg mx-auto">{section.subtitle?.[language] || section.subtitle?.en}</p>
+                  </ScrollReveal>
 
-                <div className="relative grid grid-cols-1 md:grid-cols-3 gap-6">
-                  {/* Connecting line on desktop and vertical line on mobile */}
-                  <div className="hidden md:block absolute top-1/2 left-16 right-16 h-0.5 bg-blue-200 -translate-y-8 z-0"></div>
-                  <div className="md:hidden absolute top-12 bottom-12 left-1/2 w-0.5 bg-blue-200 -translate-x-1/2 z-0"></div>
+                  <div className="relative grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <div className="hidden md:block absolute top-1/2 left-16 right-16 h-0.5 bg-blue-200 -translate-y-8 z-0"></div>
+                    <div className="md:hidden absolute top-12 bottom-12 left-1/2 w-0.5 bg-blue-200 -translate-x-1/2 z-0"></div>
 
-                  {secItems.map((item, idx) => {
-                    const rawTitle = item.title?.[language] || item.title?.en || '';
-                    const cleanTitle = rawTitle.replace(/^\d+[\.\-\)]\s*/, '');
-                    return (
-                      <div key={item.id || idx} className="bg-white p-8 rounded-2xl border border-slate-200 shadow-xs space-y-4 relative z-10 flex flex-col items-center text-center">
-                        <div className="w-12 h-12 bg-blue-600 text-white rounded-2xl flex items-center justify-center font-bold text-base shadow-md">
-                          {idx + 1}
-                        </div>
-                        <h3 className="text-lg font-bold text-slate-900">{cleanTitle}</h3>
-                        <p className="text-sm text-slate-600 leading-relaxed">{item.description?.[language] || item.description?.en}</p>
+                    {secItems.map((item, idx) => {
+                      const rawTitle = item.title?.[language] || item.title?.en || '';
+                      const cleanTitle = rawTitle.replace(/^\d+[\.\-\)]\s*/, '');
+                      const slideDir = idx % 2 === 0 ? 'left' : 'right';
+                      return (
+                        <ScrollReveal key={item.id || idx} direction={slideDir} delay={idx * 0.2}>
+                          <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-xs space-y-4 relative z-10 flex flex-col items-center text-center h-full">
+                            <div className="w-12 h-12 bg-blue-600 text-white rounded-2xl flex items-center justify-center font-bold text-base shadow-md">
+                              {idx + 1}
+                            </div>
+                            <h3 className="text-lg font-bold text-slate-900">{cleanTitle}</h3>
+                            <p className="text-sm text-slate-600 leading-relaxed">{item.description?.[language] || item.description?.en}</p>
+                          </div>
+                        </ScrollReveal>
+                      );
+                    })}
+                  </div>
+                </section>
+
+                {/* STATS / OUR IMPACT SECTION (#5) */}
+                <section className="py-8 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto">
+                  <ScrollReveal>
+                    <div className="bg-gradient-to-r from-blue-700 via-indigo-700 to-purple-800 text-white rounded-3xl p-8 sm:p-12 shadow-xl relative overflow-hidden">
+                      <div className="absolute top-0 right-0 w-64 h-64 bg-white/10 rounded-full blur-3xl pointer-events-none"></div>
+                      <div className="text-center space-y-2 mb-8 relative z-10">
+                        <h2 className="text-2xl sm:text-3xl font-black">Our Impact & Success Rate</h2>
+                        <p className="text-blue-100 text-sm">Trusted by thousands of Rwandan student drivers</p>
                       </div>
-                    );
-                  })}
-                </div>
-              </section>
+                      <StaggerContainer className="grid grid-cols-2 md:grid-cols-4 gap-6 text-center relative z-10" staggerDelay={0.12}>
+                        {[
+                          { number: '10,000+', label: 'Active Learners' },
+                          { number: '162', label: 'Official Articles' },
+                          { number: '98%', label: 'First-Try Pass Rate' },
+                          { number: '3', label: 'Languages Supported' },
+                        ].map((stat, i) => (
+                          <StaggerItem key={i} className="space-y-1">
+                            <div className="text-3xl sm:text-4xl font-black font-mono">{stat.number}</div>
+                            <div className="text-xs sm:text-sm text-blue-100 font-medium">{stat.label}</div>
+                          </StaggerItem>
+                        ))}
+                      </StaggerContainer>
+                    </div>
+                  </ScrollReveal>
+                </section>
+              </React.Fragment>
             );
           }
 
@@ -629,15 +687,15 @@ export const HomePage: React.FC = () => {
           if (section.type === 'plans') {
             const sortedPlans = [...plans].sort((a,b) => a.sortOrder - b.sortOrder);
             return (
-              <section key={section.id} id="plans" className="py-16 sm:py-20 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto space-y-6">
-                <div className="text-center space-y-1.5">
+              <section key={section.id} id="plans" className="py-8 sm:py-12 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto space-y-6">
+                <ScrollReveal className="text-center space-y-1.5">
                   <h2 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
                     {section.title?.[language] || section.title?.en || getText(homepageT.pricing, language)}
                   </h2>
                   <p className="text-xs sm:text-sm text-slate-500 max-w-lg mx-auto">
                     {section.subtitle?.[language] || section.subtitle?.en || (language === 'rw' ? 'Hitamo gahunda igufasha gutsinda' : language === 'fr' ? 'Choisissez un plan d\'étude adapté à vos objectifs' : 'Choose a study plan that fits your goals')}
                   </p>
-                </div>
+                </ScrollReveal>
 
                 {activeSub && (
                   <div className="max-w-fit mx-auto px-5 py-2 bg-emerald-50 text-emerald-800 rounded-full text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 border border-emerald-200/90 shadow-2xs mb-4">
@@ -652,125 +710,128 @@ export const HomePage: React.FC = () => {
                   </div>
                 )}
 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-stretch max-w-6xl mx-auto pt-2">
+                <StaggerContainer className="grid grid-cols-1 md:grid-cols-3 gap-6 items-stretch max-w-6xl mx-auto pt-2" staggerDelay={0.15}>
                   {sortedPlans.map((plan) => {
                     const promoInfo = getBestPromotion(plan.id, plan.price, promotions);
                     const isRecommended = plan.isRecommended;
 
                     return (
-                      <div
-                        key={plan.id}
-                        className={`bg-white p-7 rounded-2xl relative flex flex-col justify-between transition-all ${
-                          isRecommended
-                            ? 'border-2 border-blue-600 shadow-sm'
-                            : 'border border-slate-200 shadow-2xs'
-                        }`}
-                      >
-                        {isRecommended && (
-                          <div className="absolute -top-3.5 left-1/2 -translate-x-1/2 bg-blue-600 text-white text-[11px] font-bold px-3.5 py-0.5 rounded-full uppercase tracking-wider shadow-xs whitespace-nowrap">
-                            {getText(homepageT.recommended, language)}
-                          </div>
-                        )}
-                        {promoInfo.hasPromotion && (
-                          <div className="absolute -top-3.5 right-4 bg-rose-600 text-white text-[10px] font-extrabold px-2.5 py-0.5 rounded-full uppercase tracking-wider shadow-xs flex items-center gap-1">
-                            <span>🔥 {promoInfo.discountBadge} OFF</span>
-                          </div>
-                        )}
+                      <StaggerItem key={plan.id} className="h-full">
+                        <motion.div
+                          animate={isRecommended ? { y: [0, -6, 0] } : undefined}
+                          transition={isRecommended ? { repeat: Infinity, duration: 4, ease: 'easeInOut' } : undefined}
+                          className={`bg-white p-7 rounded-2xl relative flex flex-col justify-between h-full transition-all ${
+                            isRecommended
+                              ? 'border-2 border-blue-600 shadow-lg ring-4 ring-blue-500/10'
+                              : 'border border-slate-200 shadow-2xs hover:shadow-md'
+                          }`}
+                        >
+                          {isRecommended && (
+                            <div className="absolute -top-3.5 left-1/2 -translate-x-1/2 bg-blue-600 text-white text-[11px] font-bold px-3.5 py-0.5 rounded-full uppercase tracking-wider shadow-xs whitespace-nowrap">
+                              {getText(homepageT.recommended, language)}
+                            </div>
+                          )}
+                          {promoInfo.hasPromotion && (
+                            <div className="absolute -top-3.5 right-4 bg-rose-600 text-white text-[10px] font-extrabold px-2.5 py-0.5 rounded-full uppercase tracking-wider shadow-xs flex items-center gap-1">
+                              <span>🔥 {promoInfo.discountBadge} OFF</span>
+                            </div>
+                          )}
 
-                        <div className="space-y-4">
-                          <div>
-                            <h3 className="text-base sm:text-lg font-bold text-slate-900">
-                              {plan.name[language] || plan.name.en}
-                            </h3>
-                            <div className="mt-1">
-                              {promoInfo.hasPromotion ? (
-                                <div className="flex items-baseline gap-2">
-                                  <span className="text-2xl sm:text-3xl font-black text-slate-900">
-                                    RWF {promoInfo.discountedPrice.toLocaleString()}
-                                  </span>
-                                  <span className="text-xs text-slate-400 line-through">
+                          <div className="space-y-4">
+                            <div>
+                              <h3 className="text-base sm:text-lg font-bold text-slate-900">
+                                {plan.name[language] || plan.name.en}
+                              </h3>
+                              <div className="mt-1">
+                                {promoInfo.hasPromotion ? (
+                                  <div className="flex items-baseline gap-2">
+                                    <span className="text-2xl sm:text-3xl font-black text-slate-900">
+                                      RWF {promoInfo.discountedPrice.toLocaleString()}
+                                    </span>
+                                    <span className="text-xs text-slate-400 line-through">
+                                      RWF {plan.price.toLocaleString()}
+                                    </span>
+                                  </div>
+                                ) : (
+                                  <div className="text-2xl sm:text-3xl font-black text-slate-900">
                                     RWF {plan.price.toLocaleString()}
-                                  </span>
+                                  </div>
+                                )}
+                                <div className="text-xs font-medium text-slate-400 mt-0.5">
+                                  {plan.durationDays === 1 
+                                    ? getText(homepageT.daysSingular, language).replace('{n}', '1') 
+                                    : getText(homepageT.daysPlural, language).replace('{n}', plan.durationDays?.toString() || '30')}
                                 </div>
-                              ) : (
-                                <div className="text-2xl sm:text-3xl font-black text-slate-900">
-                                  RWF {plan.price.toLocaleString()}
-                                </div>
-                              )}
-                              <div className="text-xs font-medium text-slate-400 mt-0.5">
-                                {plan.durationDays === 1 
-                                  ? getText(homepageT.daysSingular, language).replace('{n}', '1') 
-                                  : getText(homepageT.daysPlural, language).replace('{n}', plan.durationDays?.toString() || '30')}
+                              </div>
+                            </div>
+
+                            <div className="space-y-3 pt-5 border-t border-slate-100 text-xs sm:text-sm text-slate-700">
+                              <div className="flex items-center gap-2.5">
+                                {plan.access?.lessonVideos ? (
+                                  <span className="w-4 h-4 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center font-bold text-[10px] shrink-0">✓</span>
+                                ) : (
+                                  <span className="w-4 h-4 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center font-bold text-[10px] shrink-0">✕</span>
+                                )}
+                                <span className={plan.access?.lessonVideos ? 'font-medium text-slate-900' : 'text-slate-400'}>
+                                  {getText(homepageT.videoLessons, language)}
+                                </span>
+                              </div>
+
+                              <div className="flex items-center gap-2.5">
+                                {plan.access?.trafficRules ? (
+                                  <span className="w-4 h-4 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center font-bold text-[10px] shrink-0">✓</span>
+                                ) : (
+                                  <span className="w-4 h-4 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center font-bold text-[10px] shrink-0">✕</span>
+                                )}
+                                <span className={plan.access?.trafficRules ? 'font-medium text-slate-900' : 'text-slate-400'}>
+                                  {getText(homepageT.trafficRules, language)}
+                                </span>
+                              </div>
+
+                              <div className="flex items-center gap-2.5">
+                                {plan.access?.exams ? (
+                                  <span className="w-4 h-4 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center font-bold text-[10px] shrink-0">✓</span>
+                                ) : (
+                                  <span className="w-4 h-4 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center font-bold text-[10px] shrink-0">✕</span>
+                                )}
+                                <span className={plan.access?.exams ? 'font-medium text-slate-900' : 'text-slate-400'}>
+                                  {plan.access?.exams 
+                                    ? (plan.examLimit 
+                                        ? (plan.examLimit === 1 ? getText(homepageT.examCountSingular, language).replace('{n}', '1') : getText(homepageT.examCountPlural, language).replace('{n}', plan.examLimit.toString())) 
+                                        : getText(homepageT.unlimitedExams, language)) 
+                                    : getText(homepageT.exams, language)}
+                                </span>
                               </div>
                             </div>
                           </div>
 
-                          <div className="space-y-3 pt-5 border-t border-slate-100 text-xs sm:text-sm text-slate-700">
-                            <div className="flex items-center gap-2.5">
-                              {plan.access?.lessonVideos ? (
-                                <span className="w-4 h-4 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center font-bold text-[10px] shrink-0">✓</span>
-                              ) : (
-                                <span className="w-4 h-4 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center font-bold text-[10px] shrink-0">✕</span>
-                              )}
-                              <span className={plan.access?.lessonVideos ? 'font-medium text-slate-900' : 'text-slate-400'}>
-                                {getText(homepageT.videoLessons, language)}
-                              </span>
-                            </div>
-
-                            <div className="flex items-center gap-2.5">
-                              {plan.access?.trafficRules ? (
-                                <span className="w-4 h-4 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center font-bold text-[10px] shrink-0">✓</span>
-                              ) : (
-                                <span className="w-4 h-4 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center font-bold text-[10px] shrink-0">✕</span>
-                              )}
-                              <span className={plan.access?.trafficRules ? 'font-medium text-slate-900' : 'text-slate-400'}>
-                                {getText(homepageT.trafficRules, language)}
-                              </span>
-                            </div>
-
-                            <div className="flex items-center gap-2.5">
-                              {plan.access?.exams ? (
-                                <span className="w-4 h-4 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center font-bold text-[10px] shrink-0">✓</span>
-                              ) : (
-                                <span className="w-4 h-4 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center font-bold text-[10px] shrink-0">✕</span>
-                              )}
-                              <span className={plan.access?.exams ? 'font-medium text-slate-900' : 'text-slate-400'}>
-                                {plan.access?.exams 
-                                  ? (plan.examLimit 
-                                      ? (plan.examLimit === 1 ? getText(homepageT.examCountSingular, language).replace('{n}', '1') : getText(homepageT.examCountPlural, language).replace('{n}', plan.examLimit.toString())) 
-                                      : getText(homepageT.unlimitedExams, language)) 
-                                  : getText(homepageT.exams, language)}
-                              </span>
-                            </div>
+                          <div className="pt-6">
+                            <button
+                              disabled={!!activeSub}
+                              onClick={() => {
+                                if (activeSub) return;
+                                window.location.href = userProfile ? '/student' : `/signup?plan=${plan.id}`;
+                              }}
+                              className={`w-full py-3 rounded-xl font-bold text-xs sm:text-sm transition-colors text-center ${
+                                activeSub
+                                  ? isRecommended
+                                    ? 'bg-blue-600 text-white cursor-default shadow-xs'
+                                    : 'bg-slate-200/90 text-slate-500 cursor-not-allowed'
+                                  : isRecommended
+                                  ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-sm'
+                                  : 'bg-slate-100 hover:bg-blue-600 hover:text-white text-slate-800'
+                              }`}
+                            >
+                              {activeSub
+                                ? (language === 'rw' ? 'Gahunda Iri Gukora' : language === 'fr' ? 'Abonnement actif en cours' : 'Active Plan in Progress')
+                                : getText(homepageT.choosePlan, language)}
+                            </button>
                           </div>
-                        </div>
-
-                        <div className="pt-6">
-                          <button
-                            disabled={!!activeSub}
-                            onClick={() => {
-                              if (activeSub) return;
-                              window.location.href = userProfile ? '/student' : `/signup?plan=${plan.id}`;
-                            }}
-                            className={`w-full py-3 rounded-xl font-bold text-xs sm:text-sm transition-colors text-center ${
-                              activeSub
-                                ? isRecommended
-                                  ? 'bg-blue-600 text-white cursor-default shadow-xs'
-                                  : 'bg-slate-200/90 text-slate-500 cursor-not-allowed'
-                                : isRecommended
-                                ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-sm'
-                                : 'bg-slate-100 hover:bg-blue-600 hover:text-white text-slate-800'
-                            }`}
-                          >
-                            {activeSub
-                              ? (language === 'rw' ? 'Gahunda Iri Gukora' : language === 'fr' ? 'Abonnement actif en cours' : 'Active Plan in Progress')
-                              : getText(homepageT.choosePlan, language)}
-                          </button>
-                        </div>
-                      </div>
+                        </motion.div>
+                      </StaggerItem>
                     );
                   })}
-                </div>
+                </StaggerContainer>
               </section>
             );
           }
@@ -828,8 +889,8 @@ export const HomePage: React.FC = () => {
             ];
 
             return (
-              <section key={section.id} className="py-20 px-4 sm:px-6 lg:px-8 max-w-6xl mx-auto space-y-10">
-                <div className="text-center space-y-3 max-w-2xl mx-auto">
+              <section key={section.id} className="py-8 sm:py-12 px-4 sm:px-6 lg:px-8 max-w-6xl mx-auto space-y-6">
+                <ScrollReveal className="text-center space-y-3 max-w-2xl mx-auto">
                   <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-blue-50 text-blue-700 text-xs font-bold tracking-wide border border-blue-100 shadow-2xs">
                     <span>🌟 Verified Success Stories</span>
                   </div>
@@ -839,50 +900,51 @@ export const HomePage: React.FC = () => {
                   <p className="text-sm sm:text-base text-slate-600 leading-relaxed">
                     {section.subtitle?.[language] || section.subtitle?.en || (language === 'rw' ? 'Icyo abanyeshuri bacu batsinze bavuga kuri TSINDA' : language === 'fr' ? 'Ce que disent nos apprenants' : 'Read how thousands of Rwandan drivers passed on their first try')}
                   </p>
-                </div>
+                </ScrollReveal>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
-                  {defaultTestimonials.map((tItem) => (
-                    <div
-                      key={tItem.id}
-                      className="bg-white p-7 sm:p-8 rounded-3xl border border-slate-200/90 shadow-xs hover:shadow-lg transition-all duration-300 space-y-5 flex flex-col justify-between group relative overflow-hidden"
-                    >
-                      <div className="absolute top-0 right-0 w-32 h-32 bg-blue-50/50 rounded-bl-full pointer-events-none group-hover:scale-110 transition-transform"></div>
-                      <div className="space-y-4 relative z-10">
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="flex items-center gap-3">
-                            <img
-                              src={tItem.avatar}
-                              alt={tItem.name}
-                              className="w-12 h-12 rounded-2xl object-cover shadow-sm border-2 border-white ring-2 ring-blue-100"
-                            />
-                            <div>
-                              <h4 className="font-extrabold text-slate-900 text-sm sm:text-base">{tItem.name}</h4>
-                              <p className="text-xs font-medium text-blue-600">{tItem.role}</p>
+                <StaggerContainer className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2" staggerDelay={0.15}>
+                  {defaultTestimonials.map((tItem, idx) => (
+                    <StaggerItem key={tItem.id} className="h-full">
+                      <div
+                        className="bg-white p-7 sm:p-8 rounded-3xl border border-slate-200/90 shadow-xs hover:shadow-lg transition-all duration-300 space-y-5 flex flex-col justify-between group relative overflow-hidden h-full"
+                      >
+                        <div className="absolute top-0 right-0 w-32 h-32 bg-blue-50/50 rounded-bl-full pointer-events-none group-hover:scale-110 transition-transform"></div>
+                        <div className="space-y-4 relative z-10">
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-3">
+                              <img
+                                src={tItem.avatar}
+                                alt={tItem.name}
+                                className="w-12 h-12 rounded-2xl object-cover shadow-sm border-2 border-white ring-2 ring-blue-100"
+                              />
+                              <div>
+                                <h4 className="font-extrabold text-slate-900 text-sm sm:text-base">{tItem.name}</h4>
+                                <p className="text-xs font-medium text-blue-600">{tItem.role}</p>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-1 bg-amber-50 px-3 py-1.5 rounded-full border border-amber-200/60">
+                              {[...Array(tItem.stars)].map((_, i) => (
+                                <Star key={i} className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
+                              ))}
                             </div>
                           </div>
 
-                          <div className="flex items-center gap-1 bg-amber-50 px-3 py-1.5 rounded-full border border-amber-200/60">
-                            {[...Array(tItem.stars)].map((_, i) => (
-                              <Star key={i} className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
-                            ))}
-                          </div>
+                          <p className="text-sm sm:text-base text-slate-700 leading-relaxed font-normal italic">
+                            "{tItem.text[language] || tItem.text.en}"
+                          </p>
                         </div>
 
-                        <p className="text-sm sm:text-base text-slate-700 leading-relaxed font-normal italic">
-                          "{tItem.text[language] || tItem.text.en}"
-                        </p>
+                        <div className="pt-4 border-t border-slate-100 flex items-center justify-between text-xs font-semibold text-slate-400 relative z-10">
+                          <span>Rwanda National Police Exam Prep</span>
+                          <span className="text-emerald-600 flex items-center gap-1">
+                            <CheckCircle2 className="w-3.5 h-3.5" /> Verified Pass
+                          </span>
+                        </div>
                       </div>
-
-                      <div className="pt-4 border-t border-slate-100 flex items-center justify-between text-xs font-semibold text-slate-400 relative z-10">
-                        <span>Rwanda National Police Exam Prep</span>
-                        <span className="text-emerald-600 flex items-center gap-1">
-                          <CheckCircle2 className="w-3.5 h-3.5" /> Verified Pass
-                        </span>
-                      </div>
-                    </div>
+                    </StaggerItem>
                   ))}
-                </div>
+                </StaggerContainer>
               </section>
             );
           }
@@ -1035,8 +1097,8 @@ export const HomePage: React.FC = () => {
             ];
 
             return (
-              <section key={section.id} id="faq" className="py-20 px-4 sm:px-6 lg:px-8 max-w-4xl mx-auto space-y-10">
-                <div className="text-center space-y-3 max-w-2xl mx-auto">
+              <section key={section.id} id="faq" className="py-8 sm:py-12 px-4 sm:px-6 lg:px-8 max-w-4xl mx-auto space-y-6">
+                <ScrollReveal className="text-center space-y-3 max-w-2xl mx-auto">
                   <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-blue-50 text-blue-700 text-xs font-bold tracking-wide border border-blue-100 shadow-2xs">
                     <span>💡 Got Questions? We Have Answers</span>
                   </div>
@@ -1046,45 +1108,46 @@ export const HomePage: React.FC = () => {
                   <p className="text-sm sm:text-base text-slate-600 leading-relaxed">
                     {section.subtitle?.[language] || section.subtitle?.en || (language === 'rw' ? 'Ibisubizo ku bibazo byose waba wibaza kuri TSINDA' : language === 'fr' ? 'Tout ce que vous devez savoir sur notre plateforme' : 'Everything you need to know about preparing for your driving test')}
                   </p>
-                </div>
+                </ScrollReveal>
 
-                <div className="space-y-4 pt-2">
+                <StaggerContainer className="space-y-4 pt-2" staggerDelay={0.08}>
                   {faqList.map((faq, index) => {
                     const isOpen = openFaqIds.includes(faq.id);
                     return (
-                      <div
-                        key={faq.id}
-                        className={`bg-white rounded-2xl border transition-all duration-300 overflow-hidden shadow-2xs ${
-                          isOpen ? 'border-blue-400 ring-2 ring-blue-50 shadow-md' : 'border-slate-200/90 hover:border-slate-300'
-                        }`}
-                      >
-                        <button
-                          onClick={() => toggleFaq(faq.id)}
-                          className="w-full px-6 py-5 flex items-center justify-between text-left font-bold text-slate-900 text-sm sm:text-base hover:bg-slate-50/80 transition-colors"
+                      <StaggerItem key={faq.id}>
+                        <div
+                          className={`bg-white rounded-2xl border transition-all duration-300 overflow-hidden shadow-2xs ${
+                            isOpen ? 'border-blue-400 ring-2 ring-blue-50 shadow-md' : 'border-slate-200/90 hover:border-slate-300'
+                          }`}
                         >
-                          <div className="flex items-center gap-3 pr-4">
-                            <span className="w-7 h-7 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center font-mono text-xs font-bold shrink-0">
-                              0{index + 1}
-                            </span>
-                            <span>{faq.title[language] || faq.title.en}</span>
-                          </div>
-                          <div className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors shrink-0 ${isOpen ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-500'}`}>
-                            <ChevronDown
-                              className={`w-4 h-4 transition-transform duration-300 ${
-                                isOpen ? 'rotate-180' : ''
-                              }`}
-                            />
-                          </div>
-                        </button>
-                        {isOpen && (
-                          <div className="px-6 pb-6 pt-2 text-sm sm:text-base text-slate-600 leading-relaxed border-t border-slate-100 bg-slate-50/40">
-                            {faq.description[language] || faq.description.en}
-                          </div>
-                        )}
-                      </div>
+                          <button
+                            onClick={() => toggleFaq(faq.id)}
+                            className="w-full px-6 py-5 flex items-center justify-between text-left font-bold text-slate-900 text-sm sm:text-base hover:bg-slate-50/80 transition-colors"
+                          >
+                            <div className="flex items-center gap-3 pr-4">
+                              <span className="w-7 h-7 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center font-mono text-xs font-bold shrink-0">
+                                0{index + 1}
+                              </span>
+                              <span>{faq.title[language] || faq.title.en}</span>
+                            </div>
+                            <div className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors shrink-0 ${isOpen ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                              <ChevronDown
+                                className={`w-4 h-4 transition-transform duration-300 ${
+                                  isOpen ? 'rotate-180' : ''
+                                }`}
+                              />
+                            </div>
+                          </button>
+                          {isOpen && (
+                            <div className="px-6 pb-6 pt-2 text-sm sm:text-base text-slate-600 leading-relaxed border-t border-slate-100 bg-slate-50/40">
+                              {faq.description[language] || faq.description.en}
+                            </div>
+                          )}
+                        </div>
+                      </StaggerItem>
                     );
                   })}
-                </div>
+                </StaggerContainer>
               </section>
             );
           }
@@ -1092,23 +1155,27 @@ export const HomePage: React.FC = () => {
           if (section.type === 'cta') {
             return (
               <section key={section.id} className="pb-16 sm:pb-20 max-w-3xl mx-auto px-4">
-                <div className="bg-[#0B132B] text-white rounded-3xl p-8 sm:p-10 text-center shadow-xl border border-slate-800">
-                  <h2 className="text-2xl sm:text-3xl font-black text-white tracking-tight">
-                    {section.title?.[language] || section.title?.en || (language === 'rw' ? 'Tangira Kwiga Ubu' : language === 'fr' ? 'Commencez à apprendre dès aujourd\'hui' : 'Start Learning Today')}
-                  </h2>
-                  <p className="text-xs sm:text-sm text-slate-300 mt-2 max-w-md mx-auto">
-                    {section.subtitle?.[language] || section.subtitle?.en || (language === 'rw' ? 'Injira muri TSINDA witegure neza' : language === 'fr' ? 'Rejoignez des milliers de conducteurs au Rwanda' : 'Join thousands of successful drivers in Rwanda')}
-                  </p>
-                  <div className="mt-5">
-                    <a
-                      href="/student?mode=signup"
-                      className="inline-flex items-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs sm:text-sm shadow-md transition-all hover:scale-105"
-                    >
-                      <span>{t[language].getStarted || 'Start Learning Now'}</span>
-                      <ArrowRight className="w-4 h-4" />
-                    </a>
+                <ScrollReveal>
+                  <div className="bg-[#0B132B] text-white rounded-3xl p-8 sm:p-10 text-center shadow-xl border border-slate-800">
+                    <h2 className="text-2xl sm:text-3xl font-black text-white tracking-tight">
+                      {section.title?.[language] || section.title?.en || (language === 'rw' ? 'Tangira Kwiga Ubu' : language === 'fr' ? 'Commencez à apprendre dès aujourd\'hui' : 'Start Learning Today')}
+                    </h2>
+                    <p className="text-xs sm:text-sm text-slate-300 mt-2 max-w-md mx-auto">
+                      {section.subtitle?.[language] || section.subtitle?.en || (language === 'rw' ? 'Injira muri TSINDA witegure neza' : language === 'fr' ? 'Rejoignez des milliers de conducteurs au Rwanda' : 'Join thousands of successful drivers in Rwanda')}
+                    </p>
+                    <div className="mt-5">
+                      <motion.a
+                        href="/student?mode=signup"
+                        whileHover={{ scale: 1.05 }}
+                        whileTap={{ scale: 0.95 }}
+                        className="inline-flex items-center gap-2 px-7 py-3.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs sm:text-sm shadow-md transition-colors"
+                      >
+                        <span>{t[language].getStarted || 'Start Learning Now'}</span>
+                        <ArrowRight className="w-4 h-4" />
+                      </motion.a>
+                    </div>
                   </div>
-                </div>
+                </ScrollReveal>
               </section>
             );
           }

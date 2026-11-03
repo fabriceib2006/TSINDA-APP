@@ -6,6 +6,7 @@ import { useLanguage } from '../context/LanguageContext';
 import { t } from '../i18n/translations';
 import { Globe, LogOut, ShieldCheck, User as UserIcon, Menu, ChevronDown, Check, Home } from 'lucide-react';
 import { Language } from '../types';
+import { PWAInstallButton } from './common/PWAInstallButton';
 
 interface NavbarProps {
   onOpenProfile?: () => void;
@@ -134,16 +135,9 @@ export const Navbar: React.FC<NavbarProps> = ({
           </a>
         </div>
 
-        {/* Right Section: Home Link + Language Switcher + User Profile Dropdown */}
+        {/* Right Section: Language Switcher + User Profile Dropdown */}
         <div className="flex items-center gap-2 sm:gap-3.5 shrink-0">
-          <a
-            href="/"
-            className="hidden sm:flex min-h-[40px] px-3 py-2 bg-slate-100 hover:bg-slate-200/80 border border-slate-200/70 text-slate-800 text-xs font-bold rounded-xl items-center gap-1.5 transition-colors shadow-2xs"
-            title="Return to Homepage"
-          >
-            <Home className="w-3.5 h-3.5 text-blue-600" />
-            <span className="hidden sm:inline">{language === 'rw' ? 'Ahabanza' : language === 'fr' ? 'Accueil' : 'Home'}</span>
-          </a>
+          <PWAInstallButton />
           
           {/* Desktop Segmented Language Switcher (>= 1024px) */}
           <div className="hidden lg:flex items-center bg-slate-100/90 border border-slate-200/70 p-0.5 rounded-xl shadow-2xs">
