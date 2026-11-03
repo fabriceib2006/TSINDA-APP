@@ -842,7 +842,7 @@ export const HomePage: React.FC = () => {
                 id: 't-1',
                 name: 'Jean Pierre N.',
                 role: 'Passed Provisional Test (98%)',
-                avatar: '/src/assets/images/avatar_jean_pierre_1793142909650.jpg',
+                avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
                 stars: 5,
                 text: {
                   en: 'I passed my provisional driving test on the first attempt with 98% score thanks to official lessons in Kinyarwanda and English on TSINDA.',
@@ -854,7 +854,7 @@ export const HomePage: React.FC = () => {
                 id: 't-2',
                 name: 'Marie Claire U.',
                 role: 'Passed with 95%',
-                avatar: '/src/assets/images/avatar_marie_claire_1793142909484.jpg',
+                avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
                 stars: 5,
                 text: {
                   en: 'The timed mock exams gave me the exact confidence needed for the Police exam room. Highly recommended for every learner driver!',
@@ -866,7 +866,7 @@ export const HomePage: React.FC = () => {
                 id: 't-3',
                 name: 'Eric Mugabo',
                 role: 'First Attempt Success',
-                avatar: '/src/assets/images/avatar_jean_pierre_1793142909650.jpg',
+                avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80',
                 stars: 5,
                 text: {
                   en: 'Mobile money payment was instant, and studying road signs on my phone saved me weeks of time. Amazing platform!',
@@ -878,7 +878,7 @@ export const HomePage: React.FC = () => {
                 id: 't-4',
                 name: 'Diane Uwase',
                 role: 'Scored 19/20',
-                avatar: '/src/assets/images/avatar_marie_claire_1793142909484.jpg',
+                avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80',
                 stars: 5,
                 text: {
                   en: 'The referral program even let me earn free study access by inviting my classmates. TSINDA is a game changer!',
