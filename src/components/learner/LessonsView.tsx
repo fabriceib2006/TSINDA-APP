@@ -455,6 +455,11 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
   };
 
   const handleSelectLesson = async (lesson: Lesson) => {
+    if (!hasTrafficRulesAccess) {
+      setIsSubModalOpen(true);
+      return;
+    }
+
     setSelectedLesson(lesson);
     setSelectedVideo(null);
     setQuizState('idle');

@@ -626,7 +626,7 @@ async function verifyAuth(req: Request): Promise<{ uid: string; email?: string }
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = parseInt(process.env.PORT || '3000', 10);
 
   // JSON parser with rawBody capture for signature verification
   app.use(express.json({
