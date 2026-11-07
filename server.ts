@@ -4207,25 +4207,9 @@ async function startServer() {
       appType: 'spa',
     });
     app.use(vite.middlewares);
-  } else {
-    const distPath = path.resolve(__dirname, 'dist');
-    app.use(express.static(distPath, {
-      setHeaders: (res, filePath) => {
-        // Long cache for hashed static assets
-        if (filePath.includes('/assets/') || /\.[a-f0-9]{8,}\./i.test(filePath)) {
-          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-        } else if (filePath.endsWith('.html')) {
-          res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
-        } else {
-          res.setHeader('Cache-Control', 'public, max-age=3600');
-        }
-      }
-    }));
-    app.get('*', (_req, res) => {
-      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-      res.sendFile(path.resolve(distPath, 'index.html'));
-    });
   }
+  
+
 
   // Database audit & sync helper for plans and exam-only subscriptions
   async function syncDatabasePlansAndSubscriptions() {
@@ -4350,6 +4334,26 @@ async function startServer() {
       isCheckingQueue = false;
     }
     return { checked };
+  }
+
+  // Production static serving and catch-all registered after all API routes
+  if (!isDev) {
+    const distPath = path.resolve(__dirname, 'dist');
+    app.use(express.static(distPath, {
+      setHeaders: (res, filePath) => {
+        if (filePath.includes('/assets/') || /\.[a-f0-9]{8,}\./i.test(filePath)) {
+          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        } else if (filePath.endsWith('.html')) {
+          res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
+        } else {
+          res.setHeader('Cache-Control', 'public, max-age=3600');
+        }
+      }
+    }));
+    app.get('*', (_req, res) => {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.sendFile(path.resolve(distPath, 'index.html'));
+    });
   }
 
   app.listen(PORT, '0.0.0.0', () => {
