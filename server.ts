@@ -4352,7 +4352,7 @@ async function startServer() {
       }
     }));
     app.get('*', (req, res, next) => {
-      if (req.path.startsWith('/api/') || req.path === '/health' || req.path === '/paypackWebhook') {
+      if (req.path.startsWith('/api') || req.path === '/health' || req.path === '/paypackWebhook') {
         return res.status(404).json({error: 'Not found'});
       }
       res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
