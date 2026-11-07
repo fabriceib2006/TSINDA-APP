@@ -4337,6 +4337,7 @@ async function startServer() {
   }
 
   // Production static serving and catch-all registered after all API routes
+  // Production static serving and catch-all registered after all API routes
   if (!isDev) {
     const distPath = path.resolve(__dirname, 'dist');
     app.use(express.static(distPath, {
@@ -4350,11 +4351,17 @@ async function startServer() {
         }
       }
     }));
-    app.get('*', (_req, res) => {
+    app.get('*', (req, res, next) => {
+      if (req.path.startsWith('/api/') || req.path === '/health' || req.path === '/paypackWebhook') {
+        return res.status(404).json({error: 'Not found'});
+      }
       res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
       res.sendFile(path.resolve(distPath, 'index.html'));
     });
   }
+
+  // Ensure /health endpoint exists (just in case)
+  app.get('/health', (_req, res) => res.json({status: 'ok'}));
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`TSINDA server ready on http://0.0.0.0:${PORT}`);
