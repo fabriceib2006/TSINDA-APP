@@ -1,56 +1,41 @@
 import React, { useEffect, useState } from 'react';
 import { db } from '../../lib/firebase';
-import { collection, getDocs } from 'firebase/firestore';
-import { handleFirestoreError, OperationType } from '../../lib/firestoreUtils';
+import { collection, query, where, getCountFromServer } from 'firebase/firestore';
+import { useAuth } from '../../context/AuthContext';
 import { Users, CreditCard, Award, TrendingUp, BookOpen, HelpCircle } from 'lucide-react';
-import { Subscription, Payment } from '../../types';
 
 export const AdminDashboard: React.FC = () => {
+  const { getIdToken, firebaseUser } = useAuth();
   const [usersCount, setUsersCount] = useState<number>(0);
   const [activeSubsCount, setActiveSubsCount] = useState<number>(0);
   const [monthlyRevenue, setMonthlyRevenue] = useState<number>(0);
+  const [questionsCount, setQuestionsCount] = useState<number>(0);
+  const [lessonsCount, setLessonsCount] = useState<number>(0);
   const [loading, setLoading] = useState<boolean>(true);
 
   useEffect(() => {
     async function fetchStats() {
       try {
-        // Fetch users
-        const usersSnap = await getDocs(collection(db, 'users')).catch(err => {
-          handleFirestoreError(err, OperationType.LIST, 'users');
-          return null;
-        });
-        const userIds = usersSnap ? new Set(usersSnap.docs.map(d => d.id)) : new Set<string>();
-        if (usersSnap) setUsersCount(usersSnap.size);
+        const token = typeof getIdToken === 'function' ? await getIdToken() : (firebaseUser ? await firebaseUser.getIdToken() : '');
+        const res = await fetch('/api/admin/stats', {
+          headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+        }).catch(() => null);
 
-        // Fetch subscriptions
-        const subsSnap = await getDocs(collection(db, 'subscriptions')).catch(err => {
-          handleFirestoreError(err, OperationType.LIST, 'subscriptions');
-          return null;
-        });
-        if (subsSnap) {
-          const now = new Date();
-          const active = subsSnap.docs.filter(d => {
-            const s = d.data() as Subscription;
-            const isUnexpired = !s.endDate || new Date(s.endDate) > now;
-            return s.status === 'active' && isUnexpired && userIds.has(s.userId);
-          }).length;
-          setActiveSubsCount(active);
-        }
-
-        // Fetch payments
-        const paymentsSnap = await getDocs(collection(db, 'payments')).catch(err => {
-          handleFirestoreError(err, OperationType.LIST, 'payments');
-          return null;
-        });
-        if (paymentsSnap) {
-          let total = 0;
-          paymentsSnap.docs.forEach(d => {
-            const p = d.data() as Payment;
-            if (p.status === 'successful' || p.status === 'success') {
-              total += p.amount || 0;
-            }
-          });
-          setMonthlyRevenue(total);
+        if (res && res.ok) {
+          const data = await res.json();
+          setUsersCount(data.usersCount || 0);
+          setActiveSubsCount(data.activeSubsCount || 0);
+          setMonthlyRevenue(data.monthlyRevenue || 0);
+          setQuestionsCount(data.questionsCount || 0);
+          setLessonsCount(data.lessonsCount || 0);
+        } else {
+          // Direct client Firestore count() aggregations fallback (never download documents to count them)
+          const [uCount, sCount] = await Promise.all([
+            getCountFromServer(collection(db, 'users')).catch(() => null),
+            getCountFromServer(query(collection(db, 'subscriptions'), where('status', '==', 'active'))).catch(() => null),
+          ]);
+          if (uCount) setUsersCount(uCount.data().count);
+          if (sCount) setActiveSubsCount(sCount.data().count);
         }
       } catch (err) {
         console.error("Error loading dashboard stats:", err);
@@ -60,7 +45,7 @@ export const AdminDashboard: React.FC = () => {
     }
 
     fetchStats();
-  }, []);
+  }, [firebaseUser]);
 
   if (loading) {
     return (

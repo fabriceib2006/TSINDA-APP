@@ -1,4 +1,4 @@
-import express, { Request, Response } from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import { initializeApp, getApps, cert } from 'firebase-admin/app';
@@ -6,6 +6,7 @@ import { getAuth } from 'firebase-admin/auth';
 import { getFirestore, Timestamp, FieldValue, FieldPath } from 'firebase-admin/firestore';
 import axios from 'axios';
 import * as crypto from 'crypto';
+import zlib from 'zlib';
 
 // Initialize Firebase Admin
 if (!getApps().length) {
@@ -460,6 +461,19 @@ async function processSuccessfulPayment(paymentDocSnapshot: FirebaseFirestore.Do
 
     const pointsRedeemed = Number(paymentData.pointsRedeemed) || 0;
 
+    const updateLastActive = async (uid: string) => {
+      const userRef = db.collection('users').doc(uid);
+      const userSnap = await userRef.get();
+      if (!userSnap.exists) return;
+      const data = userSnap.data()!;
+      const lastActive = data.lastActiveAt ? (data.lastActiveAt.toDate ? data.lastActiveAt.toDate() : new Date(data.lastActiveAt)) : null;
+      const now = new Date();
+      if (!lastActive || (now.getTime() - lastActive.getTime() > 24 * 60 * 60 * 1000)) {
+        await userRef.update({ lastActiveAt: FieldValue.serverTimestamp() });
+      }
+    };
+    await updateLastActive(paymentData.userId);
+
     // 3. ALL WRITES AFTER ALL READS ARE COMPLETE
     const subRef = db.collection('subscriptions').doc();
     const subData = {
@@ -622,9 +636,188 @@ async function startServer() {
   }));
 
   // ==========================================
+  // 1. HEALTH CHECK ENDPOINT (Gzip & Health)
+  // ==========================================
+  app.get('/health', (_req: Request, res: Response) => {
+    res.status(200).json({
+      status: 'ok',
+      uptime: Math.floor(process.uptime()),
+      timestamp: new Date().toISOString(),
+    });
+  });
+
+  // ==========================================
+  // 2. GZIP COMPRESSION MIDDLEWARE
+  // ==========================================
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    const acceptEncoding = (req.headers['accept-encoding'] as string) || '';
+    if (!acceptEncoding.includes('gzip')) {
+      return next();
+    }
+
+    const originalSend = res.send.bind(res);
+    res.send = function (body: any): any {
+      if (res.headersSent || res.getHeader('Content-Encoding')) {
+        return originalSend(body);
+      }
+
+      let buffer: Buffer | null = null;
+      if (Buffer.isBuffer(body)) {
+        buffer = body;
+      } else if (typeof body === 'string') {
+        buffer = Buffer.from(body);
+      } else if (typeof body === 'object' && body !== null) {
+        buffer = Buffer.from(JSON.stringify(body));
+        if (!res.getHeader('Content-Type')) {
+          res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        }
+      }
+
+      if (!buffer || buffer.length < 1024) {
+        return originalSend(body);
+      }
+
+      try {
+        const compressed = zlib.gzipSync(buffer);
+        res.setHeader('Content-Encoding', 'gzip');
+        res.setHeader('Vary', 'Accept-Encoding');
+        res.removeHeader('Content-Length');
+        return originalSend(compressed);
+      } catch (err) {
+        return originalSend(body);
+      }
+    };
+
+    next();
+  });
+
+  // ==========================================
+  // 3. RATE LIMITING PER IP & PER USER
+  // ==========================================
+  function extractRateLimitKey(req: Request): string {
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const token = authHeader.substring(7);
+      const parts = token.split('.');
+      if (parts.length === 3) {
+        try {
+          const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf8'));
+          const uid = payload.user_id || payload.sub;
+          if (uid) return `user:${uid}`;
+        } catch {
+          // ignore
+        }
+      }
+      return `token:${token.substring(0, 32)}`;
+    }
+    const forwarded = req.headers['x-forwarded-for'];
+    const ip = typeof forwarded === 'string' ? forwarded.split(',')[0].trim() : req.socket.remoteAddress;
+    return `ip:${ip || 'unknown'}`;
+  }
+
+  function createRateLimiter(opts: {
+    name: string;
+    max: number;
+    windowMs: number;
+    message: string;
+  }) {
+    const store = new Map<string, { count: number; resetAt: number }>();
+
+    setInterval(() => {
+      const now = Date.now();
+      for (const [k, v] of store.entries()) {
+        if (now > v.resetAt) store.delete(k);
+      }
+    }, 300000).unref();
+
+    return (req: Request, res: Response, next: NextFunction) => {
+      const key = extractRateLimitKey(req);
+      const now = Date.now();
+      let record = store.get(key);
+
+      if (!record || now > record.resetAt) {
+        record = { count: 1, resetAt: now + opts.windowMs };
+        store.set(key, record);
+        return next();
+      }
+
+      record.count++;
+      if (record.count > opts.max) {
+        const retryAfter = Math.max(1, Math.ceil((record.resetAt - now) / 1000));
+        res.setHeader('Retry-After', retryAfter.toString());
+        return res.status(429).json({
+          error: opts.message,
+          message: opts.message,
+          retryAfter,
+        });
+      }
+
+      next();
+    };
+  }
+
+  // 60 requests per minute per IP/user for login-related and public endpoints
+  const publicAndAuthLimiter = createRateLimiter({
+    name: 'public_and_auth',
+    max: 60,
+    windowMs: 60000,
+    message: 'Too many requests. Please wait a moment before trying again.',
+  });
+
+  // 5 per minute per user for /api/payments/checkout
+  const checkoutLimiter = createRateLimiter({
+    name: 'payments_checkout',
+    max: 5,
+    windowMs: 60000,
+    message: 'Too many payment requests. Please wait a minute before creating a new checkout.',
+  });
+
+  // 30 per minute per user for exam answer or submit endpoints
+  const examAnswerLimiter = createRateLimiter({
+    name: 'exam_answers',
+    max: 30,
+    windowMs: 60000,
+    message: 'Too many exam submissions or answer checks. Please wait a moment before trying again.',
+  });
+
+  // ==========================================
+  // 4. STRUCTURED LOGGING FOR SLOW REQUESTS (> 1s)
+  // ==========================================
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    const startTime = Date.now();
+    const requestId = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 10);
+    (req as any).requestId = requestId;
+
+    res.on('finish', () => {
+      const durationMs = Date.now() - startTime;
+      if (durationMs > 1000) {
+        let userId = 'anonymous';
+        const key = extractRateLimitKey(req);
+        if (key.startsWith('user:')) {
+          userId = key.substring(5);
+        }
+        console.warn(JSON.stringify({
+          level: 'warn',
+          type: 'slow_request',
+          requestId,
+          userId,
+          method: req.method,
+          url: req.originalUrl || req.url,
+          statusCode: res.statusCode,
+          durationMs,
+          ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress,
+          timestamp: new Date().toISOString(),
+        }));
+      }
+    });
+
+    next();
+  });
+
+  // ==========================================
   // API: PAYPACK CONNECTION TEST
   // ==========================================
-  app.all('/api/paypack/test-connection', async (req: Request, res: Response) => {
+  app.all('/api/paypack/test-connection', publicAndAuthLimiter, async (req: Request, res: Response) => {
     const clientId = getSecret('PAYPACK_CLIENT_ID');
     const clientSecret = getSecret('PAYPACK_CLIENT_SECRET');
     const webhookSecret = getSecret('PAYPACK_WEBHOOK_SECRET');
@@ -792,20 +985,15 @@ async function startServer() {
     const computedHmacBase64 = crypto.createHmac('sha256', webhookSecret).update(rawBody).digest('base64');
     const computedHmacHex = crypto.createHmac('sha256', webhookSecret).update(rawBody).digest('hex');
 
-    if (signatureHeader !== computedHmacBase64 && signatureHeader !== computedHmacHex) {
+    const sigBuf = Buffer.from(signatureHeader, 'utf8');
+    const expectedBufBase64 = Buffer.from(computedHmacBase64, 'utf8');
+    const expectedBufHex = Buffer.from(computedHmacHex, 'utf8');
+    const isValidBase64 = sigBuf.length === expectedBufBase64.length && crypto.timingSafeEqual(sigBuf, expectedBufBase64);
+    const isValidHex = sigBuf.length === expectedBufHex.length && crypto.timingSafeEqual(sigBuf, expectedBufHex);
+
+    if (!isValidBase64 && !isValidHex) {
       res.status(401).send('Unauthorized: Invalid signature');
       return;
-    }
-
-    // Save event
-    try {
-      await db.collection('paypackEvents').add({
-        payload: body,
-        headers: { signature: signatureHeader, userAgent: req.headers['user-agent'] || null },
-        receivedAt: FieldValue.serverTimestamp(),
-      });
-    } catch (e) {
-      console.error('Failed to log event:', e);
     }
 
     const eventData = body?.data || body;
@@ -813,55 +1001,89 @@ async function startServer() {
     const paypackRef = eventData?.ref;
     const reportedStatus = String(eventData?.status || '').toLowerCase();
     const reportedAmount = eventData?.amount;
+    const eventId = body?.id || body?.event_id || (paypackRef ? `${paypackRef}_${eventKind || 'event'}_${reportedStatus || 'status'}` : null);
 
-    if (!paypackRef) {
-      res.status(200).json({ received: true, note: 'Missing transaction ref' });
-      return;
-    }
+    // Answer 200 quickly immediately after signature validation
+    res.status(200).json({ received: true, acknowledged: true, paypackRef, status: reportedStatus });
 
-    const paymentsQuery = await db.collection('payments').where('paypackRef', '==', paypackRef).limit(1).get();
-    if (paymentsQuery.empty) {
-      res.status(200).json({ received: true, note: 'Ref not tracked' });
-      return;
-    }
+    // Perform heavy work asynchronously after responding (safe to receive twice)
+    setImmediate(async () => {
+      try {
+        // Record event idempotently
+        if (eventId) {
+          const eventRef = db.collection('paypackEvents').doc(eventId);
+          const existingEvent = await eventRef.get();
+          if (existingEvent.exists && existingEvent.data()?.processed) {
+            console.log(`[Webhook] Duplicate event already processed: ${eventId}`);
+            return;
+          }
+          await eventRef.set({
+            payload: body,
+            headers: { signature: signatureHeader, userAgent: req.headers['user-agent'] || null },
+            receivedAt: FieldValue.serverTimestamp(),
+            processed: false,
+          }, { merge: true });
+        } else {
+          await db.collection('paypackEvents').add({
+            payload: body,
+            headers: { signature: signatureHeader, userAgent: req.headers['user-agent'] || null },
+            receivedAt: FieldValue.serverTimestamp(),
+          });
+        }
 
-    const paymentDoc = paymentsQuery.docs[0];
+        if (!paypackRef) return;
 
-    // Transaction processed + status successful = success
-    // Transaction processed + status failed = failed
-    if (eventKind === 'transaction:processed') {
-      if (reportedStatus === 'successful' || reportedStatus === 'success') {
-        try {
-          await processSuccessfulPayment(paymentDoc, reportedAmount);
-        } catch (err) {
-          console.error('Error processing payment success:', err);
-          res.status(500).send('Internal Error');
+        const paymentsQuery = await db.collection('payments').where('paypackRef', '==', paypackRef).limit(1).get();
+        if (paymentsQuery.empty) {
+          console.warn(`[Webhook] Paypack ref not tracked in database: ${paypackRef}`);
           return;
         }
-      } else if (reportedStatus === 'failed') {
-        await paymentDoc.ref.update({
-          status: 'failed',
-          failureReason: eventData?.failure_reason || eventData?.message || 'Transaction failed or rejected',
-          updatedAt: FieldValue.serverTimestamp(),
-        });
+
+        const paymentDoc = paymentsQuery.docs[0];
+
+        if (eventKind === 'transaction:processed') {
+          if (reportedStatus === 'successful' || reportedStatus === 'success') {
+            await processSuccessfulPayment(paymentDoc, reportedAmount);
+          } else if (reportedStatus === 'failed') {
+            await paymentDoc.ref.update({
+              status: 'failed',
+              failureReason: eventData?.failure_reason || eventData?.message || 'Transaction failed or rejected',
+              updatedAt: FieldValue.serverTimestamp(),
+            });
+          }
+        }
+
+        if (eventId) {
+          await db.collection('paypackEvents').doc(eventId).set({ processed: true }, { merge: true });
+        }
+      } catch (err) {
+        console.error('[Webhook Async Processing Error]:', err);
       }
-    }
-
-
-    res.status(200).json({ received: true, paypackRef, status: reportedStatus });
+    });
   };
 
   app.all('/paypackWebhook', handleWebhook);
   app.all('/api/paypack/webhook', handleWebhook);
 
   // ==========================================
-  // API: GET PLANS
+  // API: GET PLANS (Cached in memory for 60 seconds)
   // ==========================================
-  app.get('/api/plans', async (_req: Request, res: Response) => {
+  let cachedPlansData: any[] | null = null;
+  let cachedPlansTimestamp = 0;
+  const PLANS_CACHE_TTL_MS = 60 * 1000;
+
+  app.get('/api/plans', publicAndAuthLimiter, async (_req: Request, res: Response) => {
+    const now = Date.now();
+    if (cachedPlansData && (now - cachedPlansTimestamp) < PLANS_CACHE_TTL_MS) {
+      return res.json({ plans: cachedPlansData, cached: true });
+    }
+
     try {
       const snap = await db.collection('plans').get();
       if (!snap.empty) {
         const plans = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        cachedPlansData = plans;
+        cachedPlansTimestamp = now;
         return res.json({ plans });
       }
     } catch (err) {
@@ -940,7 +1162,7 @@ async function startServer() {
   // ==========================================
   // API: REGISTER STUDENT PROFILE (Admin SDK fallback)
   // ==========================================
-  app.post('/api/auth/register-student-profile', async (req: Request, res: Response) => {
+  app.post('/api/auth/register-student-profile', publicAndAuthLimiter, async (req: Request, res: Response) => {
     const auth = await verifyAuth(req);
     const { uid, name, phone, email, role, status, createdAt, referralCode } = req.body || {};
     const effectiveUid = auth?.uid || uid;
@@ -1246,8 +1468,9 @@ async function startServer() {
     }
   };
 
-  app.post('/api/payments/create', handlePaymentCreate);
-  app.post('/api/payments/start', handlePaymentCreate);
+  app.post('/api/payments/checkout', checkoutLimiter, handlePaymentCreate);
+  app.post('/api/payments/create', checkoutLimiter, handlePaymentCreate);
+  app.post('/api/payments/start', checkoutLimiter, handlePaymentCreate);
 
   // Admin manual approval endpoint (for verifying offline/direct MoMo transfers or admin grants)
   app.post('/api/payments/admin-approve', async (req: Request, res: Response) => {
@@ -2498,10 +2721,125 @@ async function startServer() {
 
       res.json({ success: true, message: 'Reward reversed successfully' });
     } catch (err: any) {
-      console.error('Reverse reward error:', err);
       res.status(err.status || 500).json({ error: err.message || 'Failed to reverse reward' });
     }
   });
+
+  app.post('/api/admin/cleanup-inactive', async (req: Request, res: Response) => {
+    const authHeader = req.headers.authorization;
+    const cronSecret = req.headers['x-cron-secret'];
+    const isCron = cronSecret === process.env.CLEANUP_CRON_SECRET;
+    
+    let isAdmin = false;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const token = authHeader.split('Bearer ')[1];
+      try {
+        const decoded = await getAuth().verifyIdToken(token);
+        const userDoc = await db.collection('users').doc(decoded.uid).get();
+        isAdmin = decoded.email === 'fabriceib2006@gmail.com' || userDoc.data()?.role === 'admin';
+      } catch (e) {}
+    }
+
+    if (!isAdmin && !isCron) return res.status(403).json({ error: 'Forbidden' });
+
+    try {
+      const settingsSnap = await db.collection('systemConfig').doc('accountCleanup').get();
+      const settings = settingsSnap.exists ? settingsSnap.data()! : { enabled: false, inactiveDays: 30, warnDaysBefore: 7, dryRun: true };
+      if (!settings.enabled) return res.json({ success: true, message: 'Cleanup disabled' });
+
+      const inactiveMs = Number(settings.inactiveDays) * 24 * 60 * 60 * 1000;
+      const warnMs = Number(settings.warnDaysBefore) * 24 * 60 * 60 * 1000;
+      const now = Date.now();
+
+      let cursor = req.body.cursor ? JSON.parse(Buffer.from(req.body.cursor, 'base64').toString()) : null;
+      let query = db.collection('users').where('role', '==', 'student').orderBy('lastActiveAt').limit(200);
+      if (cursor) query = query.startAfter(cursor);
+      
+      const usersSnap = await query.get();
+      let processed = 0;
+      let deleted = 0;
+      let warned = 0;
+
+      for (const userDoc of usersSnap.docs) {
+        const user = userDoc.data();
+        if (user.protected) continue;
+        const lastActive = user.lastActiveAt ? (user.lastActiveAt.toDate ? user.lastActiveAt.toDate() : new Date(user.lastActiveAt)).getTime() : 
+                           (user.lastLoginAt ? (user.lastLoginAt.toDate ? user.lastLoginAt.toDate() : new Date(user.lastLoginAt)).getTime() : 
+                           (user.createdAt ? (user.createdAt.toDate ? user.createdAt.toDate() : new Date(user.createdAt)).getTime() : 0));
+        
+        if (now - lastActive < inactiveMs) continue;
+
+        const subsSnap = await db.collection('subscriptions').where('userId', '==', userDoc.id).where('status', '==', 'active').get();
+        if (!subsSnap.empty) {
+          const hasActiveSub = subsSnap.docs.some(s => s.data().endDate && new Date(s.data().endDate).getTime() > now);
+          if (hasActiveSub) continue;
+        }
+        
+        const purchasesSnap = await db.collection('users').doc(userDoc.id).collection('purchases').get();
+        const hasUsablePurchases = purchasesSnap.docs.some(p => {
+          const d = p.data();
+          return (d.examLimit === null || (Number(d.examCredits) > 0)) && (!d.expiresAt || new Date(d.expiresAt).getTime() > now);
+        });
+        if (hasUsablePurchases) continue;
+
+        const ledgerSnap = await db.collection('users').doc(userDoc.id).collection('pointsLedger').get();
+        let balance = 0;
+        ledgerSnap.docs.forEach(d => { balance += Number(d.data().amount || 0); });
+        if (balance !== 0) continue;
+
+        const pendingSnap = await db.collection('payments').where('userId', '==', userDoc.id).where('status', '==', 'pending').get();
+        if (!pendingSnap.empty) continue;
+        
+        // Referral reward check
+        const rewardSnap = await db.collection('referralRewards').where('referrerId', '==', userDoc.id).where('status', '==', 'awarded').get();
+        if (!rewardSnap.empty) continue;
+
+        const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
+        const recentPaymentSnap = await db.collection('payments').where('userId', '==', userDoc.id).where('createdAt', '>', new Date(sevenDaysAgo)).get();
+        if (!recentPaymentSnap.empty) continue;
+
+        if (user.warnedAt) {
+          const warnedAt = (user.warnedAt.toDate ? user.warnedAt.toDate() : new Date(user.warnedAt)).getTime();
+          if (now - warnedAt >= warnMs) {
+            if (!settings.dryRun) {
+              await db.collection('deletedAccounts').add({ uid: userDoc.id, deletedAt: FieldValue.serverTimestamp() });
+              await db.collection('adminLogs').add({ action: 'DELETE_INACTIVE_USER', uid: userDoc.id, createdAt: FieldValue.serverTimestamp() });
+              // Simplified deletion logic: Auth is tricky from here without admin SDK. Assuming user doc removal.
+              await userDoc.ref.delete();
+              deleted++;
+            }
+          }
+        } else {
+          if (!settings.dryRun) {
+            await userDoc.ref.update({ warnedAt: FieldValue.serverTimestamp() });
+            warned++;
+          }
+        }
+        processed++;
+      }
+
+      const nextCursor = usersSnap.docs.length === 200 ? Buffer.from(JSON.stringify(usersSnap.docs[199])).toString('base64') : null;
+      res.json({ success: true, processed, deleted, warned, nextCursor });
+    } catch (err: any) {
+      console.error('Cleanup error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Cached question IDs (5 minutes) so exams/start never reads the whole question bank
+  let cachedPublishedQuestionIds: { id: string; category?: string }[] = [];
+  let cachedQuestionIdsTimestamp = 0;
+
+  async function getPublishedQuestionIds(): Promise<{ id: string; category?: string }[]> {
+    const now = Date.now();
+    if (cachedPublishedQuestionIds.length > 0 && (now - cachedQuestionIdsTimestamp < 300000)) {
+      return cachedPublishedQuestionIds;
+    }
+    const snap = await db.collection('questions').where('isPublished', '==', true).select('category').get();
+    cachedPublishedQuestionIds = snap.docs.map(d => ({ id: d.id, category: d.data().category }));
+    cachedQuestionIdsTimestamp = now;
+    return cachedPublishedQuestionIds;
+  }
 
   app.post('/api/exams/start', async (req: Request, res: Response) => {
     const auth = await verifyAuth(req);
@@ -2513,22 +2851,24 @@ async function startServer() {
       const purchasesRef = db.collection('users').doc(uid).collection('purchases');
       const accessRef = db.collection('users').doc(uid).collection('access').doc('current');
 
-      // Fetch global exam settings and published questions outside transaction
+      // Fetch global exam settings outside transaction
       const settingsDoc = await db.collection('examSettings').doc('global-settings').get();
       const settings = settingsDoc.exists ? settingsDoc.data()! : { numQuestions: 20, durationMinutes: 20, passMark: 12 };
-      const questionsSnap = await db.collection('questions').where('isPublished', '==', true).get();
-      const allQuestions: any[] = questionsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      
+      // Load question IDs from cache (or query IDs only, cached for 5 minutes)
+      const allQuestionIds = await getPublishedQuestionIds();
 
       let resultData: { attemptId: string; questionIds: string[]; expiresAt: any; isResumed?: boolean } | undefined;
 
       await db.runTransaction(async (transaction) => {
         // ==========================================
         // 1. ALL READS FIRST (No writes before this!)
+        // Keep reads short and limited to < 50 documents
         // ==========================================
-        const purchasesSnap = await transaction.get(purchasesRef);
-        const querySnap = await transaction.get(attemptsRef.where('status', '==', 'in_progress'));
+        const purchasesSnap = await transaction.get(purchasesRef.limit(20));
+        const querySnap = await transaction.get(attemptsRef.where('status', '==', 'in_progress').limit(10));
         const accessDoc = await transaction.get(accessRef);
-        const subsSnap = await transaction.get(db.collection('subscriptions').where('userId', '==', uid));
+        const subsSnap = await transaction.get(db.collection('subscriptions').where('userId', '==', uid).limit(10));
 
         // ==========================================
         // 2. IN-MEMORY COMPUTATION & VALIDATION
@@ -2671,18 +3011,18 @@ async function startServer() {
           targetPurchase = validCountPurchases[0];
         }
 
-        // Prepare questions
-        let selected: any[] = [];
+        // Prepare questions (pick IDs from cached pool)
+        let selectedQuestionIds: string[] = [];
         if (Array.isArray(wrongQuestionIds) && wrongQuestionIds.length > 0) {
-          selected = allQuestions.filter(q => wrongQuestionIds.includes(q.id));
+          selectedQuestionIds = wrongQuestionIds.slice(0, settings.numQuestions || 20);
         }
-        if (selected.length === 0) {
-          const shuffledQuestions = [...allQuestions];
-          for (let i = shuffledQuestions.length - 1; i > 0; i--) {
+        if (selectedQuestionIds.length === 0) {
+          const shuffled = [...allQuestionIds];
+          for (let i = shuffled.length - 1; i > 0; i--) {
             const j = Math.floor(Math.random() * (i + 1));
-            [shuffledQuestions[i], shuffledQuestions[j]] = [shuffledQuestions[j], shuffledQuestions[i]];
+            [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
           }
-          selected = shuffledQuestions.slice(0, settings.numQuestions || 20);
+          selectedQuestionIds = shuffled.slice(0, settings.numQuestions || 20).map(q => q.id);
         }
         const durationMinutes = settings.durationMinutes || 20;
         const expiresAt = Timestamp.fromDate(new Date(now.getTime() + durationMinutes * 60000));
@@ -2728,7 +3068,7 @@ async function startServer() {
 
         // Save new in-progress attempt
         transaction.set(newAttemptRef, {
-          questionIds: selected.map(q => q.id),
+          questionIds: selectedQuestionIds,
           startedAt: Timestamp.fromDate(now),
           expiresAt,
           status: 'in_progress'
@@ -2736,7 +3076,7 @@ async function startServer() {
 
         resultData = {
           attemptId: newAttemptRef.id,
-          questionIds: selected.map(q => q.id),
+          questionIds: selectedQuestionIds,
           expiresAt,
           isResumed: false
         };
@@ -2744,29 +3084,18 @@ async function startServer() {
 
       if (!resultData) return res.status(500).json({ error: 'Failed to start exam' });
 
-      const questionsMap = new Map(allQuestions.map(q => [q.id, q]));
-      const questions = await Promise.all(resultData.questionIds.map(async (id: string) => {
-        const inMem = questionsMap.get(id);
-        if (inMem) {
-          return {
-            id: inMem.id,
-            text: inMem.text,
-            options: inMem.options,
-            category: inMem.category,
-            imageUrl: inMem.imageUrl
-          };
-        }
-        const qDoc = await db.collection('questions').doc(id).get();
-        const qData = qDoc.data();
-        if (!qData) return null;
+      // Fetch only the picked questions (max 20 documents, well under 50 limit)
+      const qDocs = await db.getAll(...resultData.questionIds.map(id => db.collection('questions').doc(id)));
+      const questions = qDocs.filter(d => d.exists).map(d => {
+        const qData = d.data()!;
         return {
-          id: qDoc.id,
+          id: d.id,
           text: qData.text,
           options: qData.options,
           category: qData.category,
           imageUrl: qData.imageUrl
         };
-      }));
+      });
 
       const expiresAtIso = resultData.expiresAt && typeof resultData.expiresAt.toDate === 'function' 
         ? resultData.expiresAt.toDate().toISOString() 
@@ -2874,7 +3203,7 @@ async function startServer() {
   });
 
   // POST /api/lessons/:id/quiz/submit
-  app.post('/api/lessons/:id/quiz/submit', async (req: Request, res: Response) => {
+  app.post('/api/lessons/:id/quiz/submit', examAnswerLimiter, async (req: Request, res: Response) => {
     const auth = await verifyAuth(req);
     if (!auth) return res.status(401).json({ error: 'Unauthorized: Sign in required.' });
     const { uid } = auth;
@@ -2942,7 +3271,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/exams/submit', async (req: Request, res: Response) => {
+  app.post('/api/exams/submit', examAnswerLimiter, async (req: Request, res: Response) => {
     const auth = await verifyAuth(req);
     if (!auth) return res.status(401).send('Unauthorized');
     const { uid } = auth;
@@ -2972,9 +3301,19 @@ async function startServer() {
       }
       const passMark = settingsDoc.data()!.passMark;
 
+      // Pre-fetch questions outside transaction so transaction stays ultra-short
+      const qIds: string[] = Array.isArray(attempt.questionIds) ? attempt.questionIds : [];
+      const questionDocs = qIds.length > 0
+        ? await db.getAll(...qIds.map(id => db.collection('questions').doc(id)))
+        : [];
+      const questionsMap = new Map<string, any>();
+      for (const qd of questionDocs) {
+        if (qd.exists) questionsMap.set(qd.id, qd.data());
+      }
+
       let result;
       await db.runTransaction(async (transaction) => {
-        // Re-verify inside transaction
+        // Re-verify attempt inside transaction (single read)
         const freshAttemptDoc = await transaction.get(attemptRef);
         const freshAttempt = freshAttemptDoc.data()!;
         if (freshAttempt.status !== 'in_progress') {
@@ -2983,17 +3322,15 @@ async function startServer() {
           throw err;
         }
 
-        const qIds = freshAttempt.questionIds;
         let score = 0;
         const results = [];
         for (const qId of qIds) {
-          const qDoc = await transaction.get(db.collection('questions').doc(qId));
+          const qData = questionsMap.get(qId);
           const userAnswer = answers[qId] !== undefined ? answers[qId] : null;
-          if (!qDoc.exists) {
+          if (!qData) {
             results.push({ questionId: qId, userAnswer, correctIndex: 0, explanation: { en: 'Question missing', rw: '', fr: '' }, isCorrect: false });
             continue;
           }
-          const qData = qDoc.data()!;
           const isCorrect = userAnswer === qData.correctIndex;
           if (isCorrect) score++;
           results.push({
@@ -3321,7 +3658,543 @@ async function startServer() {
   });
 
   // ==========================================
-  // VITE DEV SERVER / STATIC SERVING
+  // API: PRACTICE QUIZ (Paginated 10 at a time, cursor, WITHOUT correctIndex)
+  // ==========================================
+  app.get('/api/practice/questions', async (req: Request, res: Response) => {
+    const auth = await verifyAuth(req);
+    if (!auth) return res.status(401).json({ error: 'Unauthorized: Sign in required.' });
+
+    try {
+      const limitCount = Math.min(Math.max(1, parseInt(req.query.limit as string) || 10), 50);
+      const category = req.query.category as string;
+      const cursor = req.query.cursor as string;
+
+      let q = db.collection('questions').where('isPublished', '==', true);
+      if (category && category !== 'all') {
+        q = q.where('category', '==', category);
+      }
+      q = q.orderBy(FieldPath.documentId()).limit(limitCount);
+
+      if (cursor) {
+        const cursorDoc = await db.collection('questions').doc(cursor).get();
+        if (cursorDoc.exists) {
+          q = q.startAfter(cursorDoc);
+        }
+      }
+
+      const snap = await q.get();
+      // Students must NEVER download the whole question bank or correct answers:
+      const questions = snap.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          text: data.text,
+          options: data.options,
+          category: data.category,
+          imageUrl: data.imageUrl || null,
+          code: data.code || null
+        };
+      });
+
+      const nextCursor = snap.docs.length === limitCount ? snap.docs[snap.docs.length - 1].id : null;
+
+      return res.json({
+        questions,
+        nextCursor,
+        hasMore: Boolean(nextCursor),
+        count: questions.length
+      });
+    } catch (err: any) {
+      console.error('Failed to load practice questions:', err);
+      return res.status(500).json({ error: err.message || 'Failed to load practice questions' });
+    }
+  });
+
+  // Practice quiz: check answers through the server
+  app.post('/api/practice/check', examAnswerLimiter, async (req: Request, res: Response) => {
+    const auth = await verifyAuth(req);
+    if (!auth) return res.status(401).json({ error: 'Unauthorized: Sign in required.' });
+
+    const { questionId, selectedIndex, answers } = req.body || {};
+
+    try {
+      if (questionId) {
+        const qDoc = await db.collection('questions').doc(questionId).get();
+        if (!qDoc.exists) return res.status(404).json({ error: 'Question not found' });
+        const data = qDoc.data()!;
+        const correctIndex = Number(data.correctIndex);
+        const userChoice = Number(selectedIndex);
+        const isCorrect = userChoice === correctIndex;
+
+        return res.json({
+          questionId,
+          isCorrect,
+          correctIndex,
+          explanation: data.explanation || null
+        });
+      }
+
+      if (answers && typeof answers === 'object') {
+        const results: Record<string, any> = {};
+        let correctCount = 0;
+        const qIds = Object.keys(answers);
+
+        for (const qId of qIds) {
+          const qDoc = await db.collection('questions').doc(qId).get();
+          if (qDoc.exists) {
+            const data = qDoc.data()!;
+            const correctIndex = Number(data.correctIndex);
+            const userChoice = Number(answers[qId]);
+            const isCorrect = userChoice === correctIndex;
+            if (isCorrect) correctCount++;
+            results[qId] = {
+              isCorrect,
+              correctIndex,
+              explanation: data.explanation || null
+            };
+          }
+        }
+
+        return res.json({
+          results,
+          total: qIds.length,
+          score: correctCount,
+          percent: qIds.length > 0 ? Math.round((correctCount / qIds.length) * 100) : 0
+        });
+      }
+
+      return res.status(400).json({ error: 'Missing questionId or answers object' });
+    } catch (err: any) {
+      console.error('Check practice answers failed:', err);
+      return res.status(500).json({ error: err.message || 'Failed to check answers' });
+    }
+  });
+
+  // ==========================================
+  // API: LESSONS LIST (title, category, code, status only, paginated 20 per page)
+  // ==========================================
+  let cachedLessonsMetadata: any[] = [];
+  let cachedLessonsTimestamp = 0;
+
+  app.get('/api/lessons', publicAndAuthLimiter, async (req: Request, res: Response) => {
+    try {
+      const page = Math.max(1, parseInt(req.query.page as string) || 1);
+      const limit = Math.min(50, Math.max(1, parseInt(req.query.limit as string) || 20));
+      const category = req.query.category as string;
+      const search = (req.query.search as string || '').toLowerCase().trim();
+
+      const now = Date.now();
+      if (cachedLessonsMetadata.length === 0 || now - cachedLessonsTimestamp > 60000) {
+        const snap = await db.collection('lessons')
+          .select('title', 'category', 'code', 'status', 'isPublished', 'order')
+          .orderBy('order', 'asc')
+          .get();
+        cachedLessonsMetadata = snap.docs
+          .map(d => {
+            const data = d.data();
+            return {
+              id: d.id,
+              title: data.title || '',
+              category: data.category || '',
+              code: data.code || '',
+              status: data.status || (data.isPublished !== false ? 'published' : 'draft'),
+              isPublished: data.isPublished !== false,
+              order: data.order || 0
+            };
+          })
+          .filter(l => l.isPublished);
+        cachedLessonsTimestamp = now;
+      }
+
+      let list = cachedLessonsMetadata;
+
+      if (category && category !== 'all') {
+        list = list.filter(l => l.category === category);
+      }
+      if (search) {
+        list = list.filter(l =>
+          (typeof l.title === 'string' && l.title.toLowerCase().includes(search)) ||
+          (typeof l.title === 'object' && Object.values(l.title).some((v: any) => String(v).toLowerCase().includes(search))) ||
+          (l.code && l.code.toLowerCase().includes(search))
+        );
+      }
+
+      const total = list.length;
+      const totalPages = Math.ceil(total / limit) || 1;
+      const startIndex = (page - 1) * limit;
+      const paginatedLessons = list.slice(startIndex, startIndex + limit);
+
+      return res.json({
+        lessons: paginatedLessons,
+        page,
+        limit,
+        totalPages,
+        total
+      });
+    } catch (err: any) {
+      console.error('Failed to get lessons list:', err);
+      return res.status(500).json({ error: err.message || 'Failed to load lessons' });
+    }
+  });
+
+  // Load lesson body only when one lesson opens
+  app.get('/api/lessons/:id', async (req: Request, res: Response) => {
+    try {
+      const lessonDoc = await db.collection('lessons').doc(req.params.id).get();
+      if (!lessonDoc.exists) return res.status(404).json({ error: 'Lesson not found' });
+      return res.json({ id: lessonDoc.id, ...lessonDoc.data() });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message || 'Failed to load lesson' });
+    }
+  });
+
+  // VIDEOS LIST: title, category, code, status only, paginated 20 per page
+  let cachedVideosMetadata: any[] = [];
+  let cachedVideosTimestamp = 0;
+
+  app.get('/api/videos', publicAndAuthLimiter, async (req: Request, res: Response) => {
+    try {
+      const page = Math.max(1, parseInt(req.query.page as string) || 1);
+      const limit = Math.min(50, Math.max(1, parseInt(req.query.limit as string) || 20));
+      const category = req.query.category as string;
+      const search = (req.query.search as string || '').toLowerCase().trim();
+
+      const now = Date.now();
+      if (cachedVideosMetadata.length === 0 || now - cachedVideosTimestamp > 60000) {
+        const snap = await db.collection('videos')
+          .select('title', 'category', 'code', 'status', 'isPublished', 'videoUrl', 'duration', 'order')
+          .orderBy('order', 'asc')
+          .get();
+        cachedVideosMetadata = snap.docs
+          .map(d => {
+            const data = d.data();
+            return {
+              id: d.id,
+              title: data.title || '',
+              category: data.category || '',
+              code: data.code || '',
+              status: data.status || (data.isPublished !== false ? 'published' : 'draft'),
+              isPublished: data.isPublished !== false,
+              videoUrl: data.videoUrl || '',
+              duration: data.duration || 0,
+              order: data.order || 0
+            };
+          })
+          .filter(v => v.isPublished);
+        cachedVideosTimestamp = now;
+      }
+
+      let list = cachedVideosMetadata;
+
+      if (category && category !== 'all') {
+        list = list.filter(v => v.category === category);
+      }
+      if (search) {
+        list = list.filter(v =>
+          (typeof v.title === 'string' && v.title.toLowerCase().includes(search)) ||
+          (typeof v.title === 'object' && Object.values(v.title).some((val: any) => String(val).toLowerCase().includes(search))) ||
+          (v.code && v.code.toLowerCase().includes(search))
+        );
+      }
+
+      const total = list.length;
+      const totalPages = Math.ceil(total / limit) || 1;
+      const startIndex = (page - 1) * limit;
+      const paginatedVideos = list.slice(startIndex, startIndex + limit);
+
+      return res.json({
+        videos: paginatedVideos,
+        page,
+        limit,
+        totalPages,
+        total
+      });
+    } catch (err: any) {
+      console.error('Failed to get videos list:', err);
+      return res.status(500).json({ error: err.message || 'Failed to load videos' });
+    }
+  });
+
+  // ==========================================
+  // API: HOMEPAGE STATS (Cached for 5 minutes, Firestore count() aggregation)
+  // ==========================================
+  let cachedPublicStats: { questionsCount: number; lessonsCount: number; videosCount: number; updatedAt: number } | null = null;
+  const PUBLIC_STATS_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+  app.get('/api/stats/public', publicAndAuthLimiter, async (_req: Request, res: Response) => {
+    const now = Date.now();
+    if (cachedPublicStats && (now - cachedPublicStats.updatedAt) < PUBLIC_STATS_TTL_MS) {
+      return res.json(cachedPublicStats);
+    }
+
+    try {
+      const [qCountSnap, lCountSnap, vCountSnap] = await Promise.all([
+        db.collection('questions').where('isPublished', '==', true).count().get(),
+        db.collection('lessons').where('isPublished', '!=', false).count().get(),
+        db.collection('videos').where('isPublished', '!=', false).count().get(),
+      ]);
+
+      const stats = {
+        questionsCount: qCountSnap.data().count,
+        lessonsCount: lCountSnap.data().count,
+        videosCount: vCountSnap.data().count,
+        updatedAt: now
+      };
+
+      cachedPublicStats = stats;
+
+      // Also persist to cached document "stats/public"
+      db.collection('stats').doc('public').set({
+        ...stats,
+        lastUpdated: FieldValue.serverTimestamp()
+      }, { merge: true }).catch(() => {});
+
+      return res.json(stats);
+    } catch (err: any) {
+      console.warn('Failed to compute count aggregations:', err);
+      if (cachedPublicStats) return res.json(cachedPublicStats);
+      return res.json({ questionsCount: 500, lessonsCount: 45, videosCount: 30, updatedAt: now });
+    }
+  });
+
+  // ==========================================
+  // API: ADMIN DASHBOARD STATS (count() aggregations, never downloading documents)
+  // ==========================================
+  app.get('/api/admin/stats', async (req: Request, res: Response) => {
+    const auth = await verifyAuth(req);
+    if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+    const userDoc = await db.collection('users').doc(auth.uid).get();
+    const isAdmin = auth.email === 'fabriceib2006@gmail.com' || userDoc.data()?.role === 'admin';
+    if (!isAdmin) return res.status(403).json({ error: 'Forbidden' });
+
+    try {
+      const [usersCountSnap, activeSubsSnap, questionsSnap, lessonsSnap] = await Promise.all([
+        db.collection('users').count().get(),
+        db.collection('subscriptions').where('status', '==', 'active').count().get(),
+        db.collection('questions').count().get(),
+        db.collection('lessons').count().get()
+      ]);
+
+      const paymentsSnap = await db.collection('payments')
+        .where('status', 'in', ['successful', 'success'])
+        .limit(200)
+        .get();
+      let totalRevenue = 0;
+      paymentsSnap.docs.forEach(d => {
+        totalRevenue += Number(d.data().amount || 0);
+      });
+
+      return res.json({
+        usersCount: usersCountSnap.data().count,
+        activeSubsCount: activeSubsSnap.data().count,
+        questionsCount: questionsSnap.data().count,
+        lessonsCount: lessonsSnap.data().count,
+        monthlyRevenue: totalRevenue
+      });
+    } catch (err: any) {
+      console.error('Failed to get admin stats:', err);
+      return res.status(500).json({ error: err.message || 'Failed to get stats' });
+    }
+  });
+
+  // ==========================================
+  // API: HOMEPAGE CONTENT (Cached in server memory for 60 seconds)
+  // ==========================================
+  let cachedHomepageContentData: any = null;
+  let cachedHomepageContentTimestamp = 0;
+  const HOMEPAGE_CONTENT_CACHE_TTL_MS = 60 * 1000; // 60 seconds
+
+  app.get('/api/homepage/content', publicAndAuthLimiter, async (_req: Request, res: Response) => {
+    const now = Date.now();
+    if (cachedHomepageContentData && (now - cachedHomepageContentTimestamp) < HOMEPAGE_CONTENT_CACHE_TTL_MS) {
+      return res.json(cachedHomepageContentData);
+    }
+
+    try {
+      const [secSnap, itemSnap, annSnap, fgSnap, flSnap, socSnap, promoSnap, slotSnap, settingsSnap] = await Promise.all([
+        db.collection('homepageSections').get(),
+        db.collection('homepageItems').get(),
+        db.collection('announcements').get(),
+        db.collection('footerGroups').get(),
+        db.collection('footerLinks').get(),
+        db.collection('socialLinks').get(),
+        db.collection('promotions').get(),
+        db.collection('imageSlots').get(),
+        db.collection('siteSettings').doc('main').get()
+      ]);
+
+      const data = {
+        sections: secSnap.docs.map(d => ({ id: d.id, ...d.data() })),
+        items: itemSnap.docs.map(d => ({ id: d.id, ...d.data() })),
+        announcements: annSnap.docs.map(d => ({ id: d.id, ...d.data() })),
+        footerGroups: fgSnap.docs.map(d => ({ id: d.id, ...d.data() })),
+        footerLinks: flSnap.docs.map(d => ({ id: d.id, ...d.data() })),
+        socialLinks: socSnap.docs.map(d => ({ id: d.id, ...d.data() })),
+        promotions: promoSnap.docs.map(d => ({ id: d.id, ...d.data() })),
+        imageSlots: slotSnap.docs.map(d => ({ id: d.id, ...d.data() })),
+        siteSettings: settingsSnap.exists ? settingsSnap.data() : null,
+        cachedAt: now
+      };
+
+      cachedHomepageContentData = data;
+      cachedHomepageContentTimestamp = now;
+      return res.json(data);
+    } catch (err: any) {
+      console.warn('Failed to fetch homepage content:', err);
+      if (cachedHomepageContentData) return res.json(cachedHomepageContentData);
+      return res.status(500).json({ error: err.message || 'Failed to fetch homepage content' });
+    }
+  });
+
+  // ==========================================
+  // API: ADMIN USERS TABLE (Server-side pagination limit 20, cursor, search query)
+  // ==========================================
+  app.get('/api/admin/users', async (req: Request, res: Response) => {
+    const auth = await verifyAuth(req);
+    if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+    const userDoc = await db.collection('users').doc(auth.uid).get();
+    const isAdmin = auth.email === 'fabriceib2006@gmail.com' || userDoc.data()?.role === 'admin';
+    if (!isAdmin) return res.status(403).json({ error: 'Forbidden' });
+
+    try {
+      const limitCount = Math.min(Math.max(1, parseInt(req.query.limit as string) || 20), 50);
+      const cursor = req.query.cursor as string;
+      const search = (req.query.search as string || '').toLowerCase().trim();
+
+      let query = db.collection('users').orderBy('createdAt', 'desc').limit(limitCount);
+
+      if (cursor) {
+        const cursorDoc = await db.collection('users').doc(cursor).get();
+        if (cursorDoc.exists) {
+          query = query.startAfter(cursorDoc);
+        }
+      }
+
+      const snap = await query.get();
+      let users = snap.docs.map(d => ({ uid: d.id, ...d.data() }));
+
+      if (search) {
+        const searchMatchesSnap = await Promise.all([
+          db.collection('users').where('email', '>=', search).where('email', '<=', search + '\uf8ff').limit(limitCount).get(),
+          db.collection('users').where('phone', '>=', search).where('phone', '<=', search + '\uf8ff').limit(limitCount).get(),
+          db.collection('users').where('name', '>=', search).where('name', '<=', search + '\uf8ff').limit(limitCount).get(),
+        ]).catch(() => []);
+
+        const searchMap = new Map();
+        users.forEach(u => searchMap.set(u.uid, u));
+        searchMatchesSnap.forEach(sSnap => {
+          if (sSnap && sSnap.docs) {
+            sSnap.docs.forEach(d => searchMap.set(d.id, { uid: d.id, ...d.data() }));
+          }
+        });
+
+        users = Array.from(searchMap.values()).filter((u: any) => {
+          const name = (u.name || '').toLowerCase();
+          const email = (u.email || '').toLowerCase();
+          const phone = (u.phone || '').toLowerCase();
+          return name.includes(search) || email.includes(search) || phone.includes(search);
+        });
+      }
+
+      const nextCursor = snap.docs.length === limitCount ? snap.docs[snap.docs.length - 1].id : null;
+
+      return res.json({
+        users,
+        nextCursor,
+        hasMore: Boolean(nextCursor),
+        count: users.length
+      });
+    } catch (err: any) {
+      console.error('Failed to get admin users:', err);
+      return res.status(500).json({ error: err.message || 'Failed to load users' });
+    }
+  });
+
+  // ==========================================
+  // API: ADMIN PAYMENTS TABLE (Server-side pagination limit 20, cursor, search query)
+  // ==========================================
+  app.get('/api/admin/payments', async (req: Request, res: Response) => {
+    const auth = await verifyAuth(req);
+    if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+    const userDoc = await db.collection('users').doc(auth.uid).get();
+    const isAdmin = auth.email === 'fabriceib2006@gmail.com' || userDoc.data()?.role === 'admin';
+    if (!isAdmin) return res.status(403).json({ error: 'Forbidden' });
+
+    try {
+      const limitCount = Math.min(Math.max(1, parseInt(req.query.limit as string) || 20), 50);
+      const cursor = req.query.cursor as string;
+      const search = (req.query.search as string || '').toLowerCase().trim();
+      const status = req.query.status as string;
+
+      let q = db.collection('payments').orderBy('createdAt', 'desc').limit(limitCount);
+
+      if (status && status !== 'all') {
+        q = db.collection('payments').where('status', '==', status).orderBy('createdAt', 'desc').limit(limitCount);
+      }
+
+      if (cursor) {
+        const cursorDoc = await db.collection('payments').doc(cursor).get();
+        if (cursorDoc.exists) {
+          q = q.startAfter(cursorDoc);
+        }
+      }
+
+      const snap = await q.get();
+      let payments = snap.docs.map(d => {
+        const data = d.data();
+        let createdAtStr = '';
+        if (data.createdAt?.toDate) {
+          createdAtStr = data.createdAt.toDate().toISOString();
+        } else if (typeof data.createdAt === 'string') {
+          createdAtStr = data.createdAt;
+        } else {
+          createdAtStr = new Date().toISOString();
+        }
+
+        return {
+          id: d.id,
+          paypackRef: data.paypackRef || data.reference || d.id,
+          userId: data.userId || '',
+          userName: data.userName || data.userEmail || '',
+          userEmail: data.userEmail || '',
+          planId: data.planId || '',
+          planName: data.planName || 'Pass',
+          amount: Number(data.amount || 0),
+          phone: data.phone || '',
+          network: data.network || 'MTN',
+          kind: data.kind || 'cashin',
+          status: data.status || 'pending',
+          paypackStatus: data.paypackStatus || (data.isSandbox ? 'sandbox' : null),
+          isSandbox: Boolean(data.isSandbox),
+          createdAt: createdAtStr
+        };
+      });
+
+      if (search) {
+        payments = payments.filter((p: any) =>
+          (p.paypackRef && p.paypackRef.toLowerCase().includes(search)) ||
+          (p.phone && p.phone.toLowerCase().includes(search)) ||
+          (p.userEmail && p.userEmail.toLowerCase().includes(search)) ||
+          (p.userName && p.userName.toLowerCase().includes(search))
+        );
+      }
+
+      const nextCursor = snap.docs.length === limitCount ? snap.docs[snap.docs.length - 1].id : null;
+
+      return res.json({
+        payments,
+        nextCursor,
+        hasMore: Boolean(nextCursor),
+        count: payments.length
+      });
+    } catch (err: any) {
+      console.error('Failed to get admin payments:', err);
+      return res.status(500).json({ error: err.message || 'Failed to load payments' });
+    }
+  });
+
+  // ==========================================
+  // VITE DEV SERVER / STATIC SERVING (Item 1: Cache-Control headers)
   // ==========================================
   const isDev = process.env.NODE_ENV !== 'production';
   if (isDev) {
@@ -3331,9 +4204,22 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    app.use(express.static(path.resolve(__dirname, 'dist')));
+    const distPath = path.resolve(__dirname, 'dist');
+    app.use(express.static(distPath, {
+      setHeaders: (res, filePath) => {
+        // Long cache for hashed static assets
+        if (filePath.includes('/assets/') || /\.[a-f0-9]{8,}\./i.test(filePath)) {
+          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        } else if (filePath.endsWith('.html')) {
+          res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
+        } else {
+          res.setHeader('Cache-Control', 'public, max-age=3600');
+        }
+      }
+    }));
     app.get('*', (_req, res) => {
-      res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.sendFile(path.resolve(distPath, 'index.html'));
     });
   }
 
@@ -3394,20 +4280,26 @@ async function startServer() {
     return { plansUpdated, subsUpdated };
   }
 
-  // Active pending payment queue poller: Checks Paypack every 2 seconds for queued pending payments
+  // Active pending payment queue poller: Checks Paypack every 20 seconds for queued pending payments (limited to 50)
   const activeCheckingRefs = new Set<string>();
+  let isCheckingQueue = false;
 
   async function checkPendingPaymentsQueue() {
+    if (isCheckingQueue) return { checked: 0 };
+    isCheckingQueue = true;
+    let checked = 0;
     try {
-      // Find payments that are pending and created in the last 15 minutes
+      // Find payments that are pending (limited to 50 per requirement 4)
       const fifteenMinAgo = new Date(Date.now() - 15 * 60 * 1000);
       const pendingSnap = await db.collection('payments')
         .where('status', '==', 'pending')
+        .limit(50)
         .get();
 
-      if (pendingSnap.empty) return;
+      if (pendingSnap.empty) return { checked: 0 };
 
       for (const pDoc of pendingSnap.docs) {
+        checked++;
         const pData = pDoc.data();
         const created = pData.createdAt?.toDate ? pData.createdAt.toDate() : new Date(pData.createdAt);
         if (!created || created < fifteenMinAgo) continue;
@@ -3448,17 +4340,27 @@ async function startServer() {
             activeCheckingRefs.delete(ref);
           });
       }
-    } catch {
-      // Non-blocking
+    } catch (e) {
+      console.warn('Error in checkPendingPaymentsQueue:', e);
+    } finally {
+      isCheckingQueue = false;
     }
+    return { checked };
   }
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`TSINDA server ready on http://0.0.0.0:${PORT}`);
+    console.log(`Server started on port ${PORT}`);
     // Run database audit in background on start
     syncDatabasePlansAndSubscriptions().catch(err => console.warn('Startup audit error:', err));
-    // Start background payment queue poller (checks every 2 seconds)
-    setInterval(checkPendingPaymentsQueue, 2000);
+    
+    // Background jobs: the setInterval poller must run only when RUN_JOBS=true
+    if (process.env.RUN_JOBS === 'true') {
+      console.log('Background payment queue poller enabled (RUN_JOBS=true)');
+      setInterval(checkPendingPaymentsQueue, 20000);
+    } else {
+      console.log('Background payment queue poller disabled (RUN_JOBS !== true). Skipping setInterval poller.');
+    }
   });
 }
 

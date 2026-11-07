@@ -35,7 +35,7 @@ export const SystemSettingsManager: React.FC = () => {
   const [saving, setSaving] = useState(false);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'general' | 'sections' | 'announcements' | 'footer' | 'media' | 'referral'>('general');
+  const [activeTab, setActiveTab] = useState<'general' | 'sections' | 'announcements' | 'footer' | 'media' | 'referral' | 'cleanup'>('general');
 
   // General settings state
   const [settings, setSettings] = useState({
@@ -52,6 +52,8 @@ export const SystemSettingsManager: React.FC = () => {
     termsContent: { rw: '', en: '', fr: '' },
     privacyContent: { rw: '', en: '', fr: '' }
   });
+
+  const [cleanupSettings, setCleanupSettings] = useState({ enabled: false, inactiveDays: 30, warnDaysBefore: 7, dryRun: true });
 
   const [referralSettings, setReferralSettings] = useState({
     active: false,
@@ -127,7 +129,7 @@ export const SystemSettingsManager: React.FC = () => {
     try {
       await seedSystemSettingsIfNeeded().catch(err => console.log('Seed note:', err));
 
-      const [setSnap, secSnap, itemSnap, annSnap, fgSnap, flSnap, socSnap, medSnap, slotSnap, refSnap] = await Promise.all([
+      const [setSnap, secSnap, itemSnap, annSnap, fgSnap, flSnap, socSnap, medSnap, slotSnap, refSnap, cleanupSnap] = await Promise.all([
         getDoc(doc(db, 'siteSettings', 'config')),
         getDocs(collection(db, 'homepageSections')),
         getDocs(collection(db, 'homepageItems')),
@@ -138,6 +140,7 @@ export const SystemSettingsManager: React.FC = () => {
         getDocs(collection(db, 'siteMedia')),
         getDocs(collection(db, 'imageSlots')),
         getDoc(doc(db, 'siteSettings', 'referral')),
+        getDoc(doc(db, 'systemConfig', 'accountCleanup')),
       ]);
 
       if (setSnap.exists()) {
@@ -145,6 +148,9 @@ export const SystemSettingsManager: React.FC = () => {
       }
       if (refSnap.exists()) {
         setReferralSettings(refSnap.data() as any);
+      }
+      if (cleanupSnap.exists()) {
+        setCleanupSettings(cleanupSnap.data() as any);
       }
       if (secSnap) {
         const list = secSnap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -542,6 +548,7 @@ export const SystemSettingsManager: React.FC = () => {
           { id: 'footer', label: 'Footer & Social', icon: Menu },
           { id: 'media', label: 'Media Library', icon: ImageIcon },
           { id: 'referral', label: 'Referral System', icon: Globe },
+          { id: 'cleanup', label: 'Account Cleanup', icon: Trash2 },
         ].map((tab) => {
           const Icon = tab.icon;
           const isActive = activeTab === tab.id;
@@ -1641,6 +1648,58 @@ export const SystemSettingsManager: React.FC = () => {
               );
             })()}
           </div>
+        </div>
+      )}
+
+      {/* Account Cleanup Tab */}
+      {activeTab === 'cleanup' && (
+        <div className="space-y-6">
+          <div className="max-w-2xl bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
+            <h3 className="text-base font-bold text-slate-900 mb-4 pb-2 border-b border-slate-100 flex items-center gap-2">
+              <span>🧹</span>
+              <span>Account Cleanup Configuration</span>
+            </h3>
+            <form onSubmit={async (e) => {
+              e.preventDefault();
+              setSaving(true);
+              try {
+                await setDoc(doc(db, 'systemConfig', 'accountCleanup'), cleanupSettings);
+                setSuccessMsg('Cleanup settings saved.');
+              } catch (e) { setError('Failed to save.'); }
+              finally { setSaving(false); }
+            }} className="space-y-4">
+              <div className="flex items-center gap-3 p-3 bg-slate-50 rounded-xl border border-slate-200">
+                <input type="checkbox" id="cleanupEnabled" checked={cleanupSettings.enabled} onChange={e => setCleanupSettings(p => ({...p, enabled: e.target.checked}))} className="w-5 h-5 text-blue-600 rounded" />
+                <label htmlFor="cleanupEnabled" className="font-bold text-sm text-slate-900 cursor-pointer">Enable Cleanup</label>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700">Inactive Days</label>
+                  <input type="number" value={cleanupSettings.inactiveDays} onChange={e => setCleanupSettings(p => ({...p, inactiveDays: Number(e.target.value)}))} className="w-full border p-2 rounded-lg" />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700">Warn Days Before</label>
+                  <input type="number" value={cleanupSettings.warnDaysBefore} onChange={e => setCleanupSettings(p => ({...p, warnDaysBefore: Number(e.target.value)}))} className="w-full border p-2 rounded-lg" />
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <input type="checkbox" id="dryRun" checked={cleanupSettings.dryRun} onChange={e => setCleanupSettings(p => ({...p, dryRun: e.target.checked}))} />
+                <label htmlFor="dryRun" className="text-sm font-bold">Dry Run (Safe mode)</label>
+              </div>
+              <button type="submit" disabled={saving} className="bg-blue-600 text-white px-5 py-2 rounded-xl font-bold text-sm">Save Cleanup Settings</button>
+            </form>
+          </div>
+          
+          <button onClick={async () => {
+             const token = await auth.currentUser?.getIdToken();
+             const res = await fetch('/api/admin/cleanup-inactive', { 
+               method: 'POST', 
+               headers: {'Authorization': `Bearer ${token}`},
+               body: JSON.stringify({ cursor: null })
+             });
+             const data = await res.json();
+             alert(JSON.stringify(data));
+          }} className="bg-amber-600 text-white px-5 py-2.5 rounded-xl font-bold text-sm">Run Cleanup Now (Dry Run)</button>
         </div>
       )}
 

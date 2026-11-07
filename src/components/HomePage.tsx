@@ -72,12 +72,17 @@ export const HomePage: React.FC = () => {
       setActiveSub(null);
       return;
     }
-    const subsQuery = query(
+    if (!userProfile?.uid) {
+      setActiveSub(null);
+      return;
+    }
+
+    // One-time read for active subscription, avoiding onSnapshot on public homepage
+    getDocs(query(
       collection(db, 'subscriptions'),
       where('userId', '==', userProfile.uid),
       where('status', '==', 'active')
-    );
-    const unsub = onSnapshot(subsQuery, (snap) => {
+    )).then((snap) => {
       const now = new Date();
       const active = snap.docs
         .map(d => d.data())
@@ -90,11 +95,10 @@ export const HomePage: React.FC = () => {
       } else {
         setActiveSub(null);
       }
-    }, (err) => {
+    }).catch((err) => {
       console.warn("Could not load user active subscription:", err);
       setActiveSub(null);
     });
-    return () => unsub();
   }, [userProfile]);
 
   useEffect(() => {
@@ -124,11 +128,9 @@ export const HomePage: React.FC = () => {
           if (metaDesc) metaDesc.setAttribute('content', settings.seo?.description || '');
         }
 
-        // Fetch trust stats, sections, items, announcements, footer, social, promotions, imageSlots
-        const [statsSnap, lSnap, vSnap, secSnap, itemSnap, annSnap, fgSnap, flSnap, socSnap, promoSnap, slotSnap] = await Promise.all([
-            getDoc(doc(db, 'siteStats', 'summary')).catch((err) => { console.warn('Could not load siteStats:', err); return null; }),
-            getDocs(collection(db, 'lessons')).catch((err) => { console.warn('Could not load lessons count:', err); return null; }),
-            getDocs(collection(db, 'videos')).catch((err) => { console.warn('Could not load videos count:', err); return null; }),
+        // Fetch trust stats from cached count endpoint (5m cache), sections, items, announcements, footer, social, promotions, imageSlots
+        const [statsData, secSnap, itemSnap, annSnap, fgSnap, flSnap, socSnap, promoSnap, slotSnap] = await Promise.all([
+            fetch('/api/stats/public').then(r => r.json()).catch(() => null),
             getDocs(collection(db, 'homepageSections')).catch((err) => { console.warn('Could not load homepageSections:', err); return null; }),
             getDocs(collection(db, 'homepageItems')).catch((err) => { console.warn('Could not load homepageItems:', err); return null; }),
             getDocs(collection(db, 'announcements')).catch((err) => { console.warn('Could not load announcements:', err); return null; }),
@@ -138,8 +140,6 @@ export const HomePage: React.FC = () => {
             getDocs(collection(db, 'promotions')).catch((err) => { console.warn('Could not load promotions:', err); return null; }),
             getDocs(collection(db, 'imageSlots')).catch((err) => { console.warn('Could not load imageSlots:', err); return null; }),
         ]);
-
-        const statsData = statsSnap && statsSnap.exists() ? statsSnap.data() : null;
 
 
         if (secSnap) {
@@ -188,15 +188,19 @@ export const HomePage: React.FC = () => {
     }
 
     fetchHomeData();
-    const plansQuery = query(collection(db, 'plans'), where('isActive', '==', true));
-    const unsubscribePlans = onSnapshot(plansQuery, (snap) => {
-        const plansList = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-        plansList.sort((a: any, b: any) => (a.sortOrder || 0) - (b.sortOrder || 0));
-        setPlans(plansList);
-    }, (err) => {
+    // One-time read for plans cached in server memory for 60 seconds (avoids onSnapshot on public homepage)
+    fetch('/api/plans')
+      .then(res => res.json())
+      .then(data => {
+        if (Array.isArray(data.plans)) {
+          const plansList = data.plans.filter((p: any) => p.isActive !== false);
+          plansList.sort((a: any, b: any) => (a.sortOrder || 0) - (b.sortOrder || 0));
+          setPlans(plansList);
+        }
+      })
+      .catch(err => {
         console.warn('Error fetching plans in HomePage:', err);
-    });
-    return () => unsubscribePlans();
+      });
   }, []);
 
   if (loading) {
@@ -842,7 +846,7 @@ export const HomePage: React.FC = () => {
                 id: 't-1',
                 name: 'Jean Pierre N.',
                 role: 'Passed Provisional Test (98%)',
-                avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+                avatar: '/assets/images/avatar_jean_pierre_1793142909650.jpg',
                 stars: 5,
                 text: {
                   en: 'I passed my provisional driving test on the first attempt with 98% score thanks to official lessons in Kinyarwanda and English on TSINDA.',
@@ -854,7 +858,7 @@ export const HomePage: React.FC = () => {
                 id: 't-2',
                 name: 'Marie Claire U.',
                 role: 'Passed with 95%',
-                avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
+                avatar: '/assets/images/avatar_marie_claire_1793142909484.jpg',
                 stars: 5,
                 text: {
                   en: 'The timed mock exams gave me the exact confidence needed for the Police exam room. Highly recommended for every learner driver!',
@@ -866,7 +870,7 @@ export const HomePage: React.FC = () => {
                 id: 't-3',
                 name: 'Eric Mugabo',
                 role: 'First Attempt Success',
-                avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80',
+                avatar: 'https://ui-avatars.com/api/?name=Eric+Mugabo&background=3b82f6&color=fff&size=150',
                 stars: 5,
                 text: {
                   en: 'Mobile money payment was instant, and studying road signs on my phone saved me weeks of time. Amazing platform!',
@@ -878,7 +882,7 @@ export const HomePage: React.FC = () => {
                 id: 't-4',
                 name: 'Diane Uwase',
                 role: 'Scored 19/20',
-                avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80',
+                avatar: 'https://ui-avatars.com/api/?name=Diane+Uwase&background=10b981&color=fff&size=150',
                 stars: 5,
                 text: {
                   en: 'The referral program even let me earn free study access by inviting my classmates. TSINDA is a game changer!',

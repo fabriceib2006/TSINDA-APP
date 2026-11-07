@@ -55,7 +55,7 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
-  const pageSize = 8;
+  const pageSize = 20;
 
   // Lesson Quiz State
   const [quizState, setQuizState] = useState<'idle' | 'loading' | 'active' | 'submitted'>('idle');
@@ -67,7 +67,6 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
   const [noQuizYet, setNoQuizYet] = useState(false);
 
 
-  // Real-time subscriptions, purchases, access & progress listeners
   // Real-time subscriptions, purchases, access & progress listeners
   useEffect(() => {
     const effectiveUid = userProfile?.uid || firebaseUser?.uid;
@@ -161,30 +160,56 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
     };
   }, [userProfile, firebaseUser]);
 
-  // Fetch published lessons and videos on mount
+  // Fetch published lessons and videos lists (title, category, code, status only — NO BODY)
   useEffect(() => {
     async function fetchContent() {
       try {
-        const lSnap = await getDocs(query(collection(db, 'lessons'), orderBy('order', 'asc'))).catch((err) => {
-          handleFirestoreError(err, OperationType.LIST, 'lessons');
-          return null;
-        });
-        if (lSnap) {
-          const list = lSnap.docs
-            .map((d) => ({ id: d.id, ...d.data() } as Lesson))
-            .filter((l) => l.isPublished !== false);
-          setLessons(list);
+        const [lRes, vRes] = await Promise.all([
+          fetch('/api/lessons?limit=100').catch(() => null),
+          fetch('/api/videos?limit=100').catch(() => null)
+        ]);
+
+        if (lRes && lRes.ok) {
+          const lData = await lRes.json();
+          if (Array.isArray(lData.lessons)) {
+            setLessons(lData.lessons);
+          }
+        } else {
+          // Fallback to client query if server is restarting
+          const lSnap = await getDocs(query(collection(db, 'lessons'), orderBy('order', 'asc'))).catch(() => null);
+          if (lSnap) {
+            setLessons(lSnap.docs.map(d => ({
+              id: d.id,
+              title: d.data().title,
+              category: d.data().category,
+              code: d.data().code,
+              status: d.data().status || (d.data().isPublished !== false ? 'published' : 'draft'),
+              isPublished: d.data().isPublished !== false,
+              order: d.data().order || 0
+            } as unknown as Lesson)).filter(l => l.isPublished));
+          }
         }
 
-        const vSnap = await getDocs(query(collection(db, 'videos'), orderBy('order', 'asc'))).catch((err) => {
-          handleFirestoreError(err, OperationType.LIST, 'videos');
-          return null;
-        });
-        if (vSnap) {
-          const vList = vSnap.docs
-            .map((d) => ({ id: d.id, ...d.data() } as VideoLesson))
-            .filter((v) => v.isPublished !== false);
-          setVideos(vList);
+        if (vRes && vRes.ok) {
+          const vData = await vRes.json();
+          if (Array.isArray(vData.videos)) {
+            setVideos(vData.videos);
+          }
+        } else {
+          const vSnap = await getDocs(query(collection(db, 'videos'), orderBy('order', 'asc'))).catch(() => null);
+          if (vSnap) {
+            setVideos(vSnap.docs.map(d => ({
+              id: d.id,
+              title: d.data().title,
+              category: d.data().category,
+              code: d.data().code,
+              status: d.data().status || (d.data().isPublished !== false ? 'published' : 'draft'),
+              isPublished: d.data().isPublished !== false,
+              videoUrl: d.data().videoUrl,
+              duration: d.data().duration,
+              order: d.data().order || 0
+            } as unknown as VideoLesson)).filter(v => v.isPublished));
+          }
         }
       } catch (err) {
         console.error('Error loading lessons and videos:', err);
@@ -429,7 +454,7 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
     window.scrollTo({ top: 120, behavior: 'smooth' });
   };
 
-  const handleSelectLesson = (lesson: Lesson) => {
+  const handleSelectLesson = async (lesson: Lesson) => {
     setSelectedLesson(lesson);
     setSelectedVideo(null);
     setQuizState('idle');
@@ -438,6 +463,25 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
     setQuizResult(null);
     setQuizError(null);
     setNoQuizYet(false);
+
+    // Load body only when one lesson opens
+    if (!lesson.body || Object.keys(lesson.body).length === 0) {
+      try {
+        const res = await fetch(`/api/lessons/${lesson.id}`);
+        if (res.ok) {
+          const fullData = await res.json();
+          setSelectedLesson(prev => prev && prev.id === lesson.id ? { ...prev, ...fullData } : prev);
+        } else {
+          const { getDoc, doc: fsDoc } = await import('firebase/firestore');
+          const dSnap = await getDoc(fsDoc(db, 'lessons', lesson.id)).catch(() => null);
+          if (dSnap && dSnap.exists()) {
+            setSelectedLesson(prev => prev && prev.id === lesson.id ? { ...prev, ...dSnap.data() } as Lesson : prev);
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to load lesson body:', err);
+      }
+    }
   };
 
   const handleSelectVideo = (video: VideoLesson) => {

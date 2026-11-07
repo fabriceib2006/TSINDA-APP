@@ -52,13 +52,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           const userSnap = await getDoc(userDocRef);
           
           if (userSnap.exists()) {
-            let data = userSnap.data() as UserProfile;
+            const data = userSnap.data();
+            const now = new Date();
+            const lastActive = data.lastActiveAt ? new Date(data.lastActiveAt) : (data.lastLoginAt ? new Date(data.lastLoginAt) : (data.createdAt ? new Date(data.createdAt) : now));
+            let updates: any = {};
             if (!data.referralCode) {
-              const code = Math.random().toString(36).substring(2, 8).toUpperCase();
-              await updateDoc(userDocRef, { referralCode: code });
-              data = { ...data, referralCode: code };
+              updates.referralCode = Math.random().toString(36).substring(2, 8).toUpperCase();
             }
-            setUserProfile(data);
+            if (isNaN(lastActive.getTime()) || now.getTime() - lastActive.getTime() > 24 * 60 * 60 * 1000) {
+              updates.lastActiveAt = now.toISOString();
+              updates.lastLoginAt = now.toISOString();
+            }
+            if (Object.keys(updates).length > 0) {
+              await updateDoc(userDocRef, updates).catch(() => null);
+              Object.assign(data, updates);
+            }
+            setUserProfile(data as any);
             if (data.role === 'admin' || fbUser.email === 'fabriceib2006@gmail.com') {
               const adminDocRef = doc(db, 'admins', fbUser.uid);
               getDoc(adminDocRef).then((adminSnap) => {
@@ -174,7 +183,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         await fbSignOut(auth);
         throw new Error("Wrong phone/email or password.");
       }
-      setUserProfile(data);
+      await updateDoc(userDocRef, { lastActiveAt: new Date().toISOString() }).catch(() => null);
+      setUserProfile(prev => prev ? { ...prev, lastActiveAt: new Date().toISOString() } : null);
     } else {
       await fbSignOut(auth);
       throw new Error("Wrong phone/email or password.");

@@ -1,6 +1,6 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { db, auth } from '../../lib/firebase';
-import { collection, query, orderBy, onSnapshot } from 'firebase/firestore';
+import { collection, query, orderBy, getDocs } from 'firebase/firestore';
 import { Payment } from '../../types';
 import {
   CreditCard,
@@ -127,62 +127,64 @@ export const PaymentsManager: React.FC = () => {
   };
 
   // Pagination
-  const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 10;
+  const [cursorHistory, setCursorHistory] = useState<(string | null)[]>([null]);
+  const [currentPageIndex, setCurrentPageIndex] = useState(0);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(false);
+  const itemsPerPage = 20;
 
-  // Real-time listener for payments
-  useEffect(() => {
+  const fetchPayments = useCallback(async (targetCursor: string | null = null, search: string = '', status: string = 'all') => {
     setLoading(true);
-    const q = query(collection(db, 'payments'), orderBy('createdAt', 'desc'));
-    const unsubscribe = onSnapshot(
-      q,
-      (snap) => {
-        const list = snap.docs.map((d) => {
-          const data = d.data();
-          let createdAtStr = '';
-          if (data.createdAt?.toDate) {
-            createdAtStr = data.createdAt.toDate().toISOString();
-          } else if (typeof data.createdAt === 'string') {
-            createdAtStr = data.createdAt;
-          } else {
-            createdAtStr = new Date().toISOString();
-          }
+    try {
+      const token = auth.currentUser ? await auth.currentUser.getIdToken() : '';
+      let url = `/api/admin/payments?limit=20`;
+      if (targetCursor) url += `&cursor=${targetCursor}`;
+      if (search) url += `&search=${encodeURIComponent(search)}`;
+      if (status && status !== 'all') url += `&status=${status}`;
 
-          return {
-            id: d.id,
-            paypackRef: data.paypackRef || data.reference || d.id,
-            userId: data.userId || '',
-            userName: data.userName || data.userEmail || '',
-            userEmail: data.userEmail || '',
-            planId: data.planId || '',
-            planName: data.planName || 'Pass',
-            amount: Number(data.amount || 0),
-            phone: data.phone || '',
-            network: data.network || 'MTN',
-            kind: data.kind || 'cashin',
-            status: data.status || 'pending',
-            paypackStatus: data.paypackStatus || (data.isSandbox ? 'sandbox' : null),
-            isSandbox: Boolean(data.isSandbox),
-            failureReason: data.failureReason || null,
-            subscriptionId: data.subscriptionId || null,
-            reference: data.reference || data.paypackRef || d.id,
-            lastPaypackCheckAt: data.lastPaypackCheckAt,
-            createdAt: createdAtStr,
-            updatedAt: data.updatedAt,
-          } as Payment;
-        });
+      const res = await fetch(url, {
+        headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+      });
 
-        setPayments(list);
-        setLoading(false);
-      },
-      (err) => {
-        console.error('Error listening to payments:', err);
-        setLoading(false);
+      if (res.ok) {
+        const data = await res.json();
+        setPayments(data.payments || []);
+        setNextCursor(data.nextCursor || null);
+        setHasMore(Boolean(data.hasMore));
       }
-    );
-
-    return () => unsubscribe();
+    } catch (err) {
+      console.error('Error fetching payments page:', err);
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    fetchPayments(null, searchQuery, statusFilter);
+  }, [fetchPayments, statusFilter]);
+
+  const handleNextPage = () => {
+    if (!nextCursor || !hasMore) return;
+    const nextIdx = currentPageIndex + 1;
+    setCursorHistory(prev => [...prev.slice(0, nextIdx), nextCursor]);
+    setCurrentPageIndex(nextIdx);
+    fetchPayments(nextCursor, searchQuery, statusFilter);
+  };
+
+  const handlePrevPage = () => {
+    if (currentPageIndex <= 0) return;
+    const prevIdx = currentPageIndex - 1;
+    const prevCursor = cursorHistory[prevIdx] || null;
+    setCurrentPageIndex(prevIdx);
+    fetchPayments(prevCursor, searchQuery, statusFilter);
+  };
+
+  const handleSearchSubmit = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    setCurrentPageIndex(0);
+    setCursorHistory([null]);
+    fetchPayments(null, searchQuery, statusFilter);
+  };
 
   // Periodic lightweight check for pending payments
   useEffect(() => {
@@ -351,15 +353,11 @@ export const PaymentsManager: React.FC = () => {
     setSearchQuery('');
     setStartDate('');
     setEndDate('');
-    setCurrentPage(1);
+    setCurrentPageIndex(0);
   };
 
-  // Pagination calculation
-  const totalPages = Math.max(1, Math.ceil(filteredPayments.length / itemsPerPage));
-  const paginatedPayments = useMemo(() => {
-    const startIdx = (currentPage - 1) * itemsPerPage;
-    return filteredPayments.slice(startIdx, startIdx + itemsPerPage);
-  }, [filteredPayments, currentPage, itemsPerPage]);
+  // Server paginated records (limit 20 per page)
+  const paginatedPayments = filteredPayments;
 
   const formatDateTime = (isoString: string) => {
     try {
@@ -483,11 +481,14 @@ export const PaymentsManager: React.FC = () => {
             <input
               type="text"
               value={searchQuery}
-              onChange={(e) => {
-                setSearchQuery(e.target.value);
-                setCurrentPage(1);
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  handleSearchSubmit();
+                }
               }}
-              placeholder="Search Paypack ref, phone, student..."
+              placeholder="Search Paypack ref, phone, student... (Enter to query)"
               className="w-full min-h-[44px] pl-10 pr-8 py-2.5 bg-slate-50 rounded-xl border border-slate-200 text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-600 transition-colors"
             />
             {searchQuery && (
@@ -509,7 +510,7 @@ export const PaymentsManager: React.FC = () => {
               value={statusFilter}
               onChange={(e) => {
                 setStatusFilter(e.target.value);
-                setCurrentPage(1);
+                setCurrentPageIndex(0);
               }}
               className="w-full bg-transparent text-xs sm:text-sm font-semibold text-slate-900 focus:outline-none cursor-pointer"
             >
@@ -528,7 +529,7 @@ export const PaymentsManager: React.FC = () => {
               value={networkFilter}
               onChange={(e) => {
                 setNetworkFilter(e.target.value);
-                setCurrentPage(1);
+                setCurrentPageIndex(0);
               }}
               className="w-full bg-transparent text-xs sm:text-sm font-semibold text-slate-900 focus:outline-none cursor-pointer"
             >
@@ -546,7 +547,7 @@ export const PaymentsManager: React.FC = () => {
               value={startDate}
               onChange={(e) => {
                 setStartDate(e.target.value);
-                setCurrentPage(1);
+                setCurrentPageIndex(0);
               }}
               aria-label="Filter from date"
               className="w-full min-w-0 bg-transparent text-xs text-slate-800 font-medium focus:outline-none cursor-pointer"
@@ -557,7 +558,7 @@ export const PaymentsManager: React.FC = () => {
               value={endDate}
               onChange={(e) => {
                 setEndDate(e.target.value);
-                setCurrentPage(1);
+                setCurrentPageIndex(0);
               }}
               aria-label="Filter to date"
               className="w-full min-w-0 bg-transparent text-xs text-slate-800 font-medium focus:outline-none cursor-pointer"
@@ -839,31 +840,34 @@ export const PaymentsManager: React.FC = () => {
               })}
             </div>
 
-            {/* Pagination Controls */}
+            {/* Server-side Pagination Controls */}
             <div className="p-4 bg-slate-50/70 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3">
               <span className="text-xs text-slate-500">
-                Showing {Math.min(filteredPayments.length, (currentPage - 1) * itemsPerPage + 1)} to{' '}
-                {Math.min(filteredPayments.length, currentPage * itemsPerPage)} of {filteredPayments.length} transactions
+                Page {currentPageIndex + 1} (showing {filteredPayments.length} transactions per page)
               </span>
 
-              <div className="flex items-center gap-1.5">
+              <div className="flex items-center gap-2">
                 <button
-                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                  disabled={currentPage === 1}
-                  className="min-h-[40px] min-w-[40px] flex items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 hover:bg-slate-100 disabled:opacity-40 transition-colors shadow-2xs"
+                  type="button"
+                  onClick={handlePrevPage}
+                  disabled={currentPageIndex === 0 || loading}
+                  className="min-h-[36px] px-3.5 flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-40 transition-colors shadow-2xs text-xs font-semibold"
                   aria-label="Previous page"
                 >
                   <ChevronLeft className="w-4 h-4" />
+                  <span>Previous</span>
                 </button>
                 <span className="text-xs font-bold px-2 text-slate-700">
-                  {currentPage} / {totalPages}
+                  Page {currentPageIndex + 1}
                 </span>
                 <button
-                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                  disabled={currentPage === totalPages}
-                  className="min-h-[40px] min-w-[40px] flex items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 hover:bg-slate-100 disabled:opacity-40 transition-colors shadow-2xs"
+                  type="button"
+                  onClick={handleNextPage}
+                  disabled={!hasMore || !nextCursor || loading}
+                  className="min-h-[36px] px-3.5 flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-40 transition-colors shadow-2xs text-xs font-semibold"
                   aria-label="Next page"
                 >
+                  <span>Next</span>
                   <ChevronRight className="w-4 h-4" />
                 </button>
               </div>

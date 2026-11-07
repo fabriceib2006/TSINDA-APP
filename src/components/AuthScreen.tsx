@@ -18,6 +18,20 @@ export const AuthScreen: React.FC = () => {
   const { language, setLanguage } = useLanguage();
   const dict = t[language];
 
+  const updateLastActive = async (uid: string) => {
+    const { doc, getDoc, updateDoc, serverTimestamp } = await import('firebase/firestore');
+    const { db } = await import('../lib/firebase');
+    const userRef = doc(db, 'users', uid);
+    const userSnap = await getDoc(userRef);
+    if (!userSnap.exists()) return;
+    const data = userSnap.data();
+    const lastActive = data.lastActiveAt ? (data.lastActiveAt.toDate ? data.lastActiveAt.toDate() : new Date(data.lastActiveAt)) : null;
+    const now = new Date();
+    if (!lastActive || (now.getTime() - lastActive.getTime() > 24 * 60 * 60 * 1000)) {
+      await updateDoc(userRef, { lastActiveAt: serverTimestamp() });
+    }
+  };
+
   // URL / Mode detection
   const [isAdminMode, setIsAdminMode] = useState(window.location.pathname === '/admin/login' || window.location.search.includes('mode=admin'));
   const [isSignUp, setIsSignUp] = useState(window.location.pathname === '/signup' || window.location.search.includes('mode=signup'));
@@ -69,7 +83,8 @@ export const AuthScreen: React.FC = () => {
           fr: "Numéro de téléphone/e-mail ou mot de passe incorrect."
         }[language] || "Wrong phone/email or password.");
       }
-      await signInWithPhone(phone, password);
+      const user: any = await signInWithPhone(phone, password);
+      if (user?.uid) await updateLastActive(user.uid);
     } catch (err: any) {
       console.error("Login error code:", err.code || 'unknown');
       setError({
