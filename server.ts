@@ -1292,6 +1292,96 @@ async function startServer() {
   });
 
   // ==========================================
+  // API: VERIFY & BOOTSTRAP ADMIN ACCESS
+  // ==========================================
+  app.post('/api/auth/verify-admin', publicAndAuthLimiter, async (req: Request, res: Response) => {
+    const auth = await verifyAuth(req);
+    if (!auth || !auth.uid) {
+      return res.status(401).json({ authorized: false, error: 'Unauthorized: Valid Google sign-in token is required.' });
+    }
+
+    const emailLower = (auth.email || '').trim().toLowerCase();
+    const isPrimaryAdminEmail = emailLower === 'fabriceib2006@gmail.com';
+    const displayName = typeof req.body?.name === 'string' && req.body.name.trim() ? req.body.name.trim() : 'Admin';
+
+    try {
+      const adminRef = db.collection('admins').doc(auth.uid);
+      const userRef = db.collection('users').doc(auth.uid);
+      const [adminSnap, userSnap] = await Promise.all([adminRef.get(), userRef.get()]);
+
+      const hasAdminDoc = adminSnap.exists;
+      const hasAdminRole = userSnap.exists && userSnap.data()?.role === 'admin';
+
+      // Also check if another admins doc matches this verified email (case-insensitive)
+      let hasEmailAdminDoc = false;
+      if (!hasAdminDoc && !hasAdminRole && !isPrimaryAdminEmail && emailLower) {
+        const emailAdminsSnap = await db.collection('admins').where('email', '==', emailLower).limit(1).get();
+        if (!emailAdminsSnap.empty) {
+          hasEmailAdminDoc = true;
+        }
+      }
+
+      if (!isPrimaryAdminEmail && !hasAdminDoc && !hasAdminRole && !hasEmailAdminDoc) {
+        return res.status(403).json({
+          authorized: false,
+          error: `This email (${auth.email || 'unknown'}) is not authorized for admin access.`
+        });
+      }
+
+      const nowIso = new Date().toISOString();
+      if (!hasAdminDoc) {
+        await adminRef.set({
+          uid: auth.uid,
+          email: emailLower || auth.email || '',
+          role: 'admin',
+          createdAt: nowIso
+        });
+      }
+
+      let profile: any;
+      if (userSnap.exists) {
+        profile = userSnap.data()!;
+        if (profile.role !== 'admin' || (!profile.email && emailLower)) {
+          const updates: any = { role: 'admin', lastActiveAt: nowIso };
+          if (!profile.email && emailLower) updates.email = emailLower;
+          await userRef.update(updates);
+          profile = { ...profile, ...updates };
+        }
+      } else {
+        profile = {
+          uid: auth.uid,
+          name: displayName,
+          phone: '',
+          email: emailLower || auth.email || '',
+          role: 'admin',
+          status: 'active',
+          createdAt: nowIso
+        };
+        await userRef.set(profile);
+      }
+
+      return res.json({ authorized: true, profile });
+    } catch (err: any) {
+      console.error('Verify admin error:', err);
+      if (isPrimaryAdminEmail) {
+        return res.json({
+          authorized: true,
+          profile: {
+            uid: auth.uid,
+            name: displayName,
+            phone: '',
+            email: emailLower,
+            role: 'admin',
+            status: 'active',
+            createdAt: new Date().toISOString()
+          }
+        });
+      }
+      return res.status(500).json({ authorized: false, error: err.message || 'Failed to verify admin access' });
+    }
+  });
+
+  // ==========================================
   // API: INITIATE PAYMENT (Express route: /api/payments/create & /api/payments/start)
   // ==========================================
   const handlePaymentCreate = async (req: Request, res: Response) => {

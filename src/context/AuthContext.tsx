@@ -53,6 +53,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           
           if (userSnap.exists()) {
             const data = userSnap.data();
+            const emailLower = (fbUser.email || '').trim().toLowerCase();
+            const isPrimaryAdmin = emailLower === 'fabriceib2006@gmail.com';
             const now = new Date();
             const lastActive = data.lastActiveAt ? new Date(data.lastActiveAt) : (data.lastLoginAt ? new Date(data.lastLoginAt) : (data.createdAt ? new Date(data.createdAt) : now));
             let updates: any = {};
@@ -67,41 +69,57 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               await updateDoc(userDocRef, updates).catch(() => null);
               Object.assign(data, updates);
             }
+            if (isPrimaryAdmin && data.role !== 'admin') {
+              data.role = 'admin';
+            }
             setUserProfile(data as any);
-            if (data.role === 'admin' || fbUser.email === 'fabriceib2006@gmail.com') {
-              const adminDocRef = doc(db, 'admins', fbUser.uid);
-              getDoc(adminDocRef).then((adminSnap) => {
+            if (data.role === 'admin' || isPrimaryAdmin) {
+              getDoc(doc(db, 'admins', fbUser.uid)).then(async (adminSnap) => {
                 if (!adminSnap.exists()) {
-                  setDoc(adminDocRef, {
-                    uid: fbUser.uid,
-                    email: fbUser.email || '',
-                    role: 'admin',
-                    createdAt: new Date().toISOString()
-                  }).catch(() => null);
+                  const idToken = await fbUser.getIdToken().catch(() => '');
+                  if (idToken) {
+                    await fetch('/api/auth/verify-admin', {
+                      method: 'POST',
+                      headers: {
+                        'Authorization': `Bearer ${idToken}`,
+                        'Content-Type': 'application/json'
+                      },
+                      body: JSON.stringify({ name: fbUser.displayName || data.name || 'Admin' })
+                    }).catch(() => null);
+                  }
                 }
               }).catch(() => null);
             }
           } else {
-            // Check if admin document exists in admins/{uid} or matches admin email
-            const isAdminEmail = fbUser.email === 'fabriceib2006@gmail.com';
+            // Check if admin document exists in admins/{uid} or matches primary admin email
+            const emailLower = (fbUser.email || '').trim().toLowerCase();
+            const isAdminEmail = emailLower === 'fabriceib2006@gmail.com';
             const adminDoc = await getDoc(doc(db, 'admins', fbUser.uid)).catch(() => null);
             if (adminDoc?.exists() || isAdminEmail) {
-              const profile: UserProfile = {
+              let profile: UserProfile = {
                 uid: fbUser.uid,
                 name: fbUser.displayName || 'Admin',
                 phone: '',
-                email: fbUser.email || '',
+                email: emailLower || fbUser.email || '',
                 role: 'admin',
                 status: 'active',
                 createdAt: new Date().toISOString()
               };
-              await setDoc(userDocRef, profile).catch(() => null);
-              await setDoc(doc(db, 'admins', fbUser.uid), {
-                uid: fbUser.uid,
-                email: fbUser.email || '',
-                role: 'admin',
-                createdAt: new Date().toISOString()
-              }).catch(() => null);
+              const idToken = await fbUser.getIdToken().catch(() => '');
+              if (idToken) {
+                const resp = await fetch('/api/auth/verify-admin', {
+                  method: 'POST',
+                  headers: {
+                    'Authorization': `Bearer ${idToken}`,
+                    'Content-Type': 'application/json'
+                  },
+                  body: JSON.stringify({ name: fbUser.displayName || 'Admin' })
+                }).catch(() => null);
+                if (resp && resp.ok) {
+                  const json = await resp.json().catch(() => null);
+                  if (json?.profile) profile = json.profile;
+                }
+              }
               setUserProfile(profile);
             } else {
               setUserProfile(null);
@@ -309,60 +327,106 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const signInWithGoogleAdmin = async () => {
     const provider = new GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: 'select_account' });
     let cred;
     try {
       cred = await signInWithPopup(auth, provider);
     } catch (err: any) {
-      console.error(`[AdminLogin] Popup error code: ${err.code || 'unknown'}`);
-      throw new Error("This email is not authorized for admin access.");
+      console.error(`[AdminLogin] Popup error code: ${err.code || 'unknown'}`, err);
+      if (err.code === 'auth/unauthorized-domain') {
+        throw new Error(`Domain "${window.location.hostname}" is not authorized in Firebase Auth. Add it in Firebase Console → Authentication → Settings → Authorized domains.`);
+      }
+      if (err.code === 'auth/popup-blocked') {
+        throw new Error("Sign-in popup was blocked by your browser. Please allow popups for this site and try again.");
+      }
+      if (err.code === 'auth/popup-closed-by-user' || err.code === 'auth/cancelled-popup-request') {
+        throw new Error("Google sign-in popup was closed before completing.");
+      }
+      throw new Error(err.message || `Google sign-in failed (${err.code || 'unknown error'}).`);
     }
 
     const user = cred.user;
-    if (!user.email || user.email.endsWith('@students.tsinda.app')) {
+    const emailLower = (user.email || '').trim().toLowerCase();
+    if (!emailLower || emailLower.endsWith('@students.tsinda.app')) {
       await fbSignOut(auth);
-      throw new Error("This email is not authorized for admin access.");
+      throw new Error(`This email (${user.email || 'none'}) is not authorized for admin access.`);
     }
 
-    let isAdminAllowed = false;
+    const isPrimaryAdminEmail = emailLower === 'fabriceib2006@gmail.com';
+    let isAdminAllowed = isPrimaryAdminEmail;
+    let verifiedProfile: UserProfile | null = null;
+
+    // 1. Verify and bootstrap admins/{uid} + users/{uid} securely via backend Admin SDK
     try {
-      const adminDocSnap = await getDoc(doc(db, 'admins', user.uid));
-      if (adminDocSnap.exists()) {
-        isAdminAllowed = true;
-      } else {
-        const userDocSnap = await getDoc(doc(db, 'users', user.uid));
-        if (userDocSnap.exists() && userDocSnap.data().role === 'admin') {
+      const idToken = await user.getIdToken();
+      const resp = await fetch('/api/auth/verify-admin', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${idToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ name: user.displayName || 'Admin' })
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data?.authorized) {
           isAdminAllowed = true;
+          verifiedProfile = data.profile || null;
         }
+      } else if (resp.status === 403) {
+        isAdminAllowed = false;
       }
-    } catch (err) {
-      console.error("Admin allowlist check error:", err);
+    } catch (serverErr) {
+      console.warn("Server /api/auth/verify-admin check failed, checking Firestore:", serverErr);
+    }
+
+    // 2. Fallback client Firestore check (in case backend request had a transient error)
+    if (!isAdminAllowed) {
+      try {
+        const adminDocSnap = await getDoc(doc(db, 'admins', user.uid));
+        if (adminDocSnap.exists()) {
+          isAdminAllowed = true;
+        } else {
+          const userDocSnap = await getDoc(doc(db, 'users', user.uid));
+          if (userDocSnap.exists() && userDocSnap.data().role === 'admin') {
+            isAdminAllowed = true;
+          }
+        }
+      } catch (err) {
+        console.error("Admin allowlist check error:", err);
+      }
     }
 
     if (!isAdminAllowed) {
       await fbSignOut(auth);
-      throw new Error("This email is not authorized for admin access.");
+      throw new Error(`This email (${user.email}) is not authorized for admin access.`);
+    }
+
+    if (verifiedProfile) {
+      setUserProfile(verifiedProfile);
+      return;
     }
 
     const userDocRef = doc(db, 'users', user.uid);
-    const userSnap = await getDoc(userDocRef);
+    const userSnap = await getDoc(userDocRef).catch(() => null);
     let profile: UserProfile;
-    if (userSnap.exists()) {
+    if (userSnap && userSnap.exists()) {
       profile = userSnap.data() as UserProfile;
       if (profile.role !== 'admin') {
-        await updateDoc(userDocRef, { role: 'admin' });
-        profile.role = 'admin';
+        await updateDoc(userDocRef, { role: 'admin' }).catch(() => null);
+        profile = { ...profile, role: 'admin' };
       }
     } else {
       profile = {
         uid: user.uid,
         name: user.displayName || 'Admin',
         phone: '',
-        email: user.email,
+        email: emailLower,
         role: 'admin',
         status: 'active',
         createdAt: new Date().toISOString()
       };
-      await setDoc(userDocRef, profile);
+      await setDoc(userDocRef, profile).catch(() => null);
     }
     setUserProfile(profile);
   };
