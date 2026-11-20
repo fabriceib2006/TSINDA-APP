@@ -2,9 +2,10 @@ import express, { Request, Response, NextFunction } from 'express';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import fs from 'fs';
 import { initializeApp, getApps, cert } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
-import { getFirestore, Timestamp, FieldValue, FieldPath } from 'firebase-admin/firestore';
+import { getFirestore, Timestamp, FieldValue, FieldPath, Firestore } from 'firebase-admin/firestore';
 import axios from 'axios';
 import * as crypto from 'crypto';
 import zlib from 'zlib';
@@ -13,25 +14,48 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Initialize Firebase Admin
-if (!getApps().length) {
+let db: Firestore;
+try {
   const serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT;
+  let config: { projectId?: string; firestoreDatabaseId?: string } = {};
+  try {
+    config = JSON.parse(fs.readFileSync(path.resolve(__dirname, 'firebase-applet-config.json'), 'utf-8'));
+  } catch {
+    // Fallback if config file is missing
+  }
+  const databaseId = config.firestoreDatabaseId || '(default)';
+  const fallbackProjectId = config.projectId || 'tsinda-prod';
+
   if (serviceAccountJson) {
-    try {
-      const serviceAccount = JSON.parse(serviceAccountJson);
+    const serviceAccount = JSON.parse(serviceAccountJson);
+    if (typeof serviceAccount.private_key === 'string') {
+      serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
+    }
+    if (!getApps().length) {
       initializeApp({
         credential: cert(serviceAccount),
-        projectId: 'tsinda-prod'
+        projectId: serviceAccount.project_id || fallbackProjectId
       });
-    } catch (e) {
-      console.error('Failed to parse FIREBASE_SERVICE_ACCOUNT:', e);
-      initializeApp({ projectId: 'tsinda-prod' });
     }
   } else {
+    if (!getApps().length) {
+      initializeApp({ projectId: fallbackProjectId });
+    }
+  }
+  db = getFirestore(databaseId);
+} catch (e) {
+  console.error('Failed to initialize Firebase Admin:', e);
+  if (!getApps().length) {
     initializeApp({ projectId: 'tsinda-prod' });
   }
+  db = getFirestore('(default)');
 }
 
-const db = getFirestore('(default)');
+// Global unhandled rejection handler
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
 const PAYPACK_BASE_URL = 'https://payments.paypack.rw/api';
 
 function getSecret(key: string): string {
@@ -116,6 +140,7 @@ function parseRwandanPhone(phone: string): { normalizedPhone: string; network: '
 async function fetchPaypackTransaction(ref: string): Promise<{
   found: boolean;
   status: 'pending' | 'successful' | 'failed' | 'unknown';
+  verificationSource?: 'paypack_api' | 'paypack_webhook';
   amount?: number;
   client?: string;
   failureReason?: string;
@@ -148,22 +173,19 @@ async function fetchPaypackTransaction(ref: string): Promise<{
       const rawStatus = String(evData.status || '').toLowerCase();
 
       let status: 'pending' | 'successful' | 'failed' | 'unknown' = 'unknown';
-      if (rawStatus === 'successful' || rawStatus === 'success') {
-        status = 'successful';
-      } else if (evKind === 'transaction:processed' && rawStatus === 'failed') {
+      if (rawStatus === 'failed' || rawStatus === 'cancelled' || rawStatus === 'declined' || rawStatus === 'rejected' || evKind === 'transaction:failed') {
         status = 'failed';
-      } else if (evKind === 'transaction:processed') {
-        status = 'successful';
-      } else if (rawStatus === 'failed' || rawStatus === 'cancelled' || rawStatus === 'declined' || rawStatus === 'rejected' || evKind === 'transaction:failed') {
-        status = 'failed';
-      } else if (rawStatus === 'pending' || rawStatus === 'processing' || evKind === 'transaction:created') {
+      } else if (rawStatus === 'pending' || rawStatus === 'processing' || rawStatus === 'queued' || evKind === 'transaction:created') {
         status = 'pending';
+      } else if (rawStatus === 'successful' || rawStatus === 'success' || (evKind === 'transaction:processed' && !rawStatus)) {
+        status = 'successful';
       }
 
       if (status !== 'unknown') {
         return {
           found: true,
           status,
+          verificationSource: 'paypack_api',
           amount: Number(evData.amount) || undefined,
           client: evData.client || evData.number,
           failureReason: evData.failure_reason || evData.message || undefined,
@@ -200,6 +222,7 @@ async function fetchPaypackTransaction(ref: string): Promise<{
       return {
         found: true,
         status,
+        verificationSource: 'paypack_api',
         amount: Number(tx.amount) || undefined,
         client: tx.client || tx.number,
         failureReason: tx.failure_reason || tx.message || undefined,
@@ -224,18 +247,19 @@ async function fetchPaypackTransaction(ref: string): Promise<{
       const rawStatus = String(evData.status || '').toLowerCase();
 
       let status: 'pending' | 'successful' | 'failed' | 'unknown' = 'unknown';
-      if (rawStatus === 'successful' || rawStatus === 'success' || evKind === 'transaction:processed') {
-        status = 'successful';
-      } else if (rawStatus === 'failed' || rawStatus === 'cancelled' || rawStatus === 'declined' || rawStatus === 'rejected' || evKind === 'transaction:failed') {
+      if (rawStatus === 'failed' || rawStatus === 'cancelled' || rawStatus === 'declined' || rawStatus === 'rejected' || evKind === 'transaction:failed') {
         status = 'failed';
-      } else if (rawStatus === 'pending' || rawStatus === 'processing' || evKind === 'transaction:created') {
+      } else if (rawStatus === 'pending' || rawStatus === 'processing' || rawStatus === 'queued' || evKind === 'transaction:created') {
         status = 'pending';
+      } else if (rawStatus === 'successful' || rawStatus === 'success' || (evKind === 'transaction:processed' && !rawStatus)) {
+        status = 'successful';
       }
 
       if (status !== 'unknown') {
         return {
           found: true,
           status,
+          verificationSource: 'paypack_api',
           amount: Number(evData.amount) || undefined,
           client: evData.client || evData.number,
           failureReason: evData.failure_reason || evData.message || undefined,
@@ -261,13 +285,14 @@ async function fetchPaypackTransaction(ref: string): Promise<{
       let status: 'pending' | 'successful' | 'failed' | 'unknown' = 'successful';
       if (rawStatus === 'failed' || rawStatus === 'cancelled' || rawStatus === 'declined' || rawStatus === 'rejected') {
         status = 'failed';
-      } else if (rawStatus === 'pending' || rawStatus === 'processing') {
+      } else if (rawStatus === 'pending' || rawStatus === 'processing' || rawStatus === 'queued') {
         status = 'pending';
       }
 
       return {
         found: true,
         status,
+        verificationSource: 'paypack_api',
         amount: Number(tx.amount) || undefined,
         client: tx.client || tx.number,
         failureReason: tx.failure_reason,
@@ -278,11 +303,11 @@ async function fetchPaypackTransaction(ref: string): Promise<{
     // Fallback to firestore paypackEvents
   }
 
-  // 5. Check paypackEvents collection in Firestore (recorded from webhook)
+  // 5. Check paypackEvents collection in Firestore (recorded from HMAC-verified webhook)
   try {
     const eventSnap = await db.collection('paypackEvents')
       .where('payload.data.ref', '==', ref)
-      .limit(1)
+      .limit(5)
       .get();
     if (!eventSnap.empty) {
       const evDoc = eventSnap.docs[0].data();
@@ -290,13 +315,14 @@ async function fetchPaypackTransaction(ref: string): Promise<{
       const evKind = String(evDoc?.payload?.event_kind || evDoc?.event_kind || '').toLowerCase();
       const rawStatus = String(evData.status || '').toLowerCase();
       let status: 'pending' | 'successful' | 'failed' | 'unknown' = 'unknown';
-      if (rawStatus === 'successful' || rawStatus === 'success' || evKind === 'transaction:processed') status = 'successful';
-      else if (rawStatus === 'failed' || rawStatus === 'cancelled' || rawStatus === 'declined' || evKind === 'transaction:failed') status = 'failed';
-      else if (rawStatus === 'pending') status = 'pending';
+      if (rawStatus === 'failed' || rawStatus === 'cancelled' || rawStatus === 'declined' || rawStatus === 'rejected' || evKind === 'transaction:failed') status = 'failed';
+      else if (rawStatus === 'pending' || rawStatus === 'processing' || rawStatus === 'queued' || evKind === 'transaction:created') status = 'pending';
+      else if (rawStatus === 'successful' || rawStatus === 'success' || (evKind === 'transaction:processed' && !rawStatus)) status = 'successful';
 
       return {
         found: true,
         status,
+        verificationSource: 'paypack_webhook',
         amount: Number(evData.amount) || undefined,
         client: evData.client,
         failureReason: evData.failure_reason,
@@ -344,7 +370,58 @@ async function processReferralReward(transaction: FirebaseFirestore.Transaction,
   });
 }
 
-async function processSuccessfulPayment(paymentDocSnapshot: FirebaseFirestore.DocumentSnapshot, reportedAmount?: number) {
+function resolveCanonicalPlanRules(plan: any): {
+  isStudyPlan: boolean;
+  access: { trafficRules: boolean; lessonVideos: boolean; exams: boolean };
+  durationDays: number;
+  examLimit: number | null;
+} {
+  const isStudyPlan = Boolean(
+    plan?.access?.trafficRules ||
+    plan?.access?.lessonVideos ||
+    plan?.features?.lessons ||
+    plan?.features?.videos
+  );
+
+  if (isStudyPlan) {
+    const rawDays = Number(plan?.durationDays);
+    return {
+      isStudyPlan: true,
+      access: {
+        trafficRules: true,
+        lessonVideos: true,
+        exams: true,
+      },
+      durationDays: Number.isFinite(rawDays) && rawDays >= 1 ? Math.floor(rawDays) : 1,
+      examLimit: null,
+    };
+  }
+
+  const rawLimit = plan?.examLimit ?? plan?.examsAllowed ?? plan?.examCredits;
+  const parsedLimit = Number(rawLimit);
+  return {
+    isStudyPlan: false,
+    access: {
+      trafficRules: false,
+      lessonVideos: false,
+      exams: true,
+    },
+    durationDays: 0,
+    examLimit: Number.isFinite(parsedLimit) && parsedLimit >= 1 ? Math.floor(parsedLimit) : 5,
+  };
+}
+
+type PaymentVerificationInfo = {
+  source: 'paypack_webhook' | 'paypack_api' | 'points_redemption' | 'admin_approve';
+  eventId?: string | null;
+  verifiedAt?: string;
+};
+
+async function processSuccessfulPayment(
+  paymentDocSnapshot: FirebaseFirestore.DocumentSnapshot,
+  reportedAmount?: number,
+  verification?: PaymentVerificationInfo
+) {
   const paymentRef = paymentDocSnapshot.ref;
 
   await db.runTransaction(async (transaction) => {
@@ -384,6 +461,11 @@ async function processSuccessfulPayment(paymentDocSnapshot: FirebaseFirestore.Do
 
     // 2. IN-MEMORY CHECKS & COMPUTATIONS
     const recordedAmount = Number(paymentData.amount);
+    if (recordedAmount > 0 && (!verification || !['paypack_webhook', 'paypack_api', 'admin_approve'].includes(verification.source))) {
+      console.warn(`Blocked unverified payment activation attempt for ${curDoc.id}`);
+      return;
+    }
+
     if (reportedAmount !== undefined && reportedAmount !== null && Number(reportedAmount) !== recordedAmount) {
       console.warn(`Amount mismatch for payment ${curDoc.id}: reported ${reportedAmount}, expected ${recordedAmount}`);
       transaction.update(paymentRef, {
@@ -407,9 +489,10 @@ async function processSuccessfulPayment(paymentDocSnapshot: FirebaseFirestore.Do
       return;
     }
     const plan = planDoc.data()!;
-
-    const isStudyPlan = Boolean(plan.access?.trafficRules || plan.access?.lessonVideos);
-    const durationDays = isStudyPlan ? (Number(plan.durationDays) || 30) : 0;
+    const canonical = resolveCanonicalPlanRules(plan);
+    const isStudyPlan = canonical.isStudyPlan;
+    const durationDays = canonical.durationDays;
+    // Count strictly from the exact moment system + Paypack confirm payment success
     const serverNow = new Date();
 
     let startDate: Date = serverNow;
@@ -445,7 +528,7 @@ async function processSuccessfulPayment(paymentDocSnapshot: FirebaseFirestore.Do
         endDate = new Date(startDate.getTime() + durationDays * 24 * 60 * 60 * 1000);
       }
     } else {
-      // Exam-only plans have no expiry date (null endDate)
+      // Exam-only plans depend only on exam counts and never expire by time
       endDate = null;
     }
 
@@ -479,6 +562,9 @@ async function processSuccessfulPayment(paymentDocSnapshot: FirebaseFirestore.Do
     await updateLastActive(paymentData.userId);
 
     // 3. ALL WRITES AFTER ALL READS ARE COMPLETE
+    const verifiedSource = verification?.source || 'paypack_api';
+    const paidAtIso = serverNow.toISOString();
+    const isPaypackVerified = verifiedSource === 'paypack_webhook' || verifiedSource === 'paypack_api';
     const subRef = db.collection('subscriptions').doc();
     const subData = {
       id: subRef.id,
@@ -487,19 +573,20 @@ async function processSuccessfulPayment(paymentDocSnapshot: FirebaseFirestore.Do
       planName: paymentData.planName,
       price: recordedAmount,
       durationDays,
+      validityDays: isStudyPlan ? durationDays : null,
       startDate: startDate.toISOString(),
       endDate: endDate ? endDate.toISOString() : null,
-      access: {
-        trafficRules: Boolean(plan.access?.trafficRules),
-        lessonVideos: Boolean(plan.access?.lessonVideos),
-        exams: Boolean(plan.access?.exams),
-      },
-      examLimit: isStudyPlan ? null : (plan.examLimit ?? 5),
+      paidAt: paidAtIso,
+      access: canonical.access,
+      examLimit: canonical.examLimit,
       examsUsed: 0,
       status: 'active',
       source: pointsRedeemed > 0 && recordedAmount === 0 ? 'points_redemption' : 'payment',
       paymentId: curDoc.id,
       paypackRef: paymentData.paypackRef,
+      paymentVerifiedSource: verifiedSource,
+      paypackVerified: isPaypackVerified,
+      paypackEventId: verification?.eventId || paymentData.paypackWebhookEventId || null,
       grantedBy: null,
       createdAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
@@ -519,8 +606,12 @@ async function processSuccessfulPayment(paymentDocSnapshot: FirebaseFirestore.Do
       access: subData.access,
       examLimit: subData.examLimit,
       examsUsed: 0,
+      validityDays: isStudyPlan ? durationDays : null,
       startDate: subData.startDate,
       expiresAt: subData.endDate,
+      paidAt: paidAtIso,
+      paymentVerifiedSource: verifiedSource,
+      paypackVerified: isPaypackVerified,
       createdAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
     };
@@ -528,18 +619,30 @@ async function processSuccessfulPayment(paymentDocSnapshot: FirebaseFirestore.Do
 
     // Sync to users/{userId}/access/current
     const userAccessRef = db.collection('users').doc(paymentData.userId).collection('access').doc('current');
-    transaction.set(userAccessRef, {
-      planName: paymentData.planName,
-      lessonsUntil: (subData.access.trafficRules && endDate) ? Timestamp.fromDate(endDate) : null,
-      videosUntil: (subData.access.lessonVideos && endDate) ? Timestamp.fromDate(endDate) : null,
-      examsUntil: (subData.access.exams && endDate) ? Timestamp.fromDate(endDate) : null,
-      examCredits: isStudyPlan ? null : subData.examLimit,
-      updatedAt: FieldValue.serverTimestamp(),
-    }, { merge: true });
+    if (isStudyPlan) {
+      transaction.set(userAccessRef, {
+        planName: paymentData.planName,
+        lessonsUntil: endDate ? Timestamp.fromDate(endDate) : null,
+        videosUntil: endDate ? Timestamp.fromDate(endDate) : null,
+        examsUntil: endDate ? Timestamp.fromDate(endDate) : null,
+        examCredits: null,
+        updatedAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
+    } else {
+      transaction.set(userAccessRef, {
+        planName: paymentData.planName,
+        examCredits: subData.examLimit,
+        updatedAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
+    }
 
     transaction.update(paymentRef, {
       status: needsReview ? 'needsReview' : 'successful',
       paypackStatus: 'successful',
+      paidAt: paidAtIso,
+      paymentVerifiedSource: verifiedSource,
+      paypackVerified: isPaypackVerified,
+      paypackEventId: verification?.eventId || paymentData.paypackWebhookEventId || null,
       subscriptionId: subRef.id,
       needsReview,
       reviewReason,
@@ -1044,17 +1147,38 @@ async function startServer() {
         }
 
         const paymentDoc = paymentsQuery.docs[0];
+        const lowerKind = String(eventKind || '').toLowerCase();
+        const isWebhookFailure =
+          reportedStatus === 'failed' ||
+          reportedStatus === 'cancelled' ||
+          reportedStatus === 'declined' ||
+          reportedStatus === 'rejected' ||
+          lowerKind === 'transaction:failed';
+        const isWebhookSuccess =
+          !isWebhookFailure &&
+          (reportedStatus === 'successful' ||
+            reportedStatus === 'success' ||
+            (lowerKind === 'transaction:processed' && (!reportedStatus || reportedStatus === 'processed')));
 
-        if (eventKind === 'transaction:processed') {
-          if (reportedStatus === 'successful' || reportedStatus === 'success') {
-            await processSuccessfulPayment(paymentDoc, reportedAmount);
-          } else if (reportedStatus === 'failed') {
-            await paymentDoc.ref.update({
-              status: 'failed',
-              failureReason: eventData?.failure_reason || eventData?.message || 'Transaction failed or rejected',
-              updatedAt: FieldValue.serverTimestamp(),
-            });
-          }
+        await paymentDoc.ref.update({
+          paypackWebhookEventId: eventId || null,
+          paypackWebhookStatus: reportedStatus || lowerKind || null,
+          paypackWebhookReceivedAt: FieldValue.serverTimestamp(),
+        }).catch(() => {});
+
+        if (isWebhookSuccess) {
+          await processSuccessfulPayment(paymentDoc, reportedAmount, {
+            source: 'paypack_webhook',
+            eventId: eventId || null,
+            verifiedAt: new Date().toISOString(),
+          });
+        } else if (isWebhookFailure) {
+          await paymentDoc.ref.update({
+            status: 'failed',
+            paypackStatus: reportedStatus || 'failed',
+            failureReason: eventData?.failure_reason || eventData?.message || 'Transaction failed or rejected',
+            updatedAt: FieldValue.serverTimestamp(),
+          });
         }
 
         if (eventId) {
@@ -1070,7 +1194,7 @@ async function startServer() {
   app.all('/api/paypack/webhook', handleWebhook);
 
   // ==========================================
-  // API: GET PLANS (Cached in memory for 60 seconds)
+  // API: GET PLANS (Cached in memory for 60 seconds — strictly Firestore data, no hardcoded plans)
   // ==========================================
   let cachedPlansData: any[] | null = null;
   let cachedPlansTimestamp = 0;
@@ -1084,53 +1208,24 @@ async function startServer() {
 
     try {
       const snap = await db.collection('plans').get();
-      if (!snap.empty) {
-        const plans = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-        cachedPlansData = plans;
-        cachedPlansTimestamp = now;
-        return res.json({ plans });
-      }
-    } catch (err) {
-      console.warn('Error fetching plans from firestore in /api/plans:', err);
+      const plans = snap.docs.map(d => {
+        const raw = d.data();
+        const canonical = resolveCanonicalPlanRules(raw);
+        return {
+          id: d.id,
+          ...raw,
+          access: canonical.access,
+          durationDays: canonical.durationDays,
+          examLimit: canonical.examLimit,
+        };
+      });
+      cachedPlansData = plans;
+      cachedPlansTimestamp = now;
+      return res.json({ plans });
+    } catch (err: any) {
+      console.error('Error fetching plans from firestore in /api/plans:', err);
+      return res.status(500).json({ error: 'Failed to load subscription plans from database.' });
     }
-
-    const fallbackPlans = [
-      {
-        id: 'plan_30_days_pro',
-        name: { rw: "Pro Ukwezi Kose", en: "30-Day Pro Pass", fr: "Pass Pro 30 Jours" },
-        description: { rw: "Amategeko y'umuhanda yose, amashusho na simulations z'ibizamini.", en: "Full rules, lesson videos, and unlimited mock exams.", fr: "Règles, vidéos et examens blancs illimités." },
-        price: 2000,
-        durationDays: 30,
-        access: { lessonVideos: true, trafficRules: true, exams: true },
-        examLimit: null,
-        isActive: true,
-        sortOrder: 1
-      },
-      {
-        id: 'plan_14_days_standard',
-        name: { rw: "Ibyumweru 2 Standard", en: "14-Day Standard Pass", fr: "Pass Standard 14 Jours" },
-        description: { rw: "Amategeko y'umuhanda n'ibizamini 15 byo kwitoza.", en: "Traffic rules and 15 complete mock exam attempts.", fr: "Règles et 15 examens blancs complets." },
-        price: 1500,
-        durationDays: 14,
-        access: { lessonVideos: false, trafficRules: true, exams: true },
-        examLimit: 15,
-        isActive: true,
-        sortOrder: 2
-      },
-      {
-        id: 'plan_7_days_theory',
-        name: { rw: "Amategeko n'Amashusho", en: "7-Day Video Theory Pass", fr: "Pass Théorie 7 Jours" },
-        description: { rw: "Amategeko yose y'umuhanda n'amashusho yose asobanura.", en: "Access all traffic rules and interactive video explanations.", fr: "Accès à toutes les règles du code." },
-        price: 1000,
-        durationDays: 7,
-        access: { lessonVideos: true, trafficRules: true, exams: false },
-        examLimit: null,
-        isActive: true,
-        sortOrder: 3
-      }
-    ];
-
-    return res.json({ plans: fallbackPlans });
   });
 
   // ==========================================
@@ -1223,31 +1318,76 @@ async function startServer() {
         return res.status(400).json({ error: 'Invalid plan price configured.' });
       }
 
-      // Check active unexpired study plan
-      const wantsStudyPlan = Boolean(planData.access?.trafficRules || planData.access?.lessonVideos);
+      // Check active unexpired study plan OR active exam-only plan with remaining credits
+      const canonicalPlan = resolveCanonicalPlanRules(planData);
+      const wantsStudyPlan = canonicalPlan.isStudyPlan;
       const serverNow = new Date();
       const userSubsSnap = await db.collection('subscriptions')
         .where('userId', '==', uid)
         .get();
+      const userPurchasesSnap = await db.collection('users').doc(uid).collection('purchases')
+        .where('status', '==', 'active')
+        .get();
+
+      const activeStudyDoc = userSubsSnap.docs.find(d => {
+        const sub = d.data();
+        if (sub.status !== 'active') return false;
+        const isStudy = Boolean(sub.access?.trafficRules || sub.access?.lessonVideos);
+        if (!isStudy) return false;
+        const end = sub.endDate ? new Date(sub.endDate) : null;
+        return end && end > serverNow;
+      });
 
       if (wantsStudyPlan) {
-        const activeSubDoc = userSubsSnap.docs.find(d => {
-          const sub = d.data();
-          if (sub.status !== 'active') return false;
-          const isStudy = Boolean(sub.access?.trafficRules || sub.access?.lessonVideos);
-          if (!isStudy) return false;
-          const end = sub.endDate ? new Date(sub.endDate) : null;
-          return end && end > serverNow;
-        });
-
-        if (activeSubDoc) {
-          const activeSub = activeSubDoc.data();
+        if (activeStudyDoc) {
+          const activeSub = activeStudyDoc.data();
           return res.status(409).json({
             error: 'STUDY_PLAN_ACTIVE',
             code: 'STUDY_PLAN_ACTIVE',
             message: `You already have an active study plan expiring on ${activeSub.endDate}. New study plans cannot be purchased until the active one expires.`,
             expiresAt: activeSub.endDate,
             planName: activeSub.planName || 'Active Study Plan'
+          });
+        }
+      } else {
+        // Exam-only purchase: block if user already has an active study plan (unlimited exams) OR active exam-only pack with remaining credits > 0
+        if (activeStudyDoc) {
+          const activeSub = activeStudyDoc.data();
+          return res.status(409).json({
+            error: 'STUDY_PLAN_ACTIVE',
+            code: 'STUDY_PLAN_ACTIVE',
+            message: `You already have an active study plan with unlimited mock exams until ${activeSub.endDate}.`,
+            expiresAt: activeSub.endDate,
+            planName: activeSub.planName || 'Active Study Plan'
+          });
+        }
+
+        const mergedExamRecords = new Map<string, any>();
+        userSubsSnap.docs.forEach(d => mergedExamRecords.set(d.id, d.data()));
+        userPurchasesSnap.docs.forEach(d => mergedExamRecords.set(d.id, { ...mergedExamRecords.get(d.id), ...d.data() }));
+
+        let remainingActiveExams = 0;
+        let activeExamPlanName = 'Exam Pack';
+        for (const rec of mergedExamRecords.values()) {
+          if (rec.status !== 'active') continue;
+          const isStudy = Boolean(rec.access?.trafficRules || rec.access?.lessonVideos || rec.features?.lessons || rec.features?.videos);
+          if (isStudy) continue;
+          const limit = typeof rec.examLimit === 'number' ? rec.examLimit : (typeof rec.examsAllowed === 'number' ? rec.examsAllowed : 5);
+          const used = Number(rec.examsUsed) || 0;
+          const rem = Math.max(0, limit - used);
+          if (rem > 0) {
+            remainingActiveExams += rem;
+            activeExamPlanName = rec.planName || activeExamPlanName;
+          }
+        }
+
+        if (remainingActiveExams > 0) {
+          return res.status(409).json({
+            error: 'EXAM_PLAN_ACTIVE',
+            code: 'EXAM_PLAN_ACTIVE',
+            message: `You still have ${remainingActiveExams} mock exam(s) remaining on your active exam plan. You can buy a new exam pack once your remaining exams reach 0.`,
+            remainingExams: remainingActiveExams,
+            planName: activeExamPlanName
           });
         }
       }
@@ -1343,7 +1483,7 @@ async function startServer() {
 
         await paymentRef.set(paymentRecord);
         const pSnap = await paymentRef.get();
-        await processSuccessfulPayment(pSnap, 0);
+        await processSuccessfulPayment(pSnap, 0, { source: 'points_redemption', verifiedAt: new Date().toISOString() });
 
         return res.json({
           success: true,
@@ -1499,7 +1639,7 @@ async function startServer() {
         return res.status(400).json({ error: 'Payment has already been approved.' });
       }
 
-      await processSuccessfulPayment(pDoc, pData.amount);
+      await processSuccessfulPayment(pDoc, pData.amount, { source: 'admin_approve', verifiedAt: new Date().toISOString() });
 
       // Check live Paypack status in background so admin sees what Paypack reported
       if (pData.paypackRef && !pData.paypackRef.startsWith('TEST_MOMO_')) {
@@ -1565,7 +1705,10 @@ async function startServer() {
 
         if (txInfo.status === 'successful') {
           if (pData.status !== 'successful') {
-            await processSuccessfulPayment(paymentDoc, txInfo.amount || pData.amount);
+            await processSuccessfulPayment(paymentDoc, txInfo.amount || pData.amount, {
+              source: txInfo.verificationSource || 'paypack_api',
+              verifiedAt: new Date().toISOString(),
+            });
           } else {
             await paymentDoc.ref.update(updates);
           }
@@ -1624,7 +1767,8 @@ async function startServer() {
         return res.status(404).json({ error: 'Subscription plan not found.' });
       }
       const plan = planDoc.data()!;
-      const isStudyPlan = Boolean(plan.access?.trafficRules || plan.access?.lessonVideos);
+      const canonical = resolveCanonicalPlanRules(plan);
+      const isStudyPlan = canonical.isStudyPlan;
       const now = new Date();
 
       // Conflict Check: Only A student with an ACTIVE study plan cannot buy or be granted another study plan
@@ -1654,7 +1798,8 @@ async function startServer() {
         }
       }
 
-      const days = isStudyPlan ? (Number(durationDays) || Number(plan.durationDays) || 30) : 0;
+      const customDaysNum = Number(durationDays);
+      const days = isStudyPlan ? (Number.isFinite(customDaysNum) && customDaysNum >= 1 ? Math.floor(customDaysNum) : canonical.durationDays) : 0;
       const validityDays = isStudyPlan ? days : null;
       const startDate = now.toISOString();
       const endDate = isStudyPlan 
@@ -1679,12 +1824,8 @@ async function startServer() {
         validityDays,
         startDate,
         endDate,
-        access: {
-          trafficRules: Boolean(plan.access?.trafficRules),
-          lessonVideos: Boolean(plan.access?.lessonVideos),
-          exams: Boolean(plan.access?.exams),
-        },
-        examLimit: isStudyPlan ? null : (plan.examLimit !== undefined && plan.examLimit !== null ? Number(plan.examLimit) : 5),
+        access: canonical.access,
+        examLimit: canonical.examLimit,
         examsUsed: 0,
         status: 'active',
         source: 'admin_grant',
@@ -2193,7 +2334,10 @@ async function startServer() {
           const pDoc = query.docs[0];
           const pData = pDoc.data();
           if (pData.status !== 'successful' && status === 'successful') {
-            await processSuccessfulPayment(pDoc, item.amount);
+            await processSuccessfulPayment(pDoc, item.amount, {
+              source: 'paypack_api',
+              verifiedAt: new Date().toISOString(),
+            });
             updatedCount++;
           } else if (pData.status === 'pending' && status === 'failed') {
             await pDoc.ref.update({
@@ -2224,7 +2368,10 @@ async function startServer() {
           const txInfo = await fetchPaypackTransaction(pData.paypackRef);
           if (txInfo.found) {
             if (txInfo.status === 'successful') {
-              await processSuccessfulPayment(pDoc, txInfo.amount || pData.amount);
+              await processSuccessfulPayment(pDoc, txInfo.amount || pData.amount, {
+                source: txInfo.verificationSource || 'paypack_api',
+                verifiedAt: new Date().toISOString(),
+              });
               updatedCount++;
             } else if (txInfo.status === 'failed') {
               await pDoc.ref.update({
@@ -2299,20 +2446,15 @@ async function startServer() {
         if (!expiresAt || expiresAt > now) {
           hasStudyPass = true;
           hasUnlimitedExams = true;
-          if (p.access?.trafficRules || p.features?.lessons) {
-            if (!latestLessonsUntil || (expiresAt && expiresAt > latestLessonsUntil)) {
-              latestLessonsUntil = expiresAt;
-            }
+          // Any plan combined with lessons automatically grants lessons, videos, and unlimited exams until endDate
+          if (!latestLessonsUntil || (expiresAt && expiresAt > latestLessonsUntil)) {
+            latestLessonsUntil = expiresAt;
           }
-          if (p.access?.lessonVideos || p.features?.videos) {
-            if (!latestVideosUntil || (expiresAt && expiresAt > latestVideosUntil)) {
-              latestVideosUntil = expiresAt;
-            }
+          if (!latestVideosUntil || (expiresAt && expiresAt > latestVideosUntil)) {
+            latestVideosUntil = expiresAt;
           }
-          if (p.access?.exams || p.features?.exams) {
-            if (!latestExamsUntil || (expiresAt && expiresAt > latestExamsUntil)) {
-              latestExamsUntil = expiresAt;
-            }
+          if (!latestExamsUntil || (expiresAt && expiresAt > latestExamsUntil)) {
+            latestExamsUntil = expiresAt;
           }
           activePlanName = p.planName || activePlanName;
         }
@@ -2322,11 +2464,10 @@ async function startServer() {
           : (typeof p.examsAllowed === 'number' ? p.examsAllowed : (typeof p.examCredits === 'number' ? p.examCredits : 5));
         const used = Number(p.examsUsed) || 0;
         const remaining = Math.max(0, allowed - used);
-        
-        totalExamsAllowed = (totalExamsAllowed || 0) + allowed;
-        totalExamsUsed = totalExamsUsed + used;
 
         if (remaining > 0) {
+          totalExamsAllowed = (totalExamsAllowed || 0) + allowed;
+          totalExamsUsed = totalExamsUsed + used;
           totalExamCredits = (totalExamCredits || 0) + remaining;
           if (!activePlanName) activePlanName = p.planName;
         }
@@ -2618,7 +2759,7 @@ async function startServer() {
 
       await paymentRef.set(paymentRecord);
       const pSnap = await paymentRef.get();
-      await processSuccessfulPayment(pSnap, 0);
+      await processSuccessfulPayment(pSnap, 0, { source: 'points_redemption', verifiedAt: new Date().toISOString() });
 
       return res.json({
         success: true,
@@ -2915,11 +3056,11 @@ async function startServer() {
           return;
         }
 
-        // Aggregate purchases from user purchases and subscriptions
+        // Aggregate purchases from user purchases and subscriptions (deduplicate strictly by id)
         const allPurchases: any[] = [...purchasesSnap.docs.map(d => ({ id: d.id, ...d.data() }))];
         for (const sDoc of subsSnap.docs) {
           const sData = sDoc.data();
-          if (!allPurchases.some(p => p.id === sDoc.id || p.planId === sData.planId)) {
+          if (!allPurchases.some(p => p.id === sDoc.id)) {
             allPurchases.push({
               id: sDoc.id,
               planId: sData.planId,
@@ -3039,26 +3180,34 @@ async function startServer() {
           transaction.update(attemptsRef.doc(attId), { status: 'expired' });
         }
 
-        // Deduct 1 credit only if exams-only plan
+        // Deduct 1 credit only if exams-only plan; mark completed once remaining count reaches 0
         if (targetPurchase) {
           const newUsed = targetPurchase.used + 1;
           const newRemaining = Math.max(0, targetPurchase.allowed - newUsed);
+          const newStatus = newRemaining <= 0 ? 'completed' : 'active';
+          const completionFields = newRemaining <= 0 ? { completedAt: Timestamp.now() } : {};
 
           transaction.set(purchasesRef.doc(targetPurchase.id), {
             examsUsed: newUsed,
+            status: newStatus,
+            ...completionFields,
             updatedAt: Timestamp.now()
           }, { merge: true });
 
           transaction.set(accessRef, {
             examCredits: newRemaining,
-            planName: targetPurchase.planName || 'Exam Pack',
+            planName: newRemaining > 0 ? (targetPurchase.planName || 'Exam Pack') : null,
             updatedAt: Timestamp.now()
           }, { merge: true });
 
-          const subMatch = subsSnap.docs.find(s => s.id === targetPurchase.id || s.data().planId === targetPurchase.planId);
+          const subMatch =
+            subsSnap.docs.find(s => s.id === targetPurchase.id) ||
+            subsSnap.docs.find(s => s.data().status === 'active' && s.data().planId === targetPurchase.planId);
           if (subMatch) {
             transaction.set(subMatch.ref, {
               examsUsed: newUsed,
+              status: newStatus,
+              ...completionFields,
               updatedAt: Timestamp.now()
             }, { merge: true });
           }
@@ -3127,11 +3276,12 @@ async function startServer() {
     const purchasesSnap = await db.collection('users').doc(uid).collection('purchases').where('status', '==', 'active').get();
     const subsSnap = await db.collection('subscriptions').where('userId', '==', uid).where('status', '==', 'active').get();
     
-    const allPurchases: any[] = [...purchasesSnap.docs.map(d => d.data())];
+    const allPurchases: any[] = [...purchasesSnap.docs.map(d => ({ id: d.id, ...d.data() }))];
     for (const sDoc of subsSnap.docs) {
       const sData = sDoc.data();
-      if (!allPurchases.some(p => p.id === sDoc.id || p.planId === sData.planId)) {
+      if (!allPurchases.some(p => p.id === sDoc.id)) {
         allPurchases.push({
+          id: sDoc.id,
           access: sData.access,
           features: sData.features,
           expiresAt: sData.endDate,
@@ -3147,13 +3297,14 @@ async function startServer() {
       }
       if (expiresAt && expiresAt < now) continue;
 
-      const hasLessons = Boolean(
-        p.access?.trafficRules ||
-        p.access?.lessonVideos ||
-        p.features?.lessons ||
-        p.features?.videos ||
-        (typeof p.planName === 'string' && (p.planName.toLowerCase().includes('pro') || p.planName.toLowerCase().includes('theory') || p.planName.toLowerCase().includes('standard')))
-      );
+      const hasExplicitAccessObj = p.access && typeof p.access === 'object';
+      const hasLessons = hasExplicitAccessObj
+        ? Boolean(p.access.trafficRules || p.access.lessonVideos)
+        : Boolean(
+            p.features?.lessons ||
+            p.features?.videos ||
+            (typeof p.planName === 'string' && (p.planName.toLowerCase().includes('pro') || p.planName.toLowerCase().includes('theory') || p.planName.toLowerCase().includes('standard')))
+          );
       if (hasLessons) return true;
     }
     return false;
@@ -3841,12 +3992,32 @@ async function startServer() {
     }
   });
 
-  // Load lesson body only when one lesson opens
+  // Load lesson body only when one lesson opens (enforces study plan access unless free preview or admin)
   app.get('/api/lessons/:id', async (req: Request, res: Response) => {
     try {
       const lessonDoc = await db.collection('lessons').doc(req.params.id).get();
       if (!lessonDoc.exists) return res.status(404).json({ error: 'Lesson not found' });
-      return res.json({ id: lessonDoc.id, ...lessonDoc.data() });
+      const lessonData = lessonDoc.data() || {};
+
+      if (!lessonData.isFreePreview) {
+        const auth = await verifyAuth(req);
+        if (!auth) {
+          return res.status(401).json({ error: 'Unauthorized: Sign in required to view this lesson.' });
+        }
+        const userDoc = await db.collection('users').doc(auth.uid).get();
+        const isAdmin = userDoc.exists && userDoc.data()?.role === 'admin';
+        if (!isAdmin) {
+          const hasAccess = await checkLessonsAccess(auth.uid);
+          if (!hasAccess) {
+            return res.status(403).json({
+              error: 'Forbidden: Lessons access requires an active study plan.',
+              code: 'NO_LESSONS_PLAN',
+            });
+          }
+        }
+      }
+
+      return res.json({ id: lessonDoc.id, ...lessonData });
     } catch (err: any) {
       return res.status(500).json({ error: err.message || 'Failed to load lesson' });
     }
@@ -4211,25 +4382,31 @@ async function startServer() {
   
 
 
-  // Database audit & sync helper for plans and exam-only subscriptions
+  // Database audit & sync helper for plans and subscriptions
   async function syncDatabasePlansAndSubscriptions() {
     let plansUpdated = 0;
     let subsUpdated = 0;
+    const now = new Date();
     try {
       console.log('Auditing Firestore plans and subscriptions for consistency...');
       const plansSnap = await db.collection('plans').get();
       for (const pDoc of plansSnap.docs) {
         const p = pDoc.data();
-        const isExamOnly = Boolean(p.access?.exams) && !p.access?.trafficRules && !p.access?.lessonVideos;
-        const isStudy = Boolean(p.access?.trafficRules || p.access?.lessonVideos);
-
+        const canonical = resolveCanonicalPlanRules(p);
         const updates: any = {};
-        if (isExamOnly) {
-          if (p.durationDays !== 0) updates.durationDays = 0;
-          if (p.examLimit === null || p.examLimit === undefined || p.examLimit <= 0) updates.examLimit = 5;
-        } else if (isStudy) {
-          if (!p.durationDays || p.durationDays <= 0) updates.durationDays = 30;
-          if (p.examLimit !== null) updates.examLimit = null; // study plans have unlimited exams
+
+        if (
+          p.access?.trafficRules !== canonical.access.trafficRules ||
+          p.access?.lessonVideos !== canonical.access.lessonVideos ||
+          p.access?.exams !== canonical.access.exams
+        ) {
+          updates.access = canonical.access;
+        }
+        if (p.durationDays !== canonical.durationDays) {
+          updates.durationDays = canonical.durationDays;
+        }
+        if (p.examLimit !== canonical.examLimit) {
+          updates.examLimit = canonical.examLimit;
         }
 
         if (Object.keys(updates).length > 0) {
@@ -4238,25 +4415,60 @@ async function startServer() {
         }
       }
 
-      // Audit subscriptions for exam-only plans that had endDate set
+      // Invalidate plan cache so changes reflect immediately
+      cachedPlansData = null;
+      cachedPlansTimestamp = 0;
+
+      // Audit subscriptions for canonical rules, expired study plans, and depleted exam-only packs
       const subsSnap = await db.collection('subscriptions').get();
       for (const sDoc of subsSnap.docs) {
         const s = sDoc.data();
-        const isExamOnly = Boolean(s.access?.exams) && !s.access?.trafficRules && !s.access?.lessonVideos;
-        if (isExamOnly && (s.endDate !== null || s.durationDays !== 0)) {
-          await sDoc.ref.update({
-            endDate: null,
-            durationDays: 0,
-          });
+        const isStudy = Boolean(s.access?.trafficRules || s.access?.lessonVideos);
+        const updates: any = {};
+        const purchaseUpdates: any = {};
+
+        if (isStudy) {
+          if (!s.access?.trafficRules || !s.access?.lessonVideos || !s.access?.exams) {
+            updates.access = { trafficRules: true, lessonVideos: true, exams: true };
+            purchaseUpdates.access = updates.access;
+          }
+          if (s.examLimit !== null) {
+            updates.examLimit = null;
+            purchaseUpdates.examLimit = null;
+          }
+          if (s.status === 'active' && s.endDate && new Date(s.endDate) <= now) {
+            updates.status = 'expired';
+            purchaseUpdates.status = 'expired';
+          }
+        } else {
+          if (s.access?.trafficRules || s.access?.lessonVideos || !s.access?.exams) {
+            updates.access = { trafficRules: false, lessonVideos: false, exams: true };
+            purchaseUpdates.access = updates.access;
+          }
+          if (s.endDate !== null) {
+            updates.endDate = null;
+            purchaseUpdates.expiresAt = null;
+          }
+          if (s.durationDays !== 0) {
+            updates.durationDays = 0;
+          }
+          const limit = typeof s.examLimit === 'number' && s.examLimit > 0 ? s.examLimit : 5;
+          const used = Number(s.examsUsed) || 0;
+          if (s.status === 'active' && used >= limit) {
+            updates.status = 'completed';
+            purchaseUpdates.status = 'completed';
+          }
+        }
+
+        if (Object.keys(updates).length > 0) {
+          await sDoc.ref.update(updates);
           subsUpdated++;
 
-          if (s.userId) {
+          if (s.userId && Object.keys(purchaseUpdates).length > 0) {
             const pRef = db.collection('users').doc(s.userId).collection('purchases').doc(sDoc.id);
             const pSnap = await pRef.get();
             if (pSnap.exists) {
-              await pRef.update({
-                expiresAt: null,
-              });
+              await pRef.update(purchaseUpdates);
             }
           }
         }
@@ -4304,7 +4516,10 @@ async function startServer() {
               console.log(`[Queue Poller] Auto-activating completed payment: ${pDoc.id} (ref: ${ref})`);
               const freshDoc = await pDoc.ref.get();
               if (freshDoc.data()?.status !== 'successful') {
-                await processSuccessfulPayment(pDoc, txInfo.amount || pData.amount);
+                await processSuccessfulPayment(pDoc, txInfo.amount || pData.amount, {
+                  source: txInfo.verificationSource || 'paypack_api',
+                  verifiedAt: new Date().toISOString(),
+                });
               }
             } else if (txInfo.status === 'failed') {
               console.log(`[Queue Poller] Payment marked failed by Paypack: ${pDoc.id} (ref: ${ref})`);
@@ -4336,7 +4551,9 @@ async function startServer() {
     return { checked };
   }
 
-  // Production static serving and catch-all registered after all API routes
+  // Ensure /health endpoint exists (just in case)
+  app.get('/health', (_req, res) => res.json({status: 'ok'}));
+
   // Production static serving and catch-all registered after all API routes
   if (!isDev) {
     const distPath = path.resolve(__dirname, 'dist');
@@ -4351,17 +4568,14 @@ async function startServer() {
         }
       }
     }));
-    app.get('*', (req, res, next) => {
+       app.get('*', (req, res) => {
       if (req.path.startsWith('/api') || req.path === '/health' || req.path === '/paypackWebhook') {
-        return res.status(404).json({error: 'Not found'});
+        return res.status(404).json({ error: 'Not found' });
       }
       res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
       res.sendFile(path.resolve(distPath, 'index.html'));
     });
   }
-
-  // Ensure /health endpoint exists (just in case)
-  app.get('/health', (_req, res) => res.json({status: 'ok'}));
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`TSINDA server ready on http://0.0.0.0:${PORT}`);

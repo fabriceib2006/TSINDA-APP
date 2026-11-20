@@ -34,23 +34,23 @@ export async function seedInitialData() {
 
       await addDoc(collection(db, 'plans'), {
         name: {
-          rw: "Ibyumweru 2 Standard",
-          en: "14-Day Standard Pass",
-          fr: "Pass Standard 14 Jours"
+          rw: "Icyumweru 1 Full Study",
+          en: "7-Day Full Study Pass",
+          fr: "Pass Étude 7 Jours"
         },
         description: {
-          rw: "Amategeko y'umuhanda n'ibizamini 15 byo kwitoza.",
-          en: "Rwanda Gazette traffic rules and 15 complete mock exam attempts.",
-          fr: "Règles du code de la route et 15 examens blancs complets."
+          rw: "Amategeko y'umuhanda, amashusho y'amasomo n'ibizamini bitagira umupaka mu minsi 7.",
+          en: "Rwanda Gazette traffic rules, video lessons, and unlimited mock exams for 7 days.",
+          fr: "Règles du code, vidéos et examens blancs illimités pendant 7 jours."
         },
-        price: 1500,
-        durationDays: 14,
+        price: 1000,
+        durationDays: 7,
         access: {
-          lessonVideos: false,
+          lessonVideos: true,
           trafficRules: true,
           exams: true
         },
-        examLimit: 15,
+        examLimit: null,
         isActive: true,
         isRecommended: false,
         sortOrder: 2,
@@ -59,23 +59,23 @@ export async function seedInitialData() {
 
       await addDoc(collection(db, 'plans'), {
         name: {
-          rw: "Amategeko n'Amashusho",
-          en: "7-Day Video Theory Pass",
-          fr: "Pass Théorie & Vidéos 7 Jours"
+          rw: "Ibizamini 5 Gusa",
+          en: "5 Mock Exams Pack",
+          fr: "Pack 5 Examens Blancs"
         },
         description: {
-          rw: "Amategeko yose y'umuhanda n'amashusho yose asobanura.",
-          en: "Access all traffic rules and interactive video explanations (no exams).",
-          fr: "Accès à toutes les règles du code et vidéos explicatives (sans examens)."
+          rw: "Ibizamini 5 byo kwitoza bitagira itariki yo kurangiriraho.",
+          en: "5 complete mock exam attempts with no expiration date.",
+          fr: "5 examens blancs complets sans date d'expiration."
         },
-        price: 1000,
-        durationDays: 7,
+        price: 500,
+        durationDays: 0,
         access: {
-          lessonVideos: true,
-          trafficRules: true,
-          exams: false
+          lessonVideos: false,
+          trafficRules: false,
+          exams: true
         },
-        examLimit: null,
+        examLimit: 5,
         isActive: true,
         isRecommended: false,
         sortOrder: 3,

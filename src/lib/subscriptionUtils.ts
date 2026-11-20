@@ -20,20 +20,34 @@ export function normalizePlan(raw: any, id: string): Plan {
       }
     : { rw: String(raw.description || ''), en: String(raw.description || ''), fr: String(raw.description || '') };
 
-  const access: PlanAccess = {
-    lessonVideos: raw.access?.lessonVideos !== undefined ? Boolean(raw.access.lessonVideos) : true,
-    trafficRules: raw.access?.trafficRules !== undefined ? Boolean(raw.access.trafficRules) : true,
-    exams: raw.access?.exams !== undefined ? Boolean(raw.access.exams) : true,
-  };
+  const hasExplicitAccess = Boolean(raw.access && typeof raw.access === 'object');
+  const isStudyPlan = hasExplicitAccess
+    ? Boolean(raw.access.lessonVideos || raw.access.trafficRules)
+    : Boolean(raw.features?.lessons || raw.features?.videos || raw.examLimit === null || raw.examLimit === undefined);
+
+  const access: PlanAccess = isStudyPlan
+    ? { lessonVideos: true, trafficRules: true, exams: true }
+    : { lessonVideos: false, trafficRules: false, exams: true };
+
+  const rawDays = Number(raw.durationDays);
+  const durationDays = isStudyPlan
+    ? (Number.isFinite(rawDays) && rawDays >= 1 ? Math.floor(rawDays) : 1)
+    : 0;
+
+  const rawLimit = raw.examLimit ?? raw.examsAllowed ?? raw.examCredits;
+  const parsedLimit = Number(rawLimit);
+  const examLimit = isStudyPlan
+    ? null
+    : (Number.isFinite(parsedLimit) && parsedLimit >= 1 ? Math.floor(parsedLimit) : 5);
 
   return {
     id,
     name,
     description,
     price: typeof raw.price === 'number' ? raw.price : 1000,
-    durationDays: typeof raw.durationDays === 'number' && raw.durationDays >= 0 ? raw.durationDays : 0,
+    durationDays,
     access,
-    examLimit: raw.examLimit === undefined ? null : (raw.examLimit === null ? null : Number(raw.examLimit)),
+    examLimit,
     isActive: raw.isActive !== undefined ? Boolean(raw.isActive) : true,
     isRecommended: Boolean(raw.isRecommended),
     sortOrder: typeof raw.sortOrder === 'number' ? raw.sortOrder : 0,
@@ -42,14 +56,33 @@ export function normalizePlan(raw: any, id: string): Plan {
 }
 
 /**
- * Normalizes subscription data from Firestore, preserving copied plan rules.
+ * Normalizes subscription data from Firestore, preserving canonical plan rules.
  */
 export function normalizeSubscription(raw: any, id: string): Subscription {
-  const access: PlanAccess = {
-    lessonVideos: raw.access?.lessonVideos !== undefined ? Boolean(raw.access.lessonVideos) : true,
-    trafficRules: raw.access?.trafficRules !== undefined ? Boolean(raw.access.trafficRules) : true,
-    exams: raw.access?.exams !== undefined ? Boolean(raw.access.exams) : true,
-  };
+  const hasExplicitAccess = Boolean(raw.access && typeof raw.access === 'object');
+  const isStudyPlan = hasExplicitAccess
+    ? Boolean(raw.access.lessonVideos || raw.access.trafficRules)
+    : Boolean(raw.features?.lessons || raw.features?.videos || raw.lessonsUntil || raw.videosUntil);
+
+  const access: PlanAccess = isStudyPlan
+    ? { lessonVideos: true, trafficRules: true, exams: true }
+    : { lessonVideos: false, trafficRules: false, exams: true };
+
+  const rawDays = Number(raw.durationDays ?? raw.validityDays);
+  const durationDays = isStudyPlan
+    ? (Number.isFinite(rawDays) && rawDays >= 1 ? Math.floor(rawDays) : 1)
+    : 0;
+
+  const rawLimit = raw.examLimit ?? raw.examsAllowed ?? raw.examCredits;
+  const parsedLimit = Number(rawLimit);
+  const examLimit = isStudyPlan
+    ? null
+    : (Number.isFinite(parsedLimit) && parsedLimit >= 1 ? Math.floor(parsedLimit) : 5);
+
+  const rawEnd = raw.endDate || raw.expiresAt || null;
+  const normalizedEndDate = isStudyPlan
+    ? (rawEnd && typeof rawEnd.toDate === 'function' ? rawEnd.toDate().toISOString() : rawEnd)
+    : null;
 
   return {
     id,
@@ -57,11 +90,13 @@ export function normalizeSubscription(raw: any, id: string): Subscription {
     planId: raw.planId || '',
     planName: raw.planName || 'Standard Pass',
     price: typeof raw.price === 'number' ? raw.price : 0,
-    durationDays: typeof raw.durationDays === 'number' ? raw.durationDays : 0,
-    startDate: raw.startDate || new Date().toISOString(),
-    endDate: raw.endDate || null,
+    durationDays,
+    startDate: raw.startDate && typeof raw.startDate.toDate === 'function'
+      ? raw.startDate.toDate().toISOString()
+      : (raw.startDate || new Date().toISOString()),
+    endDate: normalizedEndDate,
     access,
-    examLimit: raw.examLimit === undefined ? null : (raw.examLimit === null ? null : Number(raw.examLimit)),
+    examLimit,
     examsUsed: typeof raw.examsUsed === 'number' ? raw.examsUsed : 0,
     status: raw.status || 'active',
     source: raw.source || 'payment',
@@ -71,23 +106,16 @@ export function normalizeSubscription(raw: any, id: string): Subscription {
 
 /**
  * Evaluates access enforcement by combining all active, unexpired subscriptions:
- * - No active, unexpired subscription: free preview only (all features locked).
- * - lessonVideos false: video lessons locked.
- * - trafficRules false: rules content locked.
- * - exams false: exams locked.
- * - If multiple active subscriptions:
- *     allow a feature if ANY active one allows it.
- *     for exams, use the subscription with the most exams remaining (unlimited > highest remaining).
+ * - No active subscription: free preview only (all features locked).
+ * - Any active plan combined with lessons: grants lessons, videos, and unlimited exams until endDate.
+ * - Exam-only plan: grants finite exam credits with no time expiration; ends when remaining count reaches 0.
  */
 export function getCombinedAccess(subscriptions: Subscription[]): CombinedAccess {
   const now = new Date();
-  
-  // Filter active subscriptions:
-  // - Study plans (has lessonVideos or trafficRules) expire by time
-  // - Exams-only plans (limited by number of exams) never expire by time
+
   const activeSubs = subscriptions.filter(sub => {
     const status = String(sub.status || 'active').toLowerCase();
-    if (status !== 'active' && status !== 'approved' && status !== 'completed' && status !== 'success') return false;
+    if (status !== 'active' && status !== 'approved' && status !== 'success') return false;
     const isStudy = Boolean(sub.access?.lessonVideos || sub.access?.trafficRules);
     if (!isStudy) {
       const allowed = typeof sub.examLimit === 'number' ? sub.examLimit : 5;
@@ -117,13 +145,12 @@ export function getCombinedAccess(subscriptions: Subscription[]): CombinedAccess
     };
   }
 
-  // Feature allowed if ANY active subscription allows it
-  const lessonVideos = activeSubs.some(s => s.access?.lessonVideos === true);
-  const trafficRules = activeSubs.some(s => s.access?.trafficRules === true);
-  const exams = activeSubs.some(s => s.access?.exams === true);
+  const hasStudy = activeSubs.some(s => Boolean(s.access?.lessonVideos || s.access?.trafficRules));
+  const lessonVideos = hasStudy;
+  const trafficRules = hasStudy;
+  const exams = hasStudy || activeSubs.some(s => s.access?.exams === true);
 
-  // Subscriptions that allow exams
-  const examSubs = activeSubs.filter(s => s.access?.exams === true);
+  const examSubs = activeSubs.filter(s => Boolean(s.access?.lessonVideos || s.access?.trafficRules || s.access?.exams));
 
   let isUnlimitedExams = false;
   let totalExamsAllowed: number | null = null;
@@ -133,10 +160,9 @@ export function getCombinedAccess(subscriptions: Subscription[]): CombinedAccess
   let activePlanName: string | Record<Language, string> | null = activeSubs[0]?.planName || null;
 
   if (exams && examSubs.length > 0) {
-    // If any active study plan allows exams, it gives unlimited exams!
     const studyExamSub = examSubs.find(s => Boolean(s.access?.lessonVideos || s.access?.trafficRules));
     const unlimitedSub = examSubs.find(s => s.examLimit === null || s.examLimit === undefined);
-    
+
     if (studyExamSub || unlimitedSub) {
       const best = studyExamSub || unlimitedSub!;
       isUnlimitedExams = true;
@@ -146,32 +172,37 @@ export function getCombinedAccess(subscriptions: Subscription[]): CombinedAccess
       activeSubscriptionId = best.id;
       activePlanName = best.planName;
     } else {
-      // Find the subscription with the most exams remaining
-      let bestSub = examSubs[0];
-      let maxRemaining = Math.max(0, (bestSub.examLimit || 0) - (bestSub.examsUsed || 0));
+      let sumAllowed = 0;
+      let sumUsed = 0;
+      let sumRemaining = 0;
+      let primarySub = examSubs[0];
 
-      for (let i = 1; i < examSubs.length; i++) {
-        const sub = examSubs[i];
-        const rem = Math.max(0, (sub.examLimit || 0) - (sub.examsUsed || 0));
-        if (rem > maxRemaining) {
-          maxRemaining = rem;
-          bestSub = sub;
+      for (const sub of examSubs) {
+        const allowed = typeof sub.examLimit === 'number' ? sub.examLimit : 0;
+        const used = sub.examsUsed || 0;
+        const rem = Math.max(0, allowed - used);
+        if (rem > 0) {
+          sumAllowed += allowed;
+          sumUsed += used;
+          sumRemaining += rem;
+          if ((primarySub.examLimit || 0) - (primarySub.examsUsed || 0) <= 0) {
+            primarySub = sub;
+          }
         }
       }
 
       isUnlimitedExams = false;
-      totalExamsAllowed = bestSub.examLimit || 0;
-      examsUsed = bestSub.examsUsed || 0;
-      examsRemaining = maxRemaining;
-      activeSubscriptionId = bestSub.id;
-      activePlanName = bestSub.planName;
+      totalExamsAllowed = sumAllowed;
+      examsUsed = sumUsed;
+      examsRemaining = sumRemaining;
+      activeSubscriptionId = primarySub.id;
+      activePlanName = primarySub.planName;
     }
   } else if (activeSubs.length > 0) {
     activeSubscriptionId = activeSubs[0].id;
     activePlanName = activeSubs[0].planName;
   }
 
-  // Calculate expiry dates (from study plans that have an expiry)
   const sortedDates = activeSubs
     .filter(s => Boolean(s.access?.lessonVideos || s.access?.trafficRules) && s.endDate)
     .map(s => new Date(s.endDate!).getTime())

@@ -25,6 +25,7 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ isOpen, on
   const [promotions, setPromotions] = useState<Promotion[]>([]);
   const [selectedPlan, setSelectedPlan] = useState<Plan | null>(null);
   const [activeSub, setActiveSub] = useState<{ planName: string; endDate: string } | null>(null);
+  const [activeExamSub, setActiveExamSub] = useState<{ planName: string; remaining: number } | null>(null);
   const [phone, setPhone] = useState(userProfile?.phone || '');
   const network = phone ? detectNetwork(phone) : null;
   const [step, setStep] = useState<ModalPaymentStep>('select_and_pay');
@@ -152,7 +153,7 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ isOpen, on
             const now = new Date();
             // Only active STUDY plans (trafficRules or lessonVideos) expire by time and block new purchases
             const active = subsSnap.docs
-              .map(d => d.data() as { planName?: string; endDate?: string; status?: string; access?: any })
+              .map(d => d.data() as { planName?: string; endDate?: string; status?: string; access?: any; examLimit?: number | null; examsUsed?: number })
               .find(s => s.status === 'active' && Boolean(s.access?.trafficRules || s.access?.lessonVideos) && s.endDate && new Date(s.endDate) > now);
 
             if (active && active.endDate) {
@@ -162,6 +163,27 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ isOpen, on
               });
             } else {
               setActiveSub(null);
+            }
+
+            const activeExam = subsSnap.docs
+              .map(d => d.data() as { planName?: string; status?: string; access?: any; examLimit?: number | null; examsUsed?: number })
+              .find(s => {
+                if (s.status !== 'active') return false;
+                if (Boolean(s.access?.trafficRules || s.access?.lessonVideos)) return false;
+                const limit = typeof s.examLimit === 'number' ? s.examLimit : 5;
+                const used = Number(s.examsUsed) || 0;
+                return (limit - used) > 0;
+              });
+
+            if (activeExam) {
+              const limit = typeof activeExam.examLimit === 'number' ? activeExam.examLimit : 5;
+              const used = Number(activeExam.examsUsed) || 0;
+              setActiveExamSub({
+                planName: activeExam.planName || 'Exam Pack',
+                remaining: Math.max(0, limit - used),
+              });
+            } else {
+              setActiveExamSub(null);
             }
           }
 
@@ -199,13 +221,23 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ isOpen, on
     e.preventDefault();
     if (!selectedPlan || !userProfile) return;
     const isStudy = Boolean(selectedPlan.access?.trafficRules || selectedPlan.access?.lessonVideos);
-    if (activeSub && isStudy) {
+    if (activeSub) {
       setErrorMsg(
         language === 'rw'
           ? `Ufite ifatabuguzi ry'amasomo rikora kugeza ${formatCatDate(activeSub.endDate)}. Ntabwo wemerewe kugura irindi kugeza iryambere rirangiye.`
           : language === 'fr'
           ? `Vous avez déjà un plan d'étude actif jusqu'au ${formatCatDate(activeSub.endDate)}. Vous ne pouvez pas souscrire à un nouveau plan tant que celui-ci est actif.`
-          : `You already have an active study plan until ${formatCatDate(activeSub.endDate)}. You cannot purchase a new study plan until it expires.`
+          : `You already have an active study plan until ${formatCatDate(activeSub.endDate)}. You cannot purchase a new plan until it expires.`
+      );
+      return;
+    }
+    if (!isStudy && activeExamSub && activeExamSub.remaining > 0) {
+      setErrorMsg(
+        language === 'rw'
+          ? `Uracyafite ibizamini ${activeExamSub.remaining} bisigaye kuri gahunda yawe. Uzashobora kugura indi gahunda y'ibizamini nibigira ubusa.`
+          : language === 'fr'
+          ? `Il vous reste encore ${activeExamSub.remaining} examen(s) sur votre pack actuel. Vous pourrez acheter un nouveau pack une fois votre solde à 0.`
+          : `You still have ${activeExamSub.remaining} exam(s) remaining on your active exam plan. You can purchase a new exam plan once your count reaches 0.`
       );
       return;
     }
@@ -259,14 +291,26 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ isOpen, on
 
       const result = await res.json();
       if (!res.ok) {
+        if (result.error === 'EXAM_PLAN_ACTIVE' || result.code === 'EXAM_PLAN_ACTIVE') {
+          const rem = result.remainingExams ?? activeExamSub?.remaining ?? 0;
+          setErrorMsg(
+            language === 'rw'
+              ? `Uracyafite ibizamini ${rem} bisigaye kuri gahunda yawe. Uzashobora kugura indi gahunda y'ibizamini nibigira ubusa.`
+              : language === 'fr'
+              ? `Il vous reste encore ${rem} examen(s) sur votre pack actuel. Vous pourrez en acheter un nouveau une fois le compteur à 0.`
+              : `You still have ${rem} exam(s) remaining on your active exam plan. You can buy a new exam plan once your count reaches 0.`
+          );
+          setProcessing(false);
+          return;
+        }
         if (res.status === 409 || result.error === 'STUDY_PLAN_ACTIVE' || result.code === 'STUDY_PLAN_ACTIVE') {
-          const dateStr = result.expiresAt ? formatCatDate(result.expiresAt) : (activeSub ? formatCatDate(activeSub.endDate) : '');
+          const dateStr = result.expiresAt ? formatCatDate(result.expiresAt) : '';
           setErrorMsg(
             language === 'rw'
               ? `Ufite ifatabuguzi ry'amasomo rikora kugeza ${dateStr}. Ntabwo wemerewe kugura irindi mugihe iri rigikora.`
               : language === 'fr'
               ? `Vous avez déjà un plan d'étude actif jusqu'au ${dateStr}. Vous ne pouvez pas en acheter un nouveau tant que celui-ci est actif.`
-              : `You already have an active study plan expiring on ${dateStr}. You cannot purchase another study plan until it expires.`
+              : `You already have an active study plan expiring on ${dateStr}. You cannot purchase another plan until it expires.`
           );
           setProcessing(false);
           return;
@@ -611,7 +655,7 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ isOpen, on
                     const localizedDesc = plan.description[language] || plan.description.en;
                     const itemPromo = getBestPromotion(plan.id, plan.price, promotions);
                     const isPlanStudy = Boolean(plan.access?.trafficRules || plan.access?.lessonVideos);
-                    const isPlanActiveConflict = Boolean(activeSub && isPlanStudy);
+                    const isPlanActiveConflict = Boolean(activeSub || (!isPlanStudy && activeExamSub && activeExamSub.remaining > 0));
 
                     return (
                       <div
@@ -645,7 +689,9 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ isOpen, on
                                 )}
                                 {isPlanActiveConflict && (
                                   <span className="text-[10px] bg-amber-100 text-amber-800 font-bold px-2 py-0.5 rounded-full border border-amber-200">
-                                    Active until {formatCatDate(activeSub!.endDate)}
+                                    {activeSub
+                                      ? `Active until ${formatCatDate(activeSub.endDate)}`
+                                      : `${activeExamSub?.remaining ?? 0} exams remaining`}
                                   </span>
                                 )}
                               </div>

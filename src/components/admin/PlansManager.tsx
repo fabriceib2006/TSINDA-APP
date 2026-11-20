@@ -125,7 +125,7 @@ export const PlansManager: React.FC = () => {
       s.planId === planId && 
       s.status === 'active' && 
       (!s.endDate || new Date(s.endDate) > now) &&
-      (!s.examLimit || (s.examsUsed ?? 0) < s.examLimit) &&
+      (s.examLimit === null || s.examLimit === undefined || (s.examsUsed ?? 0) < s.examLimit) &&
       users.some(u => u.uid === s.userId)
     ).length;
   };
@@ -182,11 +182,11 @@ export const PlansManager: React.FC = () => {
     setDescFr(plan.description.fr || '');
     setPrice(plan.price);
     const isStudy = Boolean(plan.access.trafficRules || plan.access.lessonVideos);
-    setDurationDays(isStudy ? (plan.durationDays || 30) : 0);
-    setAccessVideos(plan.access.lessonVideos);
-    setAccessRules(plan.access.trafficRules);
-    setAccessExams(plan.access.exams);
-    setIsExamUnlimited(isStudy ? true : (plan.examLimit === null));
+    setDurationDays(isStudy ? (plan.durationDays >= 1 ? plan.durationDays : 1) : 0);
+    setAccessVideos(isStudy);
+    setAccessRules(isStudy);
+    setAccessExams(true);
+    setIsExamUnlimited(isStudy);
     setExamLimitVal(plan.examLimit !== null && plan.examLimit !== undefined ? plan.examLimit : 5);
     setIsActive(plan.isActive);
     setIsRecommended(plan.isRecommended);
@@ -247,11 +247,11 @@ export const PlansManager: React.FC = () => {
 
     const isStudy = Boolean(accessRules || accessVideos);
     if (isStudy && (!durationDays || durationDays < 1)) {
-      setFormError('Duration in days is required for plans containing traffic rules or video lessons.');
+      setFormError('Duration in days (at least 1 day) is required for plans containing lessons.');
       return;
     }
-    if (!isStudy && accessExams && (!examLimitVal || examLimitVal < 1)) {
-      setFormError('Number of exams allowed is required for exam-only plans.');
+    if (!isStudy && (!examLimitVal || examLimitVal < 1)) {
+      setFormError('Number of exams allowed (at least 1) is required for exam-only plans.');
       return;
     }
 
@@ -261,13 +261,11 @@ export const PlansManager: React.FC = () => {
         name: { rw: nameRw || nameEn, en: nameEn, fr: nameFr || nameEn },
         description: { rw: descRw || descEn, en: descEn, fr: descFr || descEn },
         price: Number(price),
-        durationDays: isStudy ? Number(durationDays) : 0,
-        access: {
-          trafficRules: accessRules,
-          lessonVideos: accessVideos,
-          exams: accessExams,
-        },
-        examLimit: isStudy ? null : (accessExams ? Number(examLimitVal) : null),
+        durationDays: isStudy ? Math.floor(Number(durationDays)) : 0,
+        access: isStudy
+          ? { trafficRules: true, lessonVideos: true, exams: true }
+          : { trafficRules: false, lessonVideos: false, exams: true },
+        examLimit: isStudy ? null : Math.floor(Number(examLimitVal)),
         isActive,
         isRecommended,
         sortOrder: Number(sortOrder),
@@ -461,7 +459,11 @@ export const PlansManager: React.FC = () => {
 
                     <div className="pt-2">
                       <div className="text-2xl font-black text-slate-900">RWF {plan.price.toLocaleString()}</div>
-                      <div className="text-xs text-slate-500">{plan.durationDays} days access</div>
+                      <div className="text-xs text-slate-500">
+                        {(plan.access.trafficRules || plan.access.lessonVideos)
+                          ? `${plan.durationDays} ${plan.durationDays === 1 ? 'day' : 'days'} access`
+                          : 'No Expiration • Count-based'}
+                      </div>
                     </div>
 
                     <div className="space-y-1.5 pt-3 border-t border-slate-100 text-xs font-medium text-slate-700">
@@ -668,19 +670,73 @@ export const PlansManager: React.FC = () => {
               </div>
 
               <div className="space-y-2 pt-2 border-t border-slate-100">
-                <label className="block text-xs font-semibold text-slate-700 uppercase">Access Privileges</label>
+                <label className="block text-xs font-semibold text-slate-700 uppercase">Plan Type & Access Privileges</label>
                 <div className="flex flex-wrap gap-4 text-xs font-medium">
                   <label className="flex items-center gap-2 cursor-pointer">
-                    <input type="checkbox" checked={accessRules} onChange={(e) => setAccessRules(e.target.checked)} className="w-4 h-4 rounded text-blue-600" />
-                    <span>Traffic Rules</span>
+                    <input
+                      type="checkbox"
+                      checked={accessRules}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        if (checked) {
+                          setAccessRules(true);
+                          setAccessVideos(true);
+                          setAccessExams(true);
+                          setIsExamUnlimited(true);
+                          if (durationDays < 1) setDurationDays(7);
+                        } else {
+                          setAccessRules(false);
+                          setAccessVideos(false);
+                          setAccessExams(true);
+                          setIsExamUnlimited(false);
+                          setDurationDays(0);
+                          if (!examLimitVal || examLimitVal < 1) setExamLimitVal(5);
+                        }
+                      }}
+                      className="w-4 h-4 rounded text-blue-600"
+                    />
+                    <span>Traffic Rules & Videos (Full Study Pass)</span>
                   </label>
                   <label className="flex items-center gap-2 cursor-pointer">
-                    <input type="checkbox" checked={accessVideos} onChange={(e) => setAccessVideos(e.target.checked)} className="w-4 h-4 rounded text-blue-600" />
+                    <input
+                      type="checkbox"
+                      checked={accessVideos}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        if (checked) {
+                          setAccessRules(true);
+                          setAccessVideos(true);
+                          setAccessExams(true);
+                          setIsExamUnlimited(true);
+                          if (durationDays < 1) setDurationDays(7);
+                        } else {
+                          setAccessRules(false);
+                          setAccessVideos(false);
+                          setAccessExams(true);
+                          setIsExamUnlimited(false);
+                          setDurationDays(0);
+                          if (!examLimitVal || examLimitVal < 1) setExamLimitVal(5);
+                        }
+                      }}
+                      className="w-4 h-4 rounded text-blue-600"
+                    />
                     <span>Video Lessons</span>
                   </label>
                   <label className="flex items-center gap-2 cursor-pointer">
-                    <input type="checkbox" checked={accessExams} onChange={(e) => setAccessExams(e.target.checked)} className="w-4 h-4 rounded text-blue-600" />
-                    <span>Mock Exams</span>
+                    <input
+                      type="checkbox"
+                      checked={accessExams}
+                      disabled={accessRules || accessVideos}
+                      onChange={(e) => {
+                        if (!accessRules && !accessVideos) {
+                          setAccessExams(true);
+                        } else {
+                          setAccessExams(e.target.checked);
+                        }
+                      }}
+                      className="w-4 h-4 rounded text-blue-600"
+                    />
+                    <span>Mock Exams {(accessRules || accessVideos) ? '(Included Unlimited)' : '(Required)'}</span>
                   </label>
                 </div>
               </div>

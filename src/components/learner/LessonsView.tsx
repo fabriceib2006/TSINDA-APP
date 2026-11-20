@@ -32,9 +32,10 @@ import { getLocalizedQuestionOptions, getLocalizedQuestionExplanation } from '..
 import { t } from '../../i18n/translations';
 
   // Segments are loaded from lesson_segments collection
-export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' | 'videos' }> = ({
+export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' | 'videos'; initialAccess?: CombinedAccess | null }> = ({
   onBack,
   initialTab = 'lessons',
+  initialAccess = null,
 }) => {
   const { userProfile, firebaseUser, getIdToken } = useAuth();
   const getToken = async () => {
@@ -48,7 +49,7 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
   const [videos, setVideos] = useState<VideoLesson[]>([]);
   const [selectedLesson, setSelectedLesson] = useState<Lesson | null>(null);
   const [selectedVideo, setSelectedVideo] = useState<VideoLesson | null>(null);
-  const [access, setAccess] = useState<CombinedAccess | null>(null);
+  const [access, setAccess] = useState<CombinedAccess | null>(initialAccess);
   const [progressMap, setProgressMap] = useState<Record<string, any>>({});
   const [loading, setLoading] = useState(true);
   const [isSubModalOpen, setIsSubModalOpen] = useState(false);
@@ -102,20 +103,13 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
 
     let latestSubs: any[] = [];
     let latestPurchases: any[] = [];
-    let latestAccessDocs: any[] = [];
 
     const updateCombined = () => {
       const allList: Subscription[] = [];
       latestPurchases.forEach(d => allList.push(normalizeSubscription(d.data(), d.id)));
       latestSubs.forEach(d => {
-        if (!allList.some(p => p.id === d.id || p.planId === d.data().planId)) {
+        if (!allList.some(p => p.id === d.id)) {
           allList.push(normalizeSubscription(d.data(), d.id));
-        }
-      });
-      latestAccessDocs.forEach(d => {
-        const data = d.data();
-        if (data) {
-          allList.push(normalizeSubscription(data, d.id));
         }
       });
 
@@ -123,20 +117,17 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
       setAccess(combined);
     };
 
-    const unsubSubs = onSnapshot(query(collection(db, 'subscriptions'), where('userId', '==', effectiveUid)), (snap) => {
+    const unsubSubs = onSnapshot(query(collection(db, 'subscriptions'), where('userId', '==', effectiveUid), where('status', '==', 'active')), (snap) => {
       latestSubs = snap.docs;
       updateCombined();
     }, () => {});
 
-    const unsubPurchases = onSnapshot(query(collection(db, 'users', effectiveUid, 'purchases')), (snap) => {
+    const unsubPurchases = onSnapshot(query(collection(db, 'users', effectiveUid, 'purchases'), where('status', '==', 'active')), (snap) => {
       latestPurchases = snap.docs;
       updateCombined();
     }, () => {});
 
-    const unsubAccess = onSnapshot(collection(db, 'users', effectiveUid, 'access'), (snap) => {
-      latestAccessDocs = snap.docs;
-      updateCombined();
-    }, () => {});
+    const unsubAccess = () => {};
 
     const unsubProgress = onSnapshot(collection(db, 'users', effectiveUid, 'progress'), (snap) => {
       const pMap: Record<string, any> = {};
@@ -232,9 +223,9 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
     ])
   ).filter(Boolean);
 
-  // Access checks based on plan rules
-  const hasTrafficRulesAccess = Boolean(access?.trafficRules) || Boolean(access?.hasActiveSubscription) || userProfile?.role === 'admin' || access === null;
-  const hasLessonVideosAccess = Boolean(access?.lessonVideos) || Boolean(access?.hasActiveSubscription) || userProfile?.role === 'admin' || access === null;
+  // Access checks based strictly on plan feature flags (never unlock lessons for exam-only plans)
+  const hasTrafficRulesAccess = userProfile?.role === 'admin' || Boolean(access?.trafficRules);
+  const hasLessonVideosAccess = userProfile?.role === 'admin' || Boolean(access?.lessonVideos);
 
   const [currentSegmentIndex, setCurrentSegmentIndex] = useState(0);
   const [lessonSegments, setLessonSegments] = useState<any[]>([]);
@@ -455,7 +446,7 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
   };
 
   const handleSelectLesson = async (lesson: Lesson) => {
-    if (!hasTrafficRulesAccess) {
+    if (!hasTrafficRulesAccess && !lesson.isFreePreview) {
       setIsSubModalOpen(true);
       return;
     }
@@ -472,7 +463,15 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
     // Load body only when one lesson opens
     if (!lesson.body || Object.keys(lesson.body).length === 0) {
       try {
-        const res = await fetch(`/api/lessons/${lesson.id}`);
+        const token = await getToken();
+        const res = await fetch(`/api/lessons/${lesson.id}`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {}
+        });
+        if (res.status === 403) {
+          setSelectedLesson(null);
+          setIsSubModalOpen(true);
+          return;
+        }
         if (res.ok) {
           const fullData = await res.json();
           setSelectedLesson(prev => prev && prev.id === lesson.id ? { ...prev, ...fullData } : prev);
@@ -490,6 +489,10 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
   };
 
   const handleSelectVideo = (video: VideoLesson) => {
+    if (!hasLessonVideosAccess && !video.isFreePreview) {
+      setIsSubModalOpen(true);
+      return;
+    }
     setSelectedVideo(video);
     setSelectedLesson(null);
   };
@@ -1313,7 +1316,7 @@ export const LessonsView: React.FC<{ onBack: () => void; initialTab?: 'lessons' 
                 /* Attractive 2-Column Responsive Card Grid (8 cards per page - NO endless scroll) */
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {paginatedLessons.map((lesson, idx) => {
-                    const isLocked = !hasTrafficRulesAccess;
+                    const isLocked = !hasTrafficRulesAccess && !lesson.isFreePreview;
                     const localizedTitle =
                       lesson.title?.[language as Language] || lesson.title?.en || lesson.title?.rw || 'Lesson';
                     const hasPassed = Boolean(progressMap[lesson.id]?.passed || progressMap[lesson.id]?.completed);

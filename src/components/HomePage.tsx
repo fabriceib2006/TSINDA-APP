@@ -13,6 +13,7 @@ import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import { getText } from '../lib/i18n';
 import { getBestPromotion } from '../lib/promotionUtils';
+import { normalizePlan } from '../lib/subscriptionUtils';
 import { formatCountdown } from '../lib/timeUtils';
 import { ScrollReveal, StaggerContainer, StaggerItem } from './common/ScrollReveal';
 import { motion } from 'motion/react';
@@ -72,12 +73,8 @@ export const HomePage: React.FC = () => {
       setActiveSub(null);
       return;
     }
-    if (!userProfile?.uid) {
-      setActiveSub(null);
-      return;
-    }
 
-    // One-time read for active subscription, avoiding onSnapshot on public homepage
+    // One-time read for active study subscription, avoiding onSnapshot on public homepage
     getDocs(query(
       collection(db, 'subscriptions'),
       where('userId', '==', userProfile.uid),
@@ -86,10 +83,10 @@ export const HomePage: React.FC = () => {
       const now = new Date();
       const active = snap.docs
         .map(d => d.data())
-        .find(s => s.endDate && new Date(s.endDate) > now);
+        .find(s => Boolean(s.access?.trafficRules || s.access?.lessonVideos) && s.endDate && new Date(s.endDate) > now);
       if (active) {
         setActiveSub({
-          planName: active.planName || 'Active Plan',
+          planName: active.planName || 'Active Study Plan',
           endDate: active.endDate,
         });
       } else {
@@ -193,7 +190,9 @@ export const HomePage: React.FC = () => {
       .then(res => res.json())
       .then(data => {
         if (Array.isArray(data.plans)) {
-          const plansList = data.plans.filter((p: any) => p.isActive !== false);
+          const plansList = data.plans
+            .map((p: any) => normalizePlan(p, p.id))
+            .filter((p: any) => p.isActive !== false);
           plansList.sort((a: any, b: any) => (a.sortOrder || 0) - (b.sortOrder || 0));
           setPlans(plansList);
         }
@@ -253,39 +252,83 @@ export const HomePage: React.FC = () => {
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans text-slate-900">
       {/* NAVBAR */}
       <header className="sticky top-0 z-50 bg-white/90 backdrop-blur-md border-b border-slate-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-2 sm:gap-3">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3 lg:gap-4">
+          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-              className="md:hidden min-h-[44px] min-w-[44px] flex items-center justify-center p-2 rounded-xl text-slate-700 hover:bg-slate-100 transition-colors"
+              className="lg:hidden min-h-[44px] min-w-[44px] flex items-center justify-center p-2 rounded-xl text-slate-700 hover:bg-slate-100 transition-colors"
               aria-label="Toggle mobile menu"
               aria-expanded={mobileMenuOpen}
             >
-              <Menu className="w-5 h-5" />
+              {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
             </button>
 
-            <div className="flex items-center gap-3 cursor-pointer" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
+            <div className="flex items-center gap-2.5 sm:gap-3 cursor-pointer shrink-0" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
               {imageSlots['logo'] || siteSettings?.logoUrl ? (
-                <img src={imageSlots['logo'] || siteSettings?.logoUrl} alt={appName} className="w-10 h-10 object-cover rounded-xl shadow-sm" />
+                <img src={imageSlots['logo'] || siteSettings?.logoUrl} alt={appName} className="w-9 h-9 sm:w-10 sm:h-10 object-cover rounded-xl shadow-sm shrink-0" />
               ) : (
-                <div className="w-10 h-10 bg-blue-600 text-white rounded-xl flex items-center justify-center font-extrabold text-lg shadow-sm">
+                <div className="w-9 h-9 sm:w-10 sm:h-10 bg-blue-600 text-white rounded-xl flex items-center justify-center font-extrabold text-lg shadow-sm shrink-0">
                   {appName[0]}
                 </div>
               )}
-              <span className="text-lg font-black tracking-tight text-slate-900">{appName}</span>
+              <span className="text-lg font-black tracking-tight text-slate-900 whitespace-nowrap">{appName}</span>
             </div>
           </div>
 
-          <div className="hidden md:flex items-center gap-6 text-sm font-semibold text-slate-600">
-            <a href="#features" className="hover:text-blue-600 transition-colors">{getText(homepageT.features, language)}</a>
-            <a href="#howItWorks" className="hover:text-blue-600 transition-colors">{getText(homepageT.howItWorks, language)}</a>
-            <a href="#plans" className="hover:text-blue-600 transition-colors">{getText(homepageT.pricing, language)}</a>
-            <a href="#faq" className="hover:text-blue-600 transition-colors">{getText(homepageT.faq, language)}</a>
+          <nav className="hidden lg:flex items-center gap-4 xl:gap-6 text-sm font-semibold text-slate-600 shrink-0">
+            <a href="#features" className="hover:text-blue-600 transition-colors whitespace-nowrap">{getText(homepageT.features, language)}</a>
+            <a href="#howItWorks" className="hover:text-blue-600 transition-colors whitespace-nowrap">{getText(homepageT.howItWorks, language)}</a>
+            <a href="#plans" className="hover:text-blue-600 transition-colors whitespace-nowrap">{getText(homepageT.pricing, language)}</a>
+            <a href="#faq" className="hover:text-blue-600 transition-colors whitespace-nowrap">{getText(homepageT.faq, language)}</a>
+          </nav>
+
+          {/* Tablet / Mobile Quick Actions (< 1024px) */}
+          <div className="flex lg:hidden items-center gap-2 shrink-0">
+            {/* Compact Language Switcher on md (768px-1023px) */}
+            <div className="hidden md:flex items-center gap-1 bg-slate-100 p-1 rounded-xl shrink-0">
+              {(['en', 'rw', 'fr'] as Language[]).map((lang) => (
+                <button
+                  key={lang}
+                  onClick={() => setLanguage(lang)}
+                  className={`px-2 py-1 rounded-lg text-xs font-bold uppercase transition-colors ${
+                    language === lang ? 'bg-white text-blue-600 shadow-xs' : 'text-slate-500 hover:text-slate-900'
+                  }`}
+                >
+                  {lang}
+                </button>
+              ))}
+            </div>
+
+            {userProfile ? (
+              <button
+                onClick={() => {
+                  window.location.href = userProfile.role === 'admin' ? '/admin' : '/student';
+                }}
+                className="min-h-[38px] px-3 sm:px-4 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-xl shadow-sm transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0"
+              >
+                {t[language].dashboard || 'Dashboard'}
+              </button>
+            ) : (
+              <>
+                <a
+                  href="/student"
+                  className="inline-flex min-h-[38px] px-3 py-2 text-xs font-bold text-slate-700 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors items-center whitespace-nowrap shrink-0"
+                >
+                  {t[language].signIn || 'Sign In'}
+                </a>
+                <a
+                  href="/student?mode=signup"
+                  className="hidden sm:inline-flex min-h-[38px] px-3 sm:px-4 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-xl shadow-sm transition-colors items-center whitespace-nowrap shrink-0"
+                >
+                  {t[language].getStarted || 'Get Started'}
+                </a>
+              </>
+            )}
           </div>
 
-          <div className="hidden md:flex items-center gap-3">
+          <div className="hidden lg:flex items-center gap-2.5 xl:gap-3 shrink-0">
             {/* Language Switcher */}
-            <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
+            <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl shrink-0">
               {(['en', 'rw', 'fr'] as Language[]).map((lang) => (
                 <button
                   key={lang}
@@ -304,7 +347,7 @@ export const HomePage: React.FC = () => {
                 onClick={() => {
                   window.location.href = userProfile.role === 'admin' ? '/admin' : '/student';
                 }}
-                className="min-h-[38px] px-4 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-xl shadow-sm transition-colors flex items-center gap-1.5"
+                className="min-h-[38px] px-3.5 xl:px-4 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-xl shadow-sm transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0"
               >
                 {t[language].dashboard || 'Dashboard'}
               </button>
@@ -312,14 +355,14 @@ export const HomePage: React.FC = () => {
               <>
                 <a
                   href="/student"
-                  className="hidden sm:flex min-h-[38px] px-4 py-2 text-xs font-bold text-slate-700 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors items-center gap-1.5"
+                  className="flex min-h-[38px] px-3 xl:px-4 py-2 text-xs font-bold text-slate-700 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors items-center gap-1.5 whitespace-nowrap shrink-0"
                 >
                   {t[language].signIn || 'Sign In'}
                 </a>
 
                 <a
                   href="/student?mode=signup"
-                  className="min-h-[38px] px-4 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-xl shadow-sm transition-colors flex items-center gap-1.5"
+                  className="min-h-[38px] px-3.5 xl:px-4 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-xl shadow-sm transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0"
                 >
                   {t[language].getStarted || 'Get Started'}
                 </a>
@@ -328,11 +371,11 @@ export const HomePage: React.FC = () => {
           </div>
         </div>
 
-        {/* Mobile Navigation Dropdown Menu */}
+        {/* Mobile & Tablet Navigation Dropdown Menu */}
         {mobileMenuOpen && (
-          <div className="md:hidden bg-white border-t border-slate-200 px-4 py-4 space-y-4 shadow-xl animate-in fade-in slide-in-from-top-2 duration-150">
-            {/* Language Switcher in Mobile Menu */}
-            <div className="flex items-center justify-between bg-slate-50 p-2.5 rounded-xl border border-slate-200">
+          <div className="lg:hidden bg-white border-t border-slate-200 px-4 py-4 space-y-4 shadow-xl animate-in fade-in slide-in-from-top-2 duration-150">
+            {/* Language Switcher in Mobile Menu (< 768px only; >= 768px is already in header) */}
+            <div className="md:hidden flex items-center justify-between bg-slate-50 p-2.5 rounded-xl border border-slate-200">
               <span className="text-xs font-bold text-slate-500 uppercase tracking-wider px-2">Language</span>
               <div className="flex items-center gap-1 bg-white p-1 rounded-lg border border-slate-200">
                 {(['en', 'rw', 'fr'] as Language[]).map((lang) => (
@@ -382,36 +425,18 @@ export const HomePage: React.FC = () => {
               </a>
             </nav>
 
-            <div className="pt-3 border-t border-slate-100 flex flex-col gap-2">
-              {userProfile ? (
-                <button
-                  onClick={() => {
-                    setMobileMenuOpen(false);
-                    window.location.href = userProfile.role === 'admin' ? '/admin' : '/student';
-                  }}
-                  className="w-full text-center py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs shadow-sm transition-colors flex items-center justify-center gap-2"
+            {/* Primary CTA on < 640px only (already visible in header on sm+ and Sign In/Dashboard is always in header) */}
+            {!userProfile && (
+              <div className="sm:hidden pt-3 border-t border-slate-100 flex flex-col gap-2">
+                <a
+                  href="/student?mode=signup"
+                  onClick={() => setMobileMenuOpen(false)}
+                  className="w-full text-center py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs shadow-sm transition-colors"
                 >
-                  <span>{t[language].dashboard || 'Dashboard'}</span>
-                </button>
-              ) : (
-                <>
-                  <a
-                    href="/student"
-                    onClick={() => setMobileMenuOpen(false)}
-                    className="w-full text-center py-3 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold rounded-xl text-xs transition-colors"
-                  >
-                    {t[language].signIn || 'Sign In'}
-                  </a>
-                  <a
-                    href="/student?mode=signup"
-                    onClick={() => setMobileMenuOpen(false)}
-                    className="w-full text-center py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs shadow-sm transition-colors"
-                  >
-                    {t[language].getStarted || 'Get Started'}
-                  </a>
-                </>
-              )}
-            </div>
+                  {t[language].getStarted || 'Get Started'}
+                </a>
+              </div>
+            )}
           </div>
         )}
       </header>
@@ -762,9 +787,15 @@ export const HomePage: React.FC = () => {
                                   </div>
                                 )}
                                 <div className="text-xs font-medium text-slate-400 mt-0.5">
-                                  {plan.durationDays === 1 
-                                    ? getText(homepageT.daysSingular, language).replace('{n}', '1') 
-                                    : getText(homepageT.daysPlural, language).replace('{n}', plan.durationDays?.toString() || '30')}
+                                  {(plan.access?.trafficRules || plan.access?.lessonVideos)
+                                    ? (plan.durationDays === 1
+                                        ? getText(homepageT.daysSingular, language).replace('{n}', '1')
+                                        : getText(homepageT.daysPlural, language).replace('{n}', String(plan.durationDays || 1)))
+                                    : (language === 'rw'
+                                        ? "Ntirangira • Ikurikiza umubare w'ibizamini"
+                                        : language === 'fr'
+                                        ? "Sans expiration • Selon le nombre d'examens"
+                                        : 'No Expiration • Count-based')}
                                 </div>
                               </div>
                             </div>

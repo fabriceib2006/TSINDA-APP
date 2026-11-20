@@ -9,7 +9,6 @@ import { MockExamView } from './learner/MockExamView';
 import { ResultsHistoryView } from './learner/ResultsHistoryView';
 import { SubscriptionModal } from './learner/SubscriptionModal';
 import { UserProfileView } from './UserProfileView';
-import { seedInitialData } from '../lib/seedData';
 import { db } from '../lib/firebase';
 import { collection, getDocs, query, where, onSnapshot, getDoc, doc } from 'firebase/firestore';
 import { Subscription, CombinedAccess } from '../types';
@@ -68,7 +67,7 @@ export const LearnerDashboard: React.FC = () => {
       const allList: Subscription[] = [];
       latestPurchases.forEach(d => allList.push(normalizeSubscription(d.data(), d.id)));
       latestSubs.forEach(d => {
-        if (!allList.some(p => p.id === d.id || p.planId === d.data().planId)) {
+        if (!allList.some(p => p.id === d.id)) {
           allList.push(normalizeSubscription(d.data(), d.id));
         }
       });
@@ -77,7 +76,7 @@ export const LearnerDashboard: React.FC = () => {
       const currentDoc = latestAccessDocs.find(d => d.id === 'current');
       if (currentDoc) {
         const cData = currentDoc.data();
-        if (cData.planName) combined.activePlanName = cData.planName;
+        if (cData.planName && !combined.activePlanName) combined.activePlanName = cData.planName;
       }
       setAccess(combined);
       console.log("LearnerDashboard: Access updated", combined);
@@ -220,7 +219,7 @@ export const LearnerDashboard: React.FC = () => {
                   <p className="text-xs text-slate-500 leading-relaxed">{getText(learnerDashboardT.trafficLessonsDesc, language)}</p>
                 </div>
                 <div className="pt-2 text-xs font-bold text-blue-600 flex items-center gap-1 group-hover:translate-x-1 transition-transform">
-                  <span>Start Learning</span>
+                  <span>{access && !access.trafficRules ? 'Unlock Access' : 'Start Learning'}</span>
                   <span>→</span>
                 </div>
               </div>
@@ -317,7 +316,7 @@ export const LearnerDashboard: React.FC = () => {
           </div>
         )}
 
-        {activeTab === 'lessons' && <LessonsView onBack={() => setActiveTab('overview')} />}
+        {activeTab === 'lessons' && <LessonsView onBack={() => setActiveTab('overview')} initialAccess={access} />}
         {activeTab === 'exam' && <MockExamView onBack={() => setActiveTab('overview')} />}
         {activeTab === 'history' && <ResultsHistoryView onBack={() => setActiveTab('overview')} />}
         {activeTab === 'profile' && <UserProfileView onBack={() => setActiveTab('overview')} />}
